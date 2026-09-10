@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { playClick } from './ui-sound';
 import { lockPointer } from './is-touch';
+import { loadSettings, saveSettings } from './settings';
 
 export type ModelAdjustments = {
   head: { x: number; y: number; z: number };
@@ -58,17 +59,32 @@ export class PauseMenu {
     this.alexSkinToggle = this.root.querySelector<HTMLButtonElement>('#alex-skin-toggle')!;
     this.viewBobToggle = this.root.querySelector<HTMLButtonElement>('#view-bob-toggle')!;
 
+    // Seed every control from the persisted settings so in-game options survive
+    // a reload, on both desktop and mobile (localStorage, per origin).
+    const s = loadSettings();
+    this.fogEnabled = s.fog;
+    this.smoothLightingEnabled = s.smoothLighting;
+    this.alexSkinEnabled = s.alexSkin;
+    this.viewBobEnabled = s.viewBob;
+    this.mouseSensitivity = s.sensitivity;
+    this.setSlider(this.fovSlider, '#fov-value', s.fov);
+    this.setSlider(this.sensitivitySlider, '#sensitivity-value', s.sensitivity);
+    this.setSlider(this.renderDistanceSlider, '#render-distance-value', s.renderDistance);
+
     this.fovSlider.addEventListener('input', this.updateFov);
     this.fovSlider.addEventListener('input', () => {
       this.root.querySelector<HTMLOutputElement>('#fov-value')!.value = this.fovSlider.value;
+      saveSettings({ fov: Number(this.fovSlider.value) });
     });
     this.sensitivitySlider.addEventListener('input', () => {
       this.mouseSensitivity = Number(this.sensitivitySlider.value);
       this.root.querySelector<HTMLOutputElement>('#sensitivity-value')!.value = this.sensitivitySlider.value;
+      saveSettings({ sensitivity: this.mouseSensitivity });
     });
     this.renderDistanceSlider.addEventListener('change', () => {
       this.root.querySelector<HTMLOutputElement>('#render-distance-value')!.value = this.renderDistanceSlider.value;
       this.onRenderDistanceChange(Number(this.renderDistanceSlider.value));
+      saveSettings({ renderDistance: Number(this.renderDistanceSlider.value) });
     });
     this.renderDistanceSlider.addEventListener('input', () => {
       this.root.querySelector<HTMLOutputElement>('#render-distance-value')!.value = this.renderDistanceSlider.value;
@@ -77,21 +93,25 @@ export class PauseMenu {
       this.fogEnabled = !this.fogEnabled;
       this.updateFogToggle();
       this.applyFog();
+      saveSettings({ fog: this.fogEnabled });
     });
     this.smoothLightingToggle.addEventListener('click', () => {
       this.smoothLightingEnabled = !this.smoothLightingEnabled;
       this.updateToggle(this.smoothLightingToggle, this.smoothLightingEnabled);
       this.onSmoothLightingChange(this.smoothLightingEnabled);
+      saveSettings({ smoothLighting: this.smoothLightingEnabled });
     });
     this.alexSkinToggle.addEventListener('click', () => {
       this.alexSkinEnabled = !this.alexSkinEnabled;
       this.updateToggle(this.alexSkinToggle, this.alexSkinEnabled);
       this.onAlexSkinChange(this.alexSkinEnabled);
+      saveSettings({ alexSkin: this.alexSkinEnabled });
     });
     this.viewBobToggle.addEventListener('click', () => {
       this.viewBobEnabled = !this.viewBobEnabled;
       this.updateToggle(this.viewBobToggle, this.viewBobEnabled);
       this.onViewBobChange(this.viewBobEnabled);
+      saveSettings({ viewBob: this.viewBobEnabled });
     });
     this.root.querySelector<HTMLButtonElement>('#back-to-game')!.addEventListener('click', this.close);
     this.root.querySelector<HTMLButtonElement>('#open-options')!.addEventListener('click', () => this.showOptions(true));
@@ -105,8 +125,7 @@ export class PauseMenu {
     document.addEventListener('keydown', this.onKeyDown);
     this.updateFov();
     this.updateFogToggle();
-    this.updateToggle(this.smoothLightingToggle, true);
-    this.onSmoothLightingChange(true);
+    this.updateToggle(this.smoothLightingToggle, this.smoothLightingEnabled);
     this.updateToggle(this.alexSkinToggle, this.alexSkinEnabled);
     this.updateToggle(this.viewBobToggle, this.viewBobEnabled);
   }
@@ -135,6 +154,12 @@ export class PauseMenu {
     this.showOptions(false);
     lockPointer(document.querySelector<HTMLCanvasElement>('#game-canvas'));
   };
+
+  private setSlider(el: HTMLInputElement, outSel: string, v: number) {
+    el.value = String(v);
+    const out = this.root.querySelector<HTMLOutputElement>(outSel);
+    if (out) out.value = String(v);
+  }
 
   private showOptions(show: boolean) {
     this.pauseView.hidden = show;
