@@ -51,7 +51,8 @@ export class LightEngine {
         for (let localX = 0; localX < CHUNK_SIZE; localX += 1) {
           const x = chunk.minX + localX;
           const z = chunk.minZ + localZ;
-          const emission = blockLightProperties[chunk.getBlock(x, y, z)].emission;
+          const emid = chunk.getBlock(x, y, z);
+          const emission = this.world.emissionAt(emid, x, y, z);
           if (emission > 0) {
             chunk.setLight('blockLight', x, y, z, emission);
             this.blockQueue.push({ x, y, z, level: emission, channel: 'blockLight' });
@@ -163,7 +164,7 @@ export class LightEngine {
             const x = chunk.minX + localX;
             const z = chunk.minZ + localZ;
             const id = chunk.getBlock(x, y, z);
-            const emission = blockLightProperties[id].emission;
+            const emission = this.world.emissionAt(id, x, y, z);
             if (emission === 0) continue;
             chunk.setLight('blockLight', x, y, z, emission);
             this.blockQueue.push({ x, y, z, level: emission, channel: 'blockLight' });
@@ -227,7 +228,7 @@ export class LightEngine {
 
   private processIncrease(node: LightNode) {
     const id = this.world.getBlock(node.x, node.y, node.z);
-    const emission = node.channel === 'blockLight' ? blockLightProperties[id].emission : 0;
+    const emission = node.channel === 'blockLight' ? this.world.emissionAt(id, node.x, node.y, node.z) : 0;
     const opacity = blockLightProperties[id].opacity;
     if (opacity >= 15) {
       this.world.setLight(node.channel, node.x, node.y, node.z, emission);

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BlockId, BlockMaterials } from './block';
+import { BlockId, BlockMaterials, blockLightProperties, FURNACE_LIT_LIGHT } from './block';
 import { BlockCollider, CHUNK_HEIGHT, CHUNK_MAX_Y, CHUNK_SIZE, WATER_LEVEL } from './chunk';
 import { BlockStore } from './block-store';
 import { ChunkManager } from './chunk-manager';
@@ -83,8 +83,24 @@ export class World {
 
   /** Merge `patch` into a block's side-table state and remesh its subchunk. */
   setBlockData(x: number, y: number, z: number, patch: BlockData) {
+    const litBefore = !!this.blockDataStore.get(x, y, z)?.lit;
     this.blockDataStore.set(x, y, z, patch);
     this.markBlockDirty(x, y, z);
+    const litAfter = !!this.blockDataStore.get(x, y, z)?.lit;
+    if (litBefore !== litAfter && this.lightEngine) {
+      // A furnace turned on/off: re-propagate its block light.
+      const oldBlockLight = this.getLight('blockLight', x, y, z);
+      this.pendingLightReason = 'block-place';
+      this.lightEngine.queueBlockUpdate(x, y, z, 0, oldBlockLight, 'furnace-lit');
+    }
+  }
+
+  /** Light a block gives off. Dynamic for the furnace (only while lit). */
+  emissionAt(id: BlockId, x: number, y: number, z: number): number {
+    if (id === BlockId.FURNACE) {
+      return this.blockDataStore.get(x, y, z)?.lit ? FURNACE_LIT_LIGHT : 0;
+    }
+    return blockLightProperties[id].emission;
   }
 
   /**

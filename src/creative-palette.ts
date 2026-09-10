@@ -28,6 +28,7 @@ export const BLOCK_CATALOG: InventorySlot[] = [
   { id: BlockId.REDSTONE_ORE, name: 'Redstone Ore', sideTexture: 'blocks/redstone_ore.png', topTexture: 'blocks/redstone_ore.png' },
   { id: BlockId.ICE, name: 'Ice', sideTexture: 'blocks/ice.png', topTexture: 'blocks/ice.png' },
   { id: BlockId.GLASS, name: 'Glass', sideTexture: 'blocks/glass.png', topTexture: 'blocks/glass.png' },
+  { id: BlockId.FURNACE, name: 'Furnace', sideTexture: 'blocks/furnace_off.png', topTexture: 'blocks/furnace_top.png' },
   { id: BlockId.WATER, name: 'Water', sideTexture: 'atlas/water_flow.png', topTexture: 'atlas/water_still.png', previewColor: 0x3f76e4 },
   { id: BlockId.LAVA, name: 'Lava', sideTexture: 'atlas/lava_flow.png', topTexture: 'atlas/lava_still.png', previewColor: 0xff6a00 },
   { id: BlockId.FIRE, name: 'Fire', sideTexture: 'atlas/fire_atlas.png', topTexture: 'atlas/fire_atlas.png' },

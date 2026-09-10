@@ -20,6 +20,7 @@ const COLOR: Record<number, number> = {
   [BlockId.OBSIDIAN]: 0x241a33,
   [BlockId.ICE]: 0x9cc3ff,
   [BlockId.GLASS]: 0xbfe3f0,
+  [BlockId.FURNACE]: 0x6a6a6a,
   [BlockId.GLOWSTONE]: 0xe8c95a,
   [BlockId.BEDROCK]: 0x555555,
   [BlockId.COAL_ORE]: 0x6a6a6a,

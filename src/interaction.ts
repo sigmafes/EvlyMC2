@@ -337,21 +337,26 @@ export class BlockInteraction {
       return;
     }
 
+    let placedAt: THREE.Vector3 | null = null;
     const placed = this.placer.placeBlock(
       hit.blockPosition,
       hit.intersection.face.normal,
       this.selectedBlock,
       (x, y, z) => this.world.getBlock(x, y, z),
       (x, y, z) => this.player.intersectsBlock(x, y, z),
-      (x, y, z, id) => this.world.add(x, y, z, id),
+      (x, y, z, id) => {
+        const ok = this.world.add(x, y, z, id);
+        if (ok) placedAt = new THREE.Vector3(x, y, z);
+        return ok;
+      },
     );
     if (placed) {
       this.onSwing?.();
       this.onPlace?.();
-      const at = hit.blockPosition.clone().add(hit.intersection.face.normal).round();
-      if (this.selectedBlock != null && isOrientable(this.selectedBlock)) {
+      if (placedAt && this.selectedBlock != null && isOrientable(this.selectedBlock)) {
         // Orientable block (furnace): its front (off) face looks at the player.
-        this.world.setBlockData(at.x, at.y, at.z, { facing: facingTowardPlayer(this.player.state.yaw) });
+        const p = placedAt as THREE.Vector3;
+        this.world.setBlockData(p.x, p.y, p.z, { facing: facingTowardPlayer(this.player.state.yaw) });
       }
       if (this.selectedBlock) {
         const sound = getBlockSound(this.selectedBlock, 'place') ?? getBlockSound(this.selectedBlock, 'dig');

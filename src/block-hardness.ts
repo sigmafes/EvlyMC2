@@ -31,6 +31,7 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.REDSTONE_ORE]: 3,
   [BlockId.CRAFTING_TABLE]: 2.5,
   [BlockId.GLASS]: 0.3,
+  [BlockId.FURNACE]: 3.5,
 };
 
 type BlockTool = {
@@ -60,6 +61,7 @@ const BLOCK_TOOL: Partial<Record<BlockId, BlockTool>> = {
   [BlockId.DIRT]: { kind: 'shovel', harvest: 0, required: false },
   [BlockId.GRASS]: { kind: 'shovel', harvest: 0, required: false },
   [BlockId.SAND]: { kind: 'shovel', harvest: 0, required: false },
+  [BlockId.FURNACE]: { kind: 'pickaxe', harvest: 0, required: true },
 };
 
 export type BreakInfo = {

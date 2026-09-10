@@ -21,6 +21,7 @@ export function getDrops(id: BlockId, canHarvest: boolean): DropStack[] {
     case BlockId.COBBLESTONE:
     case BlockId.OBSIDIAN:
     case BlockId.CRAFTING_TABLE:
+    case BlockId.FURNACE:
       return [{ id, count: 1 }];
 
     // Special block drops.

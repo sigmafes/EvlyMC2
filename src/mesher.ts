@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BlockId, blockLightProperties, isFlammable, STATEFUL_BLOCKS } from './block';
 import type { BlockData } from './block-data';
+import { FACING_TO_FACE_INDEX } from './block-data';
 
 /** A block that fire can stand on top of (used to pick floor vs wall fire). */
 function isFireGround(id: BlockId): boolean {
@@ -42,7 +43,11 @@ export const MATERIAL_CRAFTING_TABLE_SIDE1 = 27;
 export const MATERIAL_CRAFTING_TABLE_SIDE2 = 28;
 export const MATERIAL_CRAFTING_TABLE_TOP = 29;
 export const MATERIAL_GLASS = 30;
-const MATERIAL_COUNT = 31;
+export const MATERIAL_FURNACE_SIDE = 31;
+export const MATERIAL_FURNACE_FRONT_OFF = 32;
+export const MATERIAL_FURNACE_FRONT_ON = 33;
+export const MATERIAL_FURNACE_TOP = 34;
+const MATERIAL_COUNT = 35;
 
 export type BlockReader = (x: number, y: number, z: number) => BlockId;
 export type LightReader = (x: number, y: number, z: number) => number;
@@ -200,7 +205,7 @@ function addFireCeiling(
   }
 }
 
-function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number = 0, _data?: BlockData) {
+function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number = 0, data?: BlockData) {
   if (id === BlockId.BEDROCK) return MATERIAL_BEDROCK;
   if (id === BlockId.OAK_PLANKS) return MATERIAL_OAK_PLANKS;
   if (id === BlockId.STONE) return MATERIAL_STONE;
@@ -216,6 +221,12 @@ function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number 
   if (id === BlockId.OBSIDIAN) return MATERIAL_OBSIDIAN;
   if (id === BlockId.ICE) return MATERIAL_ICE;
   if (id === BlockId.GLASS) return MATERIAL_GLASS;
+  if (id === BlockId.FURNACE) {
+    if (faceIndex === 2 || faceIndex === 3) return MATERIAL_FURNACE_TOP; // top & bottom
+    const front = data?.facing != null ? FACING_TO_FACE_INDEX[data.facing] : 4; // default +Z
+    if (faceIndex === front) return data?.lit ? MATERIAL_FURNACE_FRONT_ON : MATERIAL_FURNACE_FRONT_OFF;
+    return MATERIAL_FURNACE_SIDE;
+  }
   if (id === BlockId.COAL_ORE) return MATERIAL_COAL_ORE;
   if (id === BlockId.IRON_ORE) return MATERIAL_IRON_ORE;
   if (id === BlockId.GOLD_ORE) return MATERIAL_GOLD_ORE;

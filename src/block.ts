@@ -26,6 +26,7 @@ export enum BlockId {
   REDSTONE_ORE = 22,
   CRAFTING_TABLE = 23,
   GLASS = 24,
+  FURNACE = 25,
 }
 
 export type VoxelBlock = {
@@ -78,6 +79,7 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.REDSTONE_ORE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.CRAFTING_TABLE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: { catchOdds: 5, burnOdds: 20 } },
   [BlockId.GLASS]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
+  [BlockId.FURNACE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -86,13 +88,16 @@ export function isFlammable(id: BlockId): boolean {
 }
 
 /** Blocks that respond to right-click (open a GUI) instead of being placed against. */
-export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE]);
+export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE, BlockId.FURNACE]);
 
 /** Blocks that carry side-table state (facing / lit) the mesher must read. */
-export const STATEFUL_BLOCKS = new Set<BlockId>([]);
+export const STATEFUL_BLOCKS = new Set<BlockId>([BlockId.FURNACE]);
 
 /** Blocks whose `facing` is set from the player's yaw when placed. */
-export const ORIENTABLE_BLOCKS = new Set<BlockId>([]);
+export const ORIENTABLE_BLOCKS = new Set<BlockId>([BlockId.FURNACE]);
+
+/** Block light a furnace gives off while it is lit (LCE: like a torch, 14-15). */
+export const FURNACE_LIT_LIGHT = 15;
 export function isOrientable(id: BlockId): boolean {
   return ORIENTABLE_BLOCKS.has(id);
 }
@@ -139,8 +144,12 @@ export function createBlockMaterials(): BlockMaterials {
   const craftingTableSide2 = loader.load(new URL('../textures/blocks/crafting_table_side2.png', import.meta.url).href);
   const craftingTableTop = loader.load(new URL('../textures/blocks/crafting_table_top.png', import.meta.url).href);
   const glass = loader.load(new URL('../textures/blocks/glass.png', import.meta.url).href);
+  const furnaceSide = loader.load(new URL('../textures/blocks/furnace_side.png', import.meta.url).href);
+  const furnaceOff = loader.load(new URL('../textures/blocks/furnace_off.png', import.meta.url).href);
+  const furnaceOn = loader.load(new URL('../textures/blocks/furnace_on.png', import.meta.url).href);
+  const furnaceTop = loader.load(new URL('../textures/blocks/furnace_top.png', import.meta.url).href);
 
-  for (const texture of [bedrock, oakPlanks, stone, dirt, grassTop, grassSide, glowstone, oakLog, oakLogTop, oakLeaves, sand, fireAtlas, cobblestone, obsidian, ice, coalOre, ironOre, goldOre, diamondOre, emeraldOre, lapisOre, redstoneOre, craftingTableSide1, craftingTableSide2, craftingTableTop, glass]) {
+  for (const texture of [bedrock, oakPlanks, stone, dirt, grassTop, grassSide, glowstone, oakLog, oakLogTop, oakLeaves, sand, fireAtlas, cobblestone, obsidian, ice, coalOre, ironOre, goldOre, diamondOre, emeraldOre, lapisOre, redstoneOre, craftingTableSide1, craftingTableSide2, craftingTableTop, glass, furnaceSide, furnaceOff, furnaceOn, furnaceTop]) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.magFilter = THREE.NearestFilter;
     texture.minFilter = THREE.NearestFilter;
@@ -257,6 +266,13 @@ export function createBlockMaterials(): BlockMaterials {
       side: THREE.DoubleSide,
       vertexColors: true,
     }),
+    // Order matters: [side, front-off, front-on, top] must match MATERIAL_FURNACE_* in mesher.ts.
+    [BlockId.FURNACE]: [
+      new THREE.MeshBasicMaterial({ map: furnaceSide, vertexColors: true }),
+      new THREE.MeshBasicMaterial({ map: furnaceOff, vertexColors: true }),
+      new THREE.MeshBasicMaterial({ map: furnaceOn, vertexColors: true }),
+      new THREE.MeshBasicMaterial({ map: furnaceTop, vertexColors: true }),
+    ],
   };
 
   materials.updateWaterAnimation = (time: number) => {

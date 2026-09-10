@@ -46,14 +46,27 @@ Estado del trabajo en curso. Retomar desde la **Fase 2**.
 **Nota Fase 3:** basta con meter `FURNACE` en `STATEFUL_BLOCKS` + `ORIENTABLE_BLOCKS` y
 añadir el `case` de `FURNACE` en `materialForFace` usando `data.facing` / `data.lit`.
 
-### Fase 3 — Bloque Horno (`FURNACE`)
-- Texturas ya en repo: `furnace_off/on/side/top.png`.
-- Material array de 4: `[side, off, on, top]`. Top y bottom usan `furnace_top`.
-- `materialForFace`: cara == `data.facing` → `lit ? on : off`; resto lados → `side`.
-- Emisión **dinámica 15** cuando `lit` → hook `getEmission(id, x, y, z)` y re-propagar luz
-  al cambiar el estado.
-- Dureza 3.5, pico requerido (sin pico no dropea). Sonidos `stone_*`. Self-drop.
-- Añadir a `INTERACTIVE_BLOCKS` (click derecho abre GUI).
+### Fase 3 — Bloque Horno (`FURNACE`)  ✅ HECHO
+- `block.ts`: `BlockId.FURNACE = 25`; material array `[side, off, on, top]`;
+  `blockLightProperties` opaco emisión 0 (dinámica via `emissionAt`);
+  en `STATEFUL_BLOCKS` + `ORIENTABLE_BLOCKS` + `INTERACTIVE_BLOCKS`;
+  const `FURNACE_LIT_LIGHT = 15`.
+- `mesher.ts`: `MATERIAL_FURNACE_SIDE/_FRONT_OFF/_FRONT_ON/_TOP` (31..34), `MATERIAL_COUNT 35`.
+  `materialForFace(FURNACE)`: top/bottom → `_TOP`; cara == `FACING_TO_FACE_INDEX[data.facing]`
+  → `data.lit ? _FRONT_ON : _FRONT_OFF`; resto → `_SIDE`.
+- `subchunk.ts`: `this.materials[BlockId.FURNACE]` en la lista (índices 31..34).
+- `world.ts`: `emissionAt(id, x, y, z)` (dinámica para el horno); `setBlockData` re-propaga
+  la luz de bloque cuando `lit` cambia (`queueBlockUpdate`).
+- `light-engine.ts`: los 3 puntos que leían `blockLightProperties[id].emission` ahora usan
+  `world.emissionAt(...)`.
+- `block-hardness.ts` (3.5, pico requerido → sin pico no dropea), `block-sounds.ts` (`stone_*`),
+  `drops.ts` (self-drop), `creative-palette.ts` (`/give furnace`), `particles.ts`, `block-inspector.ts`.
+- `interaction.ts`: al colocar captura la posición exacta desde el callback de `add` y
+  escribe `facing`. El click derecho sobre el horno llama `onInteract(FURNACE)` (no-op hasta
+  la GUI de la Fase 5).
+
+**Estado `lit`:** aún nunca se pone a `true` (lo hará el `FurnaceManager` de la Fase 4);
+toda la ruta on/off + relight está lista.
 
 ### Fase 4 — Combustible y fundido
 Constantes LCE (20 tps):
