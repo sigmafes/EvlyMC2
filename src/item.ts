@@ -5,7 +5,11 @@ import type { InventorySlot } from './inventory';
  * Item ids. Blocks keep their BlockId numeric values (1..MAX_BLOCK_ID); non-block
  * items start at 100. `InventorySlot.id` is a plain number that holds either.
  */
-export const MAX_BLOCK_ID = BlockId.CRAFTING_TABLE; // 23
+// Highest BlockId value; auto-tracks the enum so new blocks don't get
+// mis-classified as items by isBlock().
+export const MAX_BLOCK_ID = Math.max(
+  ...Object.values(BlockId).filter((v): v is number => typeof v === 'number'),
+);
 
 export const ItemId = {
   STICK: 100,
@@ -20,6 +24,7 @@ export const ItemId = {
   GLOWSTONE_DUST: 109,
   IRON_INGOT: 110,
   GOLD_INGOT: 111,
+  CHARCOAL: 112,
 
   WOODEN_PICKAXE: 120,
   STONE_PICKAXE: 121,
@@ -54,6 +59,7 @@ export const ITEMS: Record<number, ItemDef> = {
   [ItemId.STICK]: MAT('Stick', 'items/stick.png'),
   [ItemId.APPLE]: { name: 'Apple', texture: 'items/apple.png', maxStack: 64, food: 2 },
   [ItemId.COAL]: MAT('Coal', 'items/coal.png'),
+  [ItemId.CHARCOAL]: MAT('Charcoal', 'items/charcoal.png'),
   [ItemId.RAW_IRON]: MAT('Raw Iron', 'items/raw_iron.png'),
   [ItemId.RAW_GOLD]: MAT('Raw Gold', 'items/raw_gold.png'),
   [ItemId.DIAMOND]: MAT('Diamond', 'items/diamond.png'),

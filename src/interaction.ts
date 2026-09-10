@@ -250,6 +250,13 @@ export class BlockInteraction {
 
   private finishMining(pos: THREE.Vector3, id: BlockId, canHarvest: boolean) {
     const light = this.lightAt(pos);
+    if (id === BlockId.FURNACE) {
+      // Spill the furnace's contents before the block (and its data) are gone.
+      const f = this.world.getBlockData(pos.x, pos.y, pos.z)?.furnace;
+      for (const slot of [f?.input, f?.fuel, f?.output]) {
+        if (slot?.id != null && slot.count > 0) this.onDrop?.(slot.id, slot.count, pos.clone());
+      }
+    }
     this.world.remove(pos.x, pos.y, pos.z);
     this.particles?.burst(pos, id, light);
     for (const drop of getDrops(id, canHarvest)) this.onDrop?.(drop.id, drop.count, pos.clone());

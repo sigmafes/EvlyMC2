@@ -825,6 +825,19 @@ body {
   word-break: break-all;
 }
 
+#chat-soft-input {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  /* Not display:none / visibility:hidden — it must stay focusable so the
+     mobile keyboard opens. Non-touch never focuses it. */
+}
+
 #chat-caret { animation: chat-blink 1s steps(1) infinite; }
 @keyframes chat-blink { 50% { opacity: 0; } }
 

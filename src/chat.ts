@@ -1,4 +1,4 @@
-import { lockPointer } from './is-touch';
+import { lockPointer, isTouchDevice } from './is-touch';
 
 export type ChatCommandHandler = (args: string[]) => string | void;
 
@@ -23,6 +23,8 @@ export class Chat {
   private buffer = '';
   private open = false;
   private idleTimer = 0;
+  /** Hidden real <input>: on a phone, focusing it raises the soft keyboard. */
+  private readonly softInput = document.createElement('input');
 
   /** When false, slash commands are rejected (world created without "Allow Cheats"). */
   cheatsEnabled = false;
@@ -33,10 +35,32 @@ export class Chat {
     this.inputEl = document.querySelector<HTMLElement>('#chat-input')!;
     this.inputText = document.querySelector<HTMLElement>('#chat-input-text')!;
     document.addEventListener('keydown', this.onKeyDown, { capture: true });
+
+    this.softInput.id = 'chat-soft-input';
+    this.softInput.type = 'text';
+    this.softInput.autocomplete = 'off';
+    this.softInput.autocapitalize = 'off';
+    this.softInput.spellcheck = false;
+    this.softInput.setAttribute('enterkeyhint', 'send');
+    this.root.appendChild(this.softInput);
+    this.softInput.addEventListener('input', () => {
+      this.buffer = this.softInput.value.slice(0, 256);
+      this.inputText.textContent = this.buffer;
+    });
+    this.softInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); this.submit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); this.closeChat(false); }
+    });
+    this.softInput.addEventListener('blur', () => { if (this.open) this.closeChat(false); });
   }
 
   get isOpen() {
     return this.open;
+  }
+
+  /** Open the chat input (on-screen chat button; mirrors pressing T). */
+  openInput() {
+    if (!this.open) this.openChat();
   }
 
   registerCommand(name: string, handler: ChatCommandHandler) {
@@ -77,6 +101,11 @@ export class Chat {
     for (const line of this.lines) line.classList.remove('chat-old');
     if (document.pointerLockElement) document.exitPointerLock();
     this.opts.onOpenChange(true);
+    if (isTouchDevice()) {
+      this.softInput.value = '';
+      // focus() must run from the tap's own gesture for the keyboard to open.
+      this.softInput.focus();
+    }
   }
 
   private closeChat(regrabPointer: boolean) {
@@ -85,6 +114,8 @@ export class Chat {
     this.inputEl.hidden = true;
     this.root.classList.remove('chat-open');
     this.idleTimer = 0;
+    this.softInput.value = '';
+    if (document.activeElement === this.softInput) this.softInput.blur();
     this.opts.onOpenChange(false);
     if (regrabPointer) lockPointer(this.opts.canvas);
   }

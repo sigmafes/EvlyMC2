@@ -19,6 +19,7 @@ import { ParticleSystem } from './particles';
 import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { DroppedItems } from './dropped-items';
+import { FurnaceManager } from './furnace';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
@@ -253,6 +254,10 @@ const droppedItems = new DroppedItems(
   () => soundManager.playOne('player/Pop', 0.4),
 );
 
+// Smelting: steps every lit/loaded furnace. Contents live in the block-data
+// side table; the phase-5 GUI feeds it items.
+const furnaceManager = new FurnaceManager(world);
+
 // --- Health & death ---
 const deathScreen = document.querySelector<HTMLElement>('#death-screen')!;
 const playerHealth = new PlayerHealth(
@@ -406,6 +411,7 @@ const touchControls = TouchControls.isTouchDevice()
       onBreakEnd: () => interaction.touchBreakEnd(),
       onInventory: () => inventory.toggleInventory(),
       onThirdPerson: () => player.cycleCameraMode(),
+      onChat: () => chat.openInput(),
       onPause: () => pauseMenu.toggle(),
     })
   : null;
@@ -438,6 +444,7 @@ function animate() {
   if (!pauseMenu.isPaused) {
     playerHealth.tick(delta);
     droppedItems.update(delta, player.state.position, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
+    furnaceManager.tick(delta);
 
     if (player.consumeWaterEntry()) soundManager.playRandom('player/Water_splash', 2, 0.5);
 

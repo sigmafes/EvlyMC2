@@ -4,7 +4,7 @@ import { BlockCollider, CHUNK_HEIGHT, CHUNK_MAX_Y, CHUNK_SIZE, WATER_LEVEL } fro
 import { BlockStore } from './block-store';
 import { ChunkManager } from './chunk-manager';
 import { ChunkEditStore } from './chunk-edits';
-import { BlockDataStore, type BlockData } from './block-data';
+import { BlockDataStore, type BlockData, type FurnaceState } from './block-data';
 import { LeavesManager } from './leaves-manager';
 import { TerrainNoise } from './terrain-noise';
 import type { LightEngine } from './light-engine';
@@ -101,6 +101,21 @@ export class World {
       return this.blockDataStore.get(x, y, z)?.lit ? FURNACE_LIT_LIGHT : 0;
     }
     return blockLightProperties[id].emission;
+  }
+
+  // --- Furnace contents (slots + progress). No remesh: only `lit` changes the
+  //     block's look, and that goes through setBlockData. -----------------------
+
+  getFurnaceState(x: number, y: number, z: number): FurnaceState | undefined {
+    return this.blockDataStore.get(x, y, z)?.furnace;
+  }
+
+  setFurnaceState(x: number, y: number, z: number, state: FurnaceState | undefined): void {
+    this.blockDataStore.set(x, y, z, { furnace: state });
+  }
+
+  eachFurnace(cb: (x: number, y: number, z: number, state: FurnaceState) => void): void {
+    this.blockDataStore.forEach((x, y, z, d) => { if (d.furnace) cb(x, y, z, d.furnace); });
   }
 
   /**

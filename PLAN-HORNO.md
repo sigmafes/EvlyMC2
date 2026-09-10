@@ -68,17 +68,29 @@ añadir el `case` de `FURNACE` en `materialForFace` usando `data.facing` / `data
 **Estado `lit`:** aún nunca se pone a `true` (lo hará el `FurnaceManager` de la Fase 4);
 toda la ruta on/off + relight está lista.
 
-### Fase 4 — Combustible y fundido
-Constantes LCE (20 tps):
-- Fundir 1 ítem = **200 ticks = 10 s**.
-- Combustible: palo **5 s**, tabla **15 s**, tronco **15 s**, carbón/charcoal **80 s**.
-- `src/smelting.ts`: `SMELTING` + `FUEL`.
-  - `OAK_LOG` → `CHARCOAL`
-  - `RAW_IRON` → `IRON_INGOT`
-  - `RAW_GOLD` → `GOLD_INGOT`
-  - `SAND` → `GLASS`
-- `src/furnace.ts`: `FurnaceManager`, estado por posición
-  `{ input, fuel, output, litTime, litDuration, cookTime }`, `tick(delta)` en el game loop.
+### Fase 4 — Combustible y fundido  ✅ HECHO
+- `item.ts`: `ItemId.CHARCOAL = 112` (textura `items/charcoal.png`). Además `MAX_BLOCK_ID`
+  ahora se calcula del enum (bug: GLASS/FURNACE quedaban fuera de `isBlock`).
+- `src/smelting.ts`: `COOK_SECONDS = 10`; `SMELT` (`OAK_LOG→CHARCOAL`, `SAND→GLASS`,
+  `RAW_IRON→IRON_INGOT`, `RAW_GOLD→GOLD_INGOT`); `FUEL` en segundos
+  (palo 5, tabla/tronco/mesa 15, carbón/charcoal 80). Helpers `smeltResult`, `isSmeltable`,
+  `fuelSeconds`, `isFuel`.
+- `block-data.ts`: `FurnaceState { input, fuel, output, cookTime, litTime, litDuration }`
+  dentro de `BlockData.furnace`; `emptyFurnace()`; `BlockDataStore.forEach` para descubrir
+  hornos al cargar.
+- `world.ts`: `getFurnaceState` / `setFurnaceState` (sin remesh) / `eachFurnace`.
+- `src/furnace.ts`: `FurnaceManager.tick(delta)` — enciende consumiendo 1 combustible cuando
+  hay algo que fundir, quema `litTime`, avanza `cookTime` hasta 10s → mueve 1 al output;
+  progreso decae sin receta; al cambiar encendido/apagado llama `setBlockData({lit})`;
+  horno frío y vacío se borra del side-table. Cableado en `main.ts` (`tick` en el loop,
+  gated por pausa).
+- `interaction.ts`: al romper un horno suelta su contenido (input/fuel/output) antes de
+  que se borre el block-data.
+- **Verificado** con un test de nodo: 3 raw iron + 1 carbón → 3 lingotes, combustible
+  consumido, `lit` [true→false] correcto.
+
+**Falta la GUI (Fase 5)** para meter/sacar items; hasta entonces el `FurnaceManager` está
+inerte (nadie llena `FurnaceState`).
 
 ### Fase 5 — GUI del horno
 - Assets: `gui/furnace_gui.png`, `gui/Lit_progress.png` (llama), `gui/Burn_progress.png` (flecha).

@@ -8,10 +8,27 @@ import { openEvlymcDb, deleteSeedFromStore, STORE_BLOCK_DATA } from './idb';
  *
  * `facing`: 0 = +Z (south), 1 = +X (east), 2 = -Z (north), 3 = -X (west).
  */
+export type SlotRef = { id: number; count: number } | null;
+
+/** A furnace's inventory + smelting progress, all in seconds. */
+export type FurnaceState = {
+  input: SlotRef;
+  fuel: SlotRef;
+  output: SlotRef;
+  cookTime: number;     // toward COOK_SECONDS
+  litTime: number;      // fuel burn remaining
+  litDuration: number;  // fuel burn total (for the flame gauge)
+};
+
 export type BlockData = {
   facing?: 0 | 1 | 2 | 3;
   lit?: boolean;
+  furnace?: FurnaceState;
 };
+
+export function emptyFurnace(): FurnaceState {
+  return { input: null, fuel: null, output: null, cookTime: 0, litTime: 0, litDuration: 0 };
+}
 
 const STORE = STORE_BLOCK_DATA;
 const SAVE_DEBOUNCE_MS = 1500;
@@ -65,6 +82,13 @@ export class BlockDataStore {
 
   get(x: number, y: number, z: number): BlockData | undefined {
     return this.mem.get(posKey(x, y, z));
+  }
+
+  forEach(cb: (x: number, y: number, z: number, data: BlockData) => void): void {
+    for (const [key, data] of this.mem) {
+      const [x, y, z] = key.split(',').map(Number);
+      cb(x, y, z, data);
+    }
   }
 
   /** Merge `patch` into the block's data (creates the entry if missing). */

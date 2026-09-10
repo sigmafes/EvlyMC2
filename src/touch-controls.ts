@@ -23,6 +23,7 @@ export type TouchControlsCallbacks = {
   onBreakEnd: () => void;
   onInventory: () => void;
   onThirdPerson: () => void;
+  onChat: () => void;
   onPause: () => void;
 };
 
@@ -71,6 +72,7 @@ export class TouchControls {
       '<div id="touch-hud-left">',
       '  <button class="touch-btn" data-act="inv" aria-label="Inventory">&#9638;</button>',
       '  <button class="touch-btn" data-act="pov" aria-label="Camera">&#9673;</button>',
+      '  <button class="touch-btn" data-act="chat" aria-label="Chat">&#128172;</button>',
       '</div>',
       '<div id="touch-hud-right">',
       '  <button class="touch-btn" data-act="pause" aria-label="Pause">&#10074;&#10074;</button>',
@@ -119,6 +121,7 @@ export class TouchControls {
     const map: Record<string, () => void> = {
       inv: this.cb.onInventory,
       pov: this.cb.onThirdPerson,
+      chat: this.cb.onChat,
       pause: this.cb.onPause,
     };
     for (const btn of this.root.querySelectorAll<HTMLButtonElement>('#touch-hud-left .touch-btn, #touch-hud-right .touch-btn')) {
