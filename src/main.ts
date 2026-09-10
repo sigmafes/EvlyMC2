@@ -104,7 +104,10 @@ player = new PlayerController(
   (x, y, z) => world.getBlock(x, y, z),
   soundManager,
 );
-player.setSpawn(0, world.getSurfaceHeight(0, 0) + 2.25, 0);
+// Dry-land spawn: (0, 0) is frequently ocean, so the world picks the nearest
+// solid-ground column. Deterministic per seed, so it survives reloads.
+const SPAWN = world.findSpawnPoint();
+player.setSpawn(SPAWN.x, SPAWN.y, SPAWN.z);
 const playerModel = new PlayerModel();
 scene.add(playerModel.getGroup());
 let viewBobOn = true;
@@ -230,7 +233,6 @@ const droppedItems = new DroppedItems(
 );
 
 // --- Health & death ---
-const SPAWN = { x: 0, y: world.getSurfaceHeight(0, 0) + 2.25, z: 0 };
 const deathScreen = document.querySelector<HTMLElement>('#death-screen')!;
 const playerHealth = new PlayerHealth(
   () => {

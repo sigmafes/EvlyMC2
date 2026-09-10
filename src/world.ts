@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BlockId, BlockMaterials } from './block';
-import { BlockCollider, CHUNK_HEIGHT, CHUNK_SIZE } from './chunk';
+import { BlockCollider, CHUNK_HEIGHT, CHUNK_MAX_Y, CHUNK_SIZE, WATER_LEVEL } from './chunk';
 import { BlockStore } from './block-store';
 import { ChunkManager } from './chunk-manager';
 import { ChunkEditStore } from './chunk-edits';
@@ -70,8 +70,64 @@ export class World {
     await this.editStore.load();
   }
 
+  /**
+   * Y of the topmost generated solid block at (x, z). Clamped exactly like
+   * Chunk.generate() so it agrees with the terrain that actually gets built.
+   */
   getSurfaceHeight(x: number, z: number) {
-    return Math.floor(this.terrainNoise.sample(x, z));
+    return Math.min(CHUNK_MAX_Y, Math.max(5, Math.floor(this.terrainNoise.sample(x, z))));
+  }
+
+  /**
+   * A guaranteed dry-land spawn. (0, 0) is often ocean, and the terrain is
+   * generated so anything at or below WATER_LEVEL gets a water column on top,
+   * so we spiral outwards until we find a column that is above the waterline,
+   * has land all around it (no one-block islet or shoreline spike) and leaves
+   * headroom under the build ceiling.
+   *
+   * Purely a function of the seed, so it resolves to the same point on every
+   * load and needs no persistence.
+   */
+  findSpawnPoint(): { x: number; y: number; z: number } {
+    const MIN_GROUND = WATER_LEVEL + 2;   // clear of the water and the sandy shore
+    const MAX_GROUND = CHUNK_MAX_Y - 8;   // headroom, matches the tree-placement clamp
+    const MAX_RADIUS = 512;
+
+    const isLand = (x: number, z: number) => {
+      const y = this.getSurfaceHeight(x, z);
+      return y >= MIN_GROUND && y <= MAX_GROUND;
+    };
+    // Solid ground under foot *and* around it, so we never land on a spike.
+    const isSolidGround = (x: number, z: number) =>
+      isLand(x, z) &&
+      isLand(x + 1, z) && isLand(x - 1, z) &&
+      isLand(x, z + 1) && isLand(x, z - 1);
+
+    let best: { x: number; z: number; y: number } | null = null;
+
+    for (let r = 0; r <= MAX_RADIUS; r += 1) {
+      // Coarser sampling far out; land is almost always found in the first rings.
+      const step = Math.max(1, Math.floor(r / 16));
+      for (let d = -r; d <= r; d += step) {
+        // The four sides of the ring at Chebyshev distance r.
+        const ring: [number, number][] = r === 0
+          ? [[0, 0]]
+          : [[d, -r], [d, r], [-r, d], [r, d]];
+        for (const [x, z] of ring) {
+          if (isSolidGround(x, z)) {
+            return { x, y: this.getSurfaceHeight(x, z) + 2.25, z };
+          }
+          // Track the highest column seen, as a fallback for pathological seeds.
+          const y = this.getSurfaceHeight(x, z);
+          if (!best || y > best.y) best = { x, z, y };
+        }
+      }
+    }
+
+    // Nothing qualified within MAX_RADIUS: use the highest column we saw, and
+    // failing even that, sit on top of the waterline rather than inside it.
+    if (best && best.y >= MIN_GROUND) return { x: best.x, y: best.y + 2.25, z: best.z };
+    return { x: best?.x ?? 0, y: WATER_LEVEL + 3.25, z: best?.z ?? 0 };
   }
 
   getBlock(x: number, y: number, z: number): BlockId {
