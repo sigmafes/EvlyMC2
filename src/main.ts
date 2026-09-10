@@ -60,7 +60,23 @@ const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerH
 camera.rotation.order = 'YXZ';
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
+
+/** The actually-visible viewport. On mobile innerHeight lags the toolbar
+ *  show/hide, so prefer visualViewport when it is available. */
+function viewportSize() {
+  const vv = window.visualViewport;
+  return {
+    w: Math.max(1, Math.round(vv?.width ?? window.innerWidth)),
+    h: Math.max(1, Math.round(vv?.height ?? window.innerHeight)),
+  };
+}
+{
+  const { w, h } = viewportSize();
+  // updateStyle=false: the CSS (#game-canvas fills #game-shell @ 100dvh) owns
+  // the display size, so there is never an inline height that disagrees with
+  // the layout and leaves a black strip.
+  renderer.setSize(w, h, false);
+}
 renderer.shadowMap.enabled = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -541,13 +557,18 @@ function fitInventoryPanels() {
 }
 fitInventoryPanels();
 
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+function applyViewport() {
+  const { w, h } = viewportSize();
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  hand.resize(window.innerWidth / window.innerHeight);
+  renderer.setSize(w, h, false);
+  hand.resize(w / h);
   fitInventoryPanels();
-});
+}
+window.addEventListener('resize', applyViewport);
+window.addEventListener('orientationchange', applyViewport);
+window.visualViewport?.addEventListener('resize', applyViewport);
+applyViewport();
 
 let dropDebug = false;
 document.addEventListener('keydown', (event) => {

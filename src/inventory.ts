@@ -109,7 +109,7 @@ export class Inventory {
 
     slots.forEach((slot, index) => {
       const isHotbar = index < HOTBAR_SIZE;
-      const element = this.createSlotElement(slot, index);
+      const element = this.createSlotElement(slot, index, isHotbar);
       this.elementsByIndex[index] = [element];
       if (isHotbar) {
         hotbarRoot.appendChild(element);
@@ -233,18 +233,24 @@ export class Inventory {
     }
   }
 
-  private createSlotElement(slot: InventorySlot, index: number): HTMLButtonElement {
+  private createSlotElement(slot: InventorySlot, index: number, hudHotbar = false): HTMLButtonElement {
     const element = document.createElement('button');
     element.type = 'button';
     element.className = 'inventory-slot';
     element.dataset.slot = String(index + 1);
     renderSlot(element, slot);
-    element.addEventListener('click', () => this.handleStoredClick(index));
-    element.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.onSlotRightClick({ kind: 'stored', index });
-    });
+    if (hudHotbar) {
+      // The bottom hotbar bar is a selector only - a tap just changes the
+      // active slot, it never picks the block up (that is the backpack's job).
+      element.addEventListener('click', () => this.select(index));
+    } else {
+      element.addEventListener('click', () => this.handleStoredClick(index));
+      element.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.onSlotRightClick({ kind: 'stored', index });
+      });
+    }
 
     // Hover tooltip with the block's name (Grass, Dirt, ...).
     element.addEventListener('mousemove', (event) => {
