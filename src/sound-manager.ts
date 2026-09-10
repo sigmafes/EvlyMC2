@@ -46,7 +46,11 @@ export class SoundManager {
 
   async loadSound(soundName: string, variant: number): Promise<AudioBuffer> {
     const key = `${soundName}_${variant}`;
-    const soundNameFormatted = soundName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join('_');
+    // Only the FIRST word is capitalised: the files are Stone_dig1.ogg, not
+    // Stone_Dig1.ogg. Capitalising every word worked on Windows (which is
+    // case-insensitive) but 404s on a case-sensitive host like GitHub Pages,
+    // and loadSoundInternal then falls back to a silent buffer.
+    const soundNameFormatted = soundName.charAt(0).toUpperCase() + soundName.slice(1);
     const isLiquidSound = soundName.includes('water_place') || soundName.includes('lava_place') || soundName.includes('fizz');
     // Block dig/hit/mine/place sounds now live in sounds/blocks/.
     const folder = isLiquidSound ? '../sounds/liquids/' : '../sounds/blocks/';
