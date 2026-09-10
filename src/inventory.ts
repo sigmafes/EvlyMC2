@@ -92,6 +92,11 @@ export class Inventory {
   /** Set right after a paint drag so the trailing click doesn't also place the stack. */
   private suppressNextSlotClick = false;
 
+  /** Last seen pointer position, so a freshly-spawned cursor ghost appears under
+   *  the finger instead of at the top-left corner (touch has no mousemove). */
+  private pointerX = 0;
+  private pointerY = 0;
+
   constructor(
     private readonly onSelect: (id: number | null) => void,
     private readonly onToggle?: (open: boolean) => void,
@@ -123,6 +128,8 @@ export class Inventory {
     // cursor was when it locked (the canvas), not the fixed hotbar overlay.
     document.addEventListener('wheel', this.onWheel, { passive: false });
     document.addEventListener('keydown', this.onKeyDown);
+    document.addEventListener('pointerdown', this.trackPointer, true);
+    document.addEventListener('pointermove', this.trackPointer, true);
     document.addEventListener('pointerdown', this.onPaintDown);
     document.addEventListener('pointermove', this.onPaintMove);
     document.addEventListener('pointerup', this.onPaintUp);
@@ -360,11 +367,18 @@ export class Inventory {
     document.addEventListener('contextmenu', this.cancelHeld);
   }
 
+  private trackPointer = (e: PointerEvent) => {
+    this.pointerX = e.clientX;
+    this.pointerY = e.clientY;
+  };
+
   private spawnGhost() {
     if (!this.heldItem) return;
     this.ghostElement?.remove();
     const ghost = document.createElement('div');
     ghost.className = 'inventory-ghost';
+    ghost.style.left = `${this.pointerX}px`;
+    ghost.style.top = `${this.pointerY}px`;
     const canvas = document.createElement('canvas');
     canvas.className = 'inventory-block';
     ghost.appendChild(canvas);

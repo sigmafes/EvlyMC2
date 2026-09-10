@@ -53,10 +53,18 @@ export class TouchControls {
   constructor(private readonly cb: TouchControlsCallbacks) {
     document.body.classList.add('touch');
 
+    const shell = document.querySelector('#game-shell') ?? document.body;
+
+    // The look layer is a separate root: it must sit BELOW the hotbar (so hotbar
+    // taps work) while the buttons sit ABOVE the inventory panel. One container
+    // can't be on both sides of that, so they're split.
+    this.lookLayer = document.createElement('div');
+    this.lookLayer.id = 'touch-look';
+    shell.appendChild(this.lookLayer);
+
     this.root = document.createElement('div');
     this.root.id = 'touch-ui';
     this.root.innerHTML = [
-      '<div id="touch-look"></div>',
       '<div id="touch-hud-left">',
       '  <button class="touch-btn" data-act="inv" aria-label="Inventory">&#9638;</button>',
       '  <button class="touch-btn" data-act="pov" aria-label="Camera">&#9673;</button>',
@@ -77,9 +85,8 @@ export class TouchControls {
       '  </div>',
       '</div>',
     ].join('\n');
-    (document.querySelector('#game-shell') ?? document.body).appendChild(this.root);
+    shell.appendChild(this.root);
     this.gameplay = this.root.querySelector<HTMLElement>('#touch-gameplay')!;
-    this.lookLayer = this.root.querySelector<HTMLElement>('#touch-look')!;
 
     this.wireHudButtons();
     this.wireDpad();
@@ -88,6 +95,7 @@ export class TouchControls {
 
     // Kill the browser's own long-press context menu over the game surface.
     this.root.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.lookLayer.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   /** Hide the movement/look controls while a full-screen menu is open. */
