@@ -28,6 +28,7 @@ import { playClick } from './ui-sound';
 import { BLOCK_CATALOG } from './creative-palette';
 import { ITEMS, maxStackOf } from './item';
 import { CraftingTableUI } from './crafting-table-ui';
+import { TouchControls } from './touch-controls';
 import { makeStack } from './item-stack';
 import { DayNightCycle } from './day-night-cycle';
 import { SkyRenderer } from './sky-renderer';
@@ -371,6 +372,23 @@ chat.registerCommand('give', (args) => {
 });
 const underwaterManager = new UnderwaterManager(camera, world, scene, fog, underwaterOverlay);
 const gameLoop = new GameLoop(world, player, lightEngine, camera, canvas, scene, pauseMenu, dayNightCycle, underwaterManager);
+
+// --- Mobile: on-screen touch controls (LCE Android-style) ---
+const touchControls = TouchControls.isTouchDevice()
+  ? new TouchControls({
+      onMoveAxis: (x, z) => player.setMoveAxis(x, z),
+      onJump: (held) => player.setJumpHeld(held),
+      onSneak: (on) => player.setSneak(on),
+      onLook: (dx, dy) => interaction.touchLook(dx, dy),
+      onTapPlace: () => interaction.touchTapPlace(),
+      onBreakStart: () => interaction.touchBreakStart(),
+      onBreakEnd: () => interaction.touchBreakEnd(),
+      onInventory: () => inventory.toggleInventory(),
+      onThirdPerson: () => player.cycleCameraMode(),
+      onPause: () => pauseMenu.toggle(),
+    })
+  : null;
+
 const clock = new THREE.Clock();
 
 function animate() {
@@ -378,6 +396,12 @@ function animate() {
   const delta = clock.getDelta();
 
   worldMusic.setPaused(pauseMenu.isPaused || playerHealth.isDead);
+
+  if (touchControls) {
+    const menuOpen = inventoryOpen || pauseMenu.isPaused || playerHealth.isDead;
+    touchControls.setGameplayVisible(!menuOpen);
+    interaction.setTouchActive(!menuOpen);
+  }
 
   // Dead: freeze the world behind the death screen until Respawn / Title screen.
   if (playerHealth.isDead) {

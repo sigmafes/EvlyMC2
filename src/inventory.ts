@@ -84,6 +84,14 @@ export class Inventory {
   private externalUiOpen = false;
   private externalUiCloser: (() => void) | null = null;
 
+  /** DOM element -> the slot it represents, for the swipe-to-deposit gesture. */
+  private readonly slotSourceByEl = new Map<HTMLElement, NonNullable<SlotSource>>();
+  /** Drag-across-slots state (mobile: deposit 1 of the held stack per slot). */
+  private paint: { down: boolean; committed: boolean; startEl: HTMLElement | null; seen: Set<HTMLElement> } =
+    { down: false, committed: false, startEl: null, seen: new Set() };
+  /** Set right after a paint drag so the trailing click doesn't also place the stack. */
+  private suppressNextSlotClick = false;
+
   constructor(
     private readonly onSelect: (id: number | null) => void,
     private readonly onToggle?: (open: boolean) => void,
@@ -115,6 +123,10 @@ export class Inventory {
     // cursor was when it locked (the canvas), not the fixed hotbar overlay.
     document.addEventListener('wheel', this.onWheel, { passive: false });
     document.addEventListener('keydown', this.onKeyDown);
+    document.addEventListener('pointerdown', this.onPaintDown);
+    document.addEventListener('pointermove', this.onPaintMove);
+    document.addEventListener('pointerup', this.onPaintUp);
+    document.addEventListener('pointercancel', this.onPaintUp);
     this.select(0);
   }
 
@@ -130,6 +142,7 @@ export class Inventory {
   bindCraftGrid(grid: CraftingGrid, inputEls: HTMLElement[], outputEl: HTMLElement) {
     grid.bind(inputEls, outputEl);
     inputEls.forEach((el, i) => {
+      this.slotSourceByEl.set(el, { kind: 'craft', grid, index: i });
       el.addEventListener('click', () => this.onSlotClick({ kind: 'craft', grid, index: i }));
       el.addEventListener('contextmenu', (event) => {
         event.preventDefault();
@@ -148,6 +161,7 @@ export class Inventory {
     elements.forEach((el, index) => {
       if (!el || index >= TOTAL_SLOTS) return;
       renderSlot(el, slots[index]);
+      this.slotSourceByEl.set(el as HTMLElement, { kind: 'stored', index });
       el.addEventListener('click', () => this.handleStoredClick(index));
       el.addEventListener('contextmenu', (event) => {
         event.preventDefault();
@@ -192,6 +206,14 @@ export class Inventory {
     if (this.backpackOpen) this.toggleBackpack(false);
   }
 
+  /** Open/close the backpack (on-screen Inventory button). */
+  toggleInventory() {
+    if (this.externalUiOpen) { this.externalUiCloser?.(); return; }
+    this.toggleBackpack();
+  }
+
+  get isBackpackOpen() { return this.backpackOpen; }
+
   setExternalUiOpen(open: boolean, closer?: () => void) {
     this.externalUiOpen = open;
     this.externalUiCloser = open ? closer ?? null : null;
@@ -226,6 +248,7 @@ export class Inventory {
       }
     });
     element.addEventListener('mouseleave', hideTooltip);
+    this.slotSourceByEl.set(element, { kind: 'stored', index });
 
     return element;
   }
@@ -317,7 +340,7 @@ export class Inventory {
     this.heldItem = { ...block, count: block.count ?? maxStackOf(block.id) };
     this.heldFrom = null;
     this.spawnGhost();
-    document.addEventListener('mousemove', this.onGhostMove);
+    document.addEventListener('pointermove', this.onGhostMove);
     document.addEventListener('contextmenu', this.cancelHeld);
   }
 
@@ -333,7 +356,7 @@ export class Inventory {
     this.heldFrom = src;
     this.writeSlot(src, take >= total ? null : { ...slot, count: total - take });
     this.spawnGhost();
-    document.addEventListener('mousemove', this.onGhostMove);
+    document.addEventListener('pointermove', this.onGhostMove);
     document.addEventListener('contextmenu', this.cancelHeld);
   }
 
@@ -368,7 +391,7 @@ export class Inventory {
     }
   }
 
-  private onGhostMove = (event: MouseEvent) => {
+  private onGhostMove = (event: PointerEvent | MouseEvent) => {
     if (!this.ghostElement) return;
     this.ghostElement.style.left = `${event.clientX}px`;
     this.ghostElement.style.top = `${event.clientY}px`;
@@ -399,13 +422,14 @@ export class Inventory {
     this.heldFrom = null;
     this.ghostElement?.remove();
     this.ghostElement = null;
-    document.removeEventListener('mousemove', this.onGhostMove);
+    document.removeEventListener('pointermove', this.onGhostMove);
     document.removeEventListener('contextmenu', this.cancelHeld);
   }
 
   // --- Click handling (shared by stored slots + craft grid) -----------------
 
   private handleStoredClick(index: number) {
+    if (this.consumeClickSuppression()) return;
     const src: SlotSource = { kind: 'stored', index };
     if (this.heldItem) {
       this.placeHeld(src);
@@ -417,31 +441,81 @@ export class Inventory {
   }
 
   private onSlotClick(src: NonNullable<SlotSource>) {
+    if (this.consumeClickSuppression()) return;
     if (this.heldItem) this.placeHeld(src);
     else this.pickUpFrom(src);
   }
 
   private onSlotRightClick(src: NonNullable<SlotSource>) {
+    if (this.heldItem) { this.depositOne(src); return; }
     const slot = this.readSlot(src);
-
-    if (this.heldItem) {
-      const held = this.heldItem;
-      if (slot.id === null) {
-        this.writeSlot(src, { ...held, count: 1 });
-      } else if (slot.id === held.id && (slot.count ?? 1) < maxStackOf(slot.id)) {
-        this.writeSlot(src, { ...slot, count: (slot.count ?? 1) + 1 });
-      } else {
-        return;
-      }
-      held.count = (held.count ?? 1) - 1;
-      if ((held.count ?? 0) <= 0) this.clearHeldVisuals();
-      else this.updateGhostCount();
-      return;
-    }
-
     if (slot.id === null) return;
     this.pickUpFrom(src, Math.ceil((slot.count ?? 1) / 2));
   }
+
+  /** Drop exactly one of the held stack into `src` (right-click / swipe deposit). */
+  private depositOne(src: NonNullable<SlotSource>): boolean {
+    if (!this.heldItem) return false;
+    const held = this.heldItem;
+    const slot = this.readSlot(src);
+    if (slot.id === null) {
+      this.writeSlot(src, { ...held, count: 1 });
+    } else if (slot.id === held.id && (slot.count ?? 1) < maxStackOf(slot.id)) {
+      this.writeSlot(src, { ...slot, count: (slot.count ?? 1) + 1 });
+    } else {
+      return false;
+    }
+    held.count = (held.count ?? 1) - 1;
+    if ((held.count ?? 0) <= 0) this.clearHeldVisuals();
+    else this.updateGhostCount();
+    return true;
+  }
+
+  private consumeClickSuppression(): boolean {
+    if (!this.suppressNextSlotClick) return false;
+    this.suppressNextSlotClick = false;
+    return true;
+  }
+
+  // --- Swipe-to-deposit (mobile) --------------------------------------------
+  // With a stack on the cursor, dragging a finger across several slots drops one
+  // item in each - fast filling of a crafting pattern. Touch only; the mouse
+  // keeps click = place-stack, right-click = place-one.
+
+  private slotElAt(x: number, y: number): HTMLElement | null {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    const slotEl = el?.closest<HTMLElement>('.inventory-slot, .craft-slot, .ct-slot');
+    return slotEl && this.slotSourceByEl.has(slotEl) ? slotEl : null;
+  }
+
+  private onPaintDown = (event: PointerEvent) => {
+    if (event.pointerType === 'mouse' || !this.heldItem) return;
+    const slotEl = this.slotElAt(event.clientX, event.clientY);
+    if (!slotEl) return;
+    this.paint = { down: true, committed: false, startEl: slotEl, seen: new Set() };
+  };
+
+  private onPaintMove = (event: PointerEvent) => {
+    if (!this.paint.down || !this.heldItem) return;
+    const slotEl = this.slotElAt(event.clientX, event.clientY);
+    if (!slotEl) return;
+
+    // First move onto a different slot commits the gesture: the start slot also
+    // gets one, and every click that would follow this drag is swallowed.
+    if (!this.paint.committed && slotEl !== this.paint.startEl) {
+      this.paint.committed = true;
+      const startSrc = this.paint.startEl && this.slotSourceByEl.get(this.paint.startEl);
+      if (startSrc && this.depositOne(startSrc)) this.paint.seen.add(this.paint.startEl!);
+    }
+    if (!this.paint.committed || this.paint.seen.has(slotEl) || !this.heldItem) return;
+    const src = this.slotSourceByEl.get(slotEl);
+    if (src && this.depositOne(src)) this.paint.seen.add(slotEl);
+  };
+
+  private onPaintUp = () => {
+    if (this.paint.committed) this.suppressNextSlotClick = true;
+    this.paint = { down: false, committed: false, startEl: null, seen: new Set() };
+  };
 
   private placeHeld(target: NonNullable<SlotSource>) {
     const held = this.heldItem!;
@@ -493,7 +567,7 @@ export class Inventory {
       this.heldItem = { ...out };
       this.heldFrom = null;
       this.spawnGhost();
-      document.addEventListener('mousemove', this.onGhostMove);
+      document.addEventListener('pointermove', this.onGhostMove);
       document.addEventListener('contextmenu', this.cancelHeld);
     }
     grid.consumeCraft();

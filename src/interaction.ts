@@ -46,7 +46,8 @@ export class BlockInteraction {
   private readonly highlight: BlockHighlight;
   private readonly breakOverlay = new BreakOverlay();
   private readonly placer: BlockPlacer;
-  private isPlaying = false;
+  private isPlaying = false;      // pointer-locked (desktop)
+  private touchActive = false;    // on-screen touch controls engaged (mobile)
   private target: TargetBlock | null = null;
   private selectedBlock: BlockId | null = BlockId.OAK_PLANKS;
   /** Raw selected hotbar id (block or tool); drives mining speed / harvest. */
@@ -95,6 +96,15 @@ export class BlockInteraction {
     window.addEventListener('blur', this.onMouseUp);
   }
 
+  /** Gameplay input is live when the pointer is locked OR touch controls are on. */
+  private get engaged() { return this.isPlaying || this.touchActive; }
+
+  /** Enable the mobile input path (no pointer lock). */
+  setTouchActive(active: boolean) {
+    this.touchActive = active;
+    if (!active) { this.leftHeld = false; this.rightHeld = false; this.cancelMining(); this.cancelEating(); }
+  }
+
   attachHighlight(scene: THREE.Scene) {
     this.highlight.attachToScene(scene);
     this.breakOverlay.attachToScene(scene);
@@ -127,7 +137,7 @@ export class BlockInteraction {
   /** MC behaviour: holding the attack button swings the hand on a fixed cadence,
    *  whether or not it's actually breaking a block (air, unbreakable, wrong tool). */
   private updateAttackSwing(delta: number) {
-    if (this.leftHeld && this.isPlaying) {
+    if (this.leftHeld && this.engaged) {
       this.swingTimer += delta;
       if (this.swingTimer >= SWING_INTERVAL) {
         this.swingTimer -= SWING_INTERVAL;
@@ -165,7 +175,7 @@ export class BlockInteraction {
     if (!this.eating) return;
 
     // Bail if the held item stopped being food (slot changed) or a GUI opened.
-    if (foodValue(this.selectedItemId) <= 0 || !this.isPlaying) {
+    if (foodValue(this.selectedItemId) <= 0 || !this.engaged) {
       this.cancelEating();
       return;
     }
@@ -300,7 +310,11 @@ export class BlockInteraction {
     }
 
     this.rightHeld = true;
+    this.useHeld();
+  };
 
+  /** Right-click / touch-tap: eat, open an interactive block, or place. */
+  private useHeld() {
     // Holding a food item: start eating instead of placing / interacting.
     if (foodValue(this.selectedItemId) > 0 && (!this.canEat || this.canEat())) {
       this.startEating();
@@ -337,7 +351,36 @@ export class BlockInteraction {
         if (sound && this.soundManager) this.soundManager.playSound(sound);
       }
     }
-  };
+  }
+
+  // --- Touch input (mobile) ---------------------------------------------------
+
+  /** Drag on the canvas: rotate the view. `dx`/`dy` are pixel deltas. */
+  touchLook(dx: number, dy: number) {
+    const sensitivity = (this.pauseMenu?.mouseSensitivity ?? 30) / 100;
+    this.player.look(dx * sensitivity, dy * sensitivity);
+  }
+
+  /** Tap on the world: place a block / use the held item (LCE Android). */
+  touchTapPlace() {
+    if (!this.touchActive) return;
+    this.useHeld();
+  }
+
+  /** Finger held on the world: start breaking the targeted block. */
+  touchBreakStart() {
+    if (!this.touchActive) return;
+    this.leftHeld = true;
+    this.onSwing?.();
+    this.swingTimer = 0;
+    this.startMining();
+  }
+
+  /** Finger lifted: stop breaking. */
+  touchBreakEnd() {
+    this.leftHeld = false;
+    this.cancelMining();
+  }
 
   private onMouseUp = (event?: Event) => {
     if (event && event.type === 'mouseup') {
@@ -362,7 +405,7 @@ export class BlockInteraction {
     if (event.code === 'Digit2' || event.code === 'Numpad2') this.selectedBlock = BlockId.GLOWSTONE;
     if (event.code === 'Digit3' || event.code === 'Numpad3') this.selectedBlock = BlockId.WATER;
     // Q: throw the selected stack into the world (Ctrl+Q throws the whole stack).
-    if (event.code === 'KeyQ' && this.isPlaying && !event.repeat) this.onDropSelected?.(event.ctrlKey);
+    if (event.code === 'KeyQ' && this.engaged && !event.repeat) this.onDropSelected?.(event.ctrlKey);
   };
 
   private capturePointer = () => this.canvas.requestPointerLock();

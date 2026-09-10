@@ -40,6 +40,10 @@ export class PlayerController {
   private cameraMode = 0;
   private cameraControlEnabled = true;
   private sprinting = false;
+  /** On-screen d-pad axis (-1..1 each), merged with the keyboard each frame. */
+  private touchMoveX = 0;
+  private touchMoveZ = 0;
+  private touchJump = false;
   /** True while a UI (inventory) blocks movement input; physics still runs so the world doesn't freeze. */
   private movementLocked = false;
   private lastFootstepTime = 0;
@@ -85,6 +89,33 @@ export class PlayerController {
     this.cameraControlEnabled = enabled;
   }
 
+  // --- Touch / on-screen controls -----------------------------------------
+
+  /** Virtual analog stick from the on-screen d-pad, x = strafe, z = forward(-)/back(+). */
+  setMoveAxis(x: number, z: number) {
+    this.touchMoveX = THREE.MathUtils.clamp(x, -1, 1);
+    this.touchMoveZ = THREE.MathUtils.clamp(z, -1, 1);
+  }
+
+  /** On-screen jump button held state. */
+  setJumpHeld(held: boolean) {
+    this.touchJump = held;
+  }
+
+  /** On-screen sneak toggle. */
+  setSneak(on: boolean) {
+    this.physics.setSneaking(on);
+  }
+
+  /** On-screen third-person button: LCE F5 cycle (1st -> 3rd back -> 3rd front). */
+  cycleCameraMode() {
+    this.cameraMode = (this.cameraMode + 1) % 3;
+  }
+
+  get sneaking() {
+    return this.state.sneaking;
+  }
+
   update(delta: number) {
     const direction = new THREE.Vector3();
     if (!this.movementLocked) {
@@ -92,13 +123,17 @@ export class PlayerController {
       if (this.keys.has('KeyS')) direction.z += 1;
       if (this.keys.has('KeyA')) direction.x -= 1;
       if (this.keys.has('KeyD')) direction.x += 1;
+      direction.x += this.touchMoveX;
+      direction.z += this.touchMoveZ;
+      direction.x = THREE.MathUtils.clamp(direction.x, -1, 1);
+      direction.z = THREE.MathUtils.clamp(direction.z, -1, 1);
     }
     const isMoving = direction.lengthSq() > 0;
     if (!isMoving) this.sprinting = false;
     if (isMoving) direction.normalize();
     direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.state.yaw);
 
-    const wantJump = !this.movementLocked && this.keys.has('Space');
+    const wantJump = !this.movementLocked && (this.keys.has('Space') || this.touchJump);
     this.physics.updatePhysics(direction, wantJump, this.sprinting, delta);
 
     this.state.position.copy(this.physics.state.position);

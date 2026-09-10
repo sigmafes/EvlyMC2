@@ -1296,3 +1296,108 @@ body {
   width: min(420px, 82vw);
 }
 #death-panel .mc-button { width: 100%; }
+
+/* ==========================================================================
+   Touch controls (mobile). Hidden entirely unless <body> has .touch.
+   ========================================================================== */
+#touch-ui { display: none; }
+
+body.touch #touch-ui {
+  display: block;
+  position: fixed;
+  inset: 0;
+  /* No stacking context of its own: the look layer must stay BELOW the hotbar
+     (z-index 2) so hotbar taps work, while the buttons sit ABOVE it. */
+  pointer-events: none; /* only the children opt back in */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Full-screen gesture layer for look / tap-place / hold-break. Sits above the
+   canvas but below the hotbar (z-index 2) so hotbar taps still work. */
+body.touch #touch-look {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: auto;
+  touch-action: none;
+}
+body.touch #touch-look[hidden] { display: none; }
+body.touch #touch-gameplay[hidden] { display: none; }
+
+body.touch .touch-btn {
+  pointer-events: auto;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 58px;
+  height: 58px;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.38);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 24px;
+  line-height: 1;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+body.touch .touch-btn.pressed,
+body.touch .touch-btn:active {
+  background: rgba(120, 120, 120, 0.55);
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+/* Top corners: square HUD buttons. */
+body.touch #touch-hud-left,
+body.touch #touch-hud-right {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  display: flex;
+  gap: 10px;
+  z-index: 3;
+}
+body.touch #touch-hud-left  { left: max(12px, env(safe-area-inset-left)); }
+body.touch #touch-hud-right { right: max(12px, env(safe-area-inset-right)); }
+
+/* Bottom-left: movement d-pad (3x3 grid, cross of buttons). */
+body.touch #touch-dpad {
+  position: absolute;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(20px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: repeat(3, 58px);
+  grid-template-rows: repeat(3, 58px);
+  gap: 6px;
+  z-index: 3;
+}
+body.touch #touch-dpad .dpad-up    { grid-area: 1 / 2 / 2 / 3; }
+body.touch #touch-dpad .dpad-left  { grid-area: 2 / 1 / 3 / 2; }
+body.touch #touch-dpad .dpad-right { grid-area: 2 / 3 / 3 / 4; }
+body.touch #touch-dpad .dpad-down  { grid-area: 3 / 2 / 4 / 3; }
+
+/* Bottom-right: jump + sneak toggle. */
+body.touch #touch-actions {
+  position: absolute;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 12px;
+  z-index: 3;
+}
+body.touch #touch-actions .touch-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  font-size: 28px;
+}
+body.touch #touch-actions .tc-sneak.pressed {
+  background: rgba(90, 160, 255, 0.6);
+}
+
+/* Nudge the hotbar up a touch so the d-pad/jump don't crowd it on short screens. */
+body.touch #inventory { bottom: 92px; }

@@ -118,6 +118,9 @@ export class PauseMenu {
 
   get isPaused() { return this.paused; }
 
+  /** On-screen Pause button. */
+  toggle() { if (this.paused) this.close(); else this.open(); }
+
   private open = () => {
     this.paused = true;
     this.root.hidden = false;
