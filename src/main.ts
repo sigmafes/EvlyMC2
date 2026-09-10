@@ -380,6 +380,7 @@ const touchControls = TouchControls.isTouchDevice()
       onMoveAxis: (x, z) => player.setMoveAxis(x, z),
       onJump: (held) => player.setJumpHeld(held),
       onSneak: (on) => player.setSneak(on),
+      onSprint: (on) => player.setSprint(on),
       onLook: (dx, dy) => interaction.touchLook(dx, dy),
       onTapPlace: () => interaction.touchTapPlace(),
       onBreakStart: () => interaction.touchBreakStart(),
@@ -526,11 +527,26 @@ function animate() {
   diagnostics.update(performance.now(), loopState.dayNight.cycleProgress * 100);
 }
 
+/** Shrink the inventory / crafting-table panels so they never overflow a small
+ *  (phone) screen. Never scales past the desktop 1.18. */
+function fitInventoryPanels() {
+  const scale = Math.min(
+    1.18,
+    (window.innerWidth - 16) / 352,
+    (window.innerHeight - 16) / 332,
+  );
+  for (const sel of ['#backpack', '#crafting-table']) {
+    document.querySelector<HTMLElement>(sel)?.style.setProperty('--inv-scale', String(scale));
+  }
+}
+fitInventoryPanels();
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   hand.resize(window.innerWidth / window.innerHeight);
+  fitInventoryPanels();
 });
 
 let dropDebug = false;

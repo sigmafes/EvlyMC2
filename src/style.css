@@ -168,6 +168,7 @@ body {
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.55);
+  --inv-scale: 1.18;
 }
 #crafting-table[hidden] { display: none; }
 #crafting-table-panel {
@@ -176,7 +177,7 @@ body {
   height: 332px;
   background: url('../gui/Crafting_table_gui.png') 0 0 / 512px 512px no-repeat;
   image-rendering: pixelated;
-  transform: scale(1.18);
+  transform: scale(var(--inv-scale, 1.18));
   filter: drop-shadow(4px 4px 0 rgba(0, 0, 0, .5));
 }
 #ct-craft {

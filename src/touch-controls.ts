@@ -12,6 +12,8 @@ export type TouchControlsCallbacks = {
   onMoveAxis: (x: number, z: number) => void;
   onJump: (held: boolean) => void;
   onSneak: (on: boolean) => void;
+  /** Double-tap the forward button. */
+  onSprint: (on: boolean) => void;
   /** Drag on the world: pixel deltas since the last move. */
   onLook: (dx: number, dy: number) => void;
   /** Quick tap on the world: place / use the held item. */
@@ -25,6 +27,7 @@ export type TouchControlsCallbacks = {
 };
 
 const HOLD_MS = 180;    // finger still this long on the world -> start breaking
+const DOUBLE_TAP_MS = 300; // second forward press within this window -> sprint
 const MOVE_TOL = 12;    // px of drift still counted as "held", not a drag
 
 export class TouchControls {
@@ -48,6 +51,7 @@ export class TouchControls {
   private startTime = 0;
   private holdTimer = 0;
   private breaking = false;
+  private lastForwardPress = 0;
 
   constructor(private readonly cb: TouchControlsCallbacks) {
     document.body.classList.add('touch');
@@ -141,6 +145,11 @@ export class TouchControls {
         btn.setPointerCapture(e.pointerId);
         btn.classList.add('pressed');
         this.dirs.add(dir);
+        if (dir === 'up') {
+          const now = performance.now();
+          if (now - this.lastForwardPress < DOUBLE_TAP_MS) this.cb.onSprint(true);
+          this.lastForwardPress = now;
+        }
         recompute();
       };
       const release = (e: PointerEvent) => {

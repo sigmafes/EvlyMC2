@@ -112,6 +112,11 @@ export class PlayerController {
     this.cameraMode = (this.cameraMode + 1) % 3;
   }
 
+  /** Double-tap-forward sprint (auto-clears when movement stops, like MCPE). */
+  setSprint(on: boolean) {
+    this.sprinting = on;
+  }
+
   get sneaking() {
     return this.state.sneaking;
   }
