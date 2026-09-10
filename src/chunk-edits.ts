@@ -1,5 +1,6 @@
 import { BlockId } from './block';
 import { CHUNK_SIZE } from './chunk';
+import { openEvlymcDb, deleteSeedFromStore, STORE_CHUNK_EDITS } from './idb';
 
 type ChunkKey = string; // "cx,cz"
 
@@ -12,8 +13,7 @@ function chunkCoord(v: number): number {
   return Math.floor((v + 8) / CHUNK_SIZE);
 }
 
-const DB_NAME = 'evlymc';
-const STORE = 'chunkEdits';
+const STORE = STORE_CHUNK_EDITS;
 const SAVE_DEBOUNCE_MS = 1500;
 
 /**
@@ -109,48 +109,12 @@ export class ChunkEditStore {
   }
 
   private openDb(): Promise<IDBDatabase> {
-    return ChunkEditStore.openDb();
-  }
-
-  private static openDb(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1);
-      req.onupgradeneeded = () => {
-        if (!req.result.objectStoreNames.contains(STORE)) {
-          req.result.createObjectStore(STORE, { keyPath: 'key' });
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
+    return openEvlymcDb();
   }
 
   /** Wipe every persisted edit belonging to a world seed (used when a world is deleted). */
-  static async deleteSeed(seed: number): Promise<void> {
-    try {
-      const db = await ChunkEditStore.openDb();
-      const prefix = `${seed}:`;
-      const tx = db.transaction(STORE, 'readwrite');
-      const store = tx.objectStore(STORE);
-      const keysReq = store.getAllKeys();
-      await new Promise<void>((resolve, reject) => {
-        keysReq.onsuccess = () => {
-          for (const k of keysReq.result as string[]) {
-            if (typeof k === 'string' && k.startsWith(prefix)) store.delete(k);
-          }
-          resolve();
-        };
-        keysReq.onerror = () => reject(keysReq.error);
-      });
-      await new Promise<void>((resolve, reject) => {
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error);
-      });
-      db.close();
-    } catch {
-      // IndexedDB unavailable — nothing persisted to clear.
-    }
+  static deleteSeed(seed: number): Promise<void> {
+    return deleteSeedFromStore(STORE, seed);
   }
 
   private readAll(): Promise<{ key: string; entries: [number, BlockId][] }[]> {

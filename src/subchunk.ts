@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BlockId, BlockMaterials } from './block';
-import { buildSubchunkGeometry, BlockReader, LightReader, WaterDistanceReader, WaterFlowReader, SubchunkRenderStats } from './mesher';
+import { buildSubchunkGeometry, BlockReader, LightReader, WaterDistanceReader, WaterFlowReader, BlockDataReader, SubchunkRenderStats } from './mesher';
 
 export const SUBCHUNK_HEIGHT = 16;
 
@@ -13,6 +13,7 @@ export class Subchunk {
   private readLight: LightReader = () => 15;
   private readWaterDistance: WaterDistanceReader = () => 0;
   private readWaterFlow: WaterFlowReader = () => new THREE.Vector3();
+  private readBlockData: BlockDataReader = () => undefined;
   private smoothLighting = false;
   private ambientOcclusion = false;
 
@@ -49,6 +50,7 @@ export class Subchunk {
       this.ambientOcclusion,
       this.readWaterDistance,
       this.readWaterFlow,
+      this.readBlockData,
     );
     const previousGeometry = this.mesh.geometry;
     this.mesh.geometry = geometry;
@@ -92,6 +94,10 @@ export class Subchunk {
 
   setWaterFlowReader(readWaterFlow: WaterFlowReader) {
     this.readWaterFlow = readWaterFlow;
+  }
+
+  setBlockDataReader(readBlockData: BlockDataReader) {
+    this.readBlockData = readBlockData;
   }
 
   setSmoothLighting(enabled: boolean) {

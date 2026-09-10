@@ -25,18 +25,26 @@ Estado del trabajo en curso. Retomar desde la **Fase 2**.
 
 ## Pendiente
 
-### Fase 2 — Infraestructura de estado por-bloque
-El mundo guarda **un solo BlockId por celda, sin estado**. Para la cara del horno y la
-antorcha de pared hace falta un canal aparte.
-- `src/block-data.ts`: `BlockDataStore`, `Map<"x,y,z", { facing?: 0|1|2|3; lit?: boolean }>`.
-- Persistencia: object store IndexedDB `blockData`, clave `seed:x,y,z`, mismo patrón
-  que `ChunkEditStore` (debounce + flush en `visibilitychange`).
-- `world.ts`: instancia + `getBlockData`/`setBlockData`; al hacer `remove()` borrar la
-  entrada y soltar el contenido del horno.
-- `mesher.ts`/`subchunk.ts`/`chunk-manager.ts`: nuevo reader `readBlockData`, igual que
-  `readLight`. `materialForFace(id, faceIndex, liquidDistance, data)`.
-- Colocación orientada en `interaction.ts`: set `ORIENTABLE_ON_PLACE`; el facing sale del
-  yaw del jugador (la cara *off* mira hacia él).
+### Fase 2 — Infraestructura de estado por-bloque  ✅ HECHO
+- `src/idb.ts`: handle IndexedDB compartido, `evlymc` v2, stores `chunkEdits` + `blockData`.
+  `ChunkEditStore` refactorizado para usarlo.
+- `src/block-data.ts`: `BlockDataStore` (`Map<"x,y,z", { facing?: 0|1|2|3; lit?: boolean }>`),
+  `load`/`get`/`set`/`delete`/`flush`, debounce 1.5s + flush en `visibilitychange`,
+  `deleteSeed`. Helpers `FACING_TO_FACE_INDEX` (0->+Z, 1->+X, 2->-Z, 3->-X) y
+  `facingTowardPlayer(yaw)`.
+- `world.ts`: instancia `BlockDataStore`; `getBlockData` / `setBlockData` (remesh);
+  `remove()` borra la entrada; `loadPersistedEdits`/`flushEdits` cubren ambos stores;
+  reader `setBlockDataReader` cableado como `setLightReader`.
+- `mesher.ts`/`subchunk.ts`/`chunk.ts`: `BlockDataReader` propagado; el mesher solo lo
+  consulta para ids en `STATEFUL_BLOCKS`. `materialForFace(id, faceIndex, liquidDistance, data)`
+  ya acepta `data` (sin usar todavía).
+- `block.ts`: sets `STATEFUL_BLOCKS` y `ORIENTABLE_BLOCKS` (vacíos hasta la Fase 3), `isOrientable`.
+- `interaction.ts`: al colocar un bloque de `ORIENTABLE_BLOCKS` escribe
+  `facing = facingTowardPlayer(player.state.yaw)`.
+- `worlds.ts`: al borrar un mundo se limpian ambos stores.
+
+**Nota Fase 3:** basta con meter `FURNACE` en `STATEFUL_BLOCKS` + `ORIENTABLE_BLOCKS` y
+añadir el `case` de `FURNACE` en `materialForFace` usando `data.facing` / `data.lit`.
 
 ### Fase 3 — Bloque Horno (`FURNACE`)
 - Texturas ya en repo: `furnace_off/on/side/top.png`.

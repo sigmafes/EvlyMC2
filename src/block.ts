@@ -87,6 +87,15 @@ export function isFlammable(id: BlockId): boolean {
 
 /** Blocks that respond to right-click (open a GUI) instead of being placed against. */
 export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE]);
+
+/** Blocks that carry side-table state (facing / lit) the mesher must read. */
+export const STATEFUL_BLOCKS = new Set<BlockId>([]);
+
+/** Blocks whose `facing` is set from the player's yaw when placed. */
+export const ORIENTABLE_BLOCKS = new Set<BlockId>([]);
+export function isOrientable(id: BlockId): boolean {
+  return ORIENTABLE_BLOCKS.has(id);
+}
 export function isInteractive(id: BlockId): boolean {
   return INTERACTIVE_BLOCKS.has(id);
 }

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BlockId, BlockMaterials } from './block';
 import { ChunkLightData } from './chunk-light-data';
 import { SUBCHUNK_HEIGHT, Subchunk } from './subchunk';
-import type { LightReader, WaterDistanceReader, WaterFlowReader } from './mesher';
+import type { LightReader, WaterDistanceReader, WaterFlowReader, BlockDataReader } from './mesher';
 import type { TerrainNoise } from './terrain-noise';
 
 export const CHUNK_SIZE = 16;
@@ -482,6 +482,10 @@ export class Chunk {
 
   setWaterFlowReader(readWaterFlow: WaterFlowReader) {
     for (const subchunk of this.subchunks) subchunk.setWaterFlowReader(readWaterFlow);
+  }
+
+  setBlockDataReader(readBlockData: BlockDataReader) {
+    for (const subchunk of this.subchunks) subchunk.setBlockDataReader(readBlockData);
   }
 
   setSmoothLighting(enabled: boolean) {

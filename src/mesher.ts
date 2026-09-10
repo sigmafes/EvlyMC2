@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { BlockId, blockLightProperties, isFlammable } from './block';
+import { BlockId, blockLightProperties, isFlammable, STATEFUL_BLOCKS } from './block';
+import type { BlockData } from './block-data';
 
 /** A block that fire can stand on top of (used to pick floor vs wall fire). */
 function isFireGround(id: BlockId): boolean {
@@ -47,6 +48,7 @@ export type BlockReader = (x: number, y: number, z: number) => BlockId;
 export type LightReader = (x: number, y: number, z: number) => number;
 export type WaterDistanceReader = (id: BlockId, x: number, y: number, z: number) => number;
 export type WaterFlowReader = (x: number, y: number, z: number) => THREE.Vector3;
+export type BlockDataReader = (x: number, y: number, z: number) => BlockData | undefined;
 export type SubchunkRenderStats = {
   exposedFaces: number;
   facesByMaterial: number[];
@@ -198,7 +200,7 @@ function addFireCeiling(
   }
 }
 
-function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number = 0) {
+function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number = 0, _data?: BlockData) {
   if (id === BlockId.BEDROCK) return MATERIAL_BEDROCK;
   if (id === BlockId.OAK_PLANKS) return MATERIAL_OAK_PLANKS;
   if (id === BlockId.STONE) return MATERIAL_STONE;
@@ -298,6 +300,7 @@ export function buildSubchunkGeometry(
   ambientOcclusion = false,
   readWaterDistance: WaterDistanceReader = () => 0,
   readWaterFlow: WaterFlowReader = () => new THREE.Vector3(),
+  readBlockData: BlockDataReader = () => undefined,
 ) {
   const vertices: number[][] = Array.from({ length: MATERIAL_COUNT }, () => []);
   const uvs: number[][] = Array.from({ length: MATERIAL_COUNT }, () => []);
@@ -344,6 +347,8 @@ export function buildSubchunkGeometry(
           continue;
         }
 
+        const blockData = STATEFUL_BLOCKS.has(id) ? readBlockData(worldX, y, worldZ) : undefined;
+
         for (let faceIndex = 0; faceIndex < faces.length; faceIndex += 1) {
           const face = faces[faceIndex];
           const neighbor = readBlock(worldX + face.normal[0], y + face.normal[1], worldZ + face.normal[2]);
@@ -376,7 +381,7 @@ export function buildSubchunkGeometry(
           }
 
           const liquidDistance = (isWater || isLava) ? readWaterDistance(id, worldX, y, worldZ) : 0;
-          const material = materialForFace(id, faceIndex, liquidDistance);
+          const material = materialForFace(id, faceIndex, liquidDistance, blockData);
           exposedFaces += 1;
           const positionData = vertices[material];
           const uvData = uvs[material];

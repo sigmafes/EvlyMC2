@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { BlockId, isInteractive } from './block';
+import { BlockId, isInteractive, isOrientable } from './block';
+import { facingTowardPlayer } from './block-data';
 import { isBlock, foodValue } from './item';
 import { getDrops } from './drops';
 import { Raycast } from './raycast';
@@ -347,6 +348,11 @@ export class BlockInteraction {
     if (placed) {
       this.onSwing?.();
       this.onPlace?.();
+      const at = hit.blockPosition.clone().add(hit.intersection.face.normal).round();
+      if (this.selectedBlock != null && isOrientable(this.selectedBlock)) {
+        // Orientable block (furnace): its front (off) face looks at the player.
+        this.world.setBlockData(at.x, at.y, at.z, { facing: facingTowardPlayer(this.player.state.yaw) });
+      }
       if (this.selectedBlock) {
         const sound = getBlockSound(this.selectedBlock, 'place') ?? getBlockSound(this.selectedBlock, 'dig');
         if (sound && this.soundManager) this.soundManager.playSound(sound);

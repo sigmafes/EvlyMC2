@@ -4,6 +4,7 @@ import { BlockCollider, CHUNK_HEIGHT, CHUNK_MAX_Y, CHUNK_SIZE, WATER_LEVEL } fro
 import { BlockStore } from './block-store';
 import { ChunkManager } from './chunk-manager';
 import { ChunkEditStore } from './chunk-edits';
+import { BlockDataStore, type BlockData } from './block-data';
 import { LeavesManager } from './leaves-manager';
 import { TerrainNoise } from './terrain-noise';
 import type { LightEngine } from './light-engine';
@@ -31,6 +32,7 @@ export class World {
   private readonly chunkManager: ChunkManager;
   private readonly leavesManager: LeavesManager;
   private readonly editStore: ChunkEditStore;
+  private readonly blockDataStore: BlockDataStore;
   private lightEngine?: LightEngine;
   private waterEngine?: WaterEngine;
   private lavaEngine?: LavaEngine;
@@ -54,6 +56,7 @@ export class World {
     this.blockStore = new BlockStore(this.chunkManager.chunks);
     this.leavesManager = new LeavesManager();
     this.editStore = new ChunkEditStore(seed);
+    this.blockDataStore = new BlockDataStore(seed);
     this.chunkManager.updateLoadedChunks(0, 0, (chunk, x, z) => {
       chunk.dispose();
       this.markAdjacentChunksDirty(x, z);
@@ -63,11 +66,25 @@ export class World {
   /** Write any pending block edits to disk now (e.g. before leaving the world). */
   async flushEdits() {
     await this.editStore.flush();
+    await this.blockDataStore.flush();
   }
 
   /** Load persisted player edits for this seed. Await before the game loop starts. */
   async loadPersistedEdits() {
     await this.editStore.load();
+    await this.blockDataStore.load();
+  }
+
+  // --- Per-block state (facing / lit), for orientable & machine blocks --------
+
+  getBlockData(x: number, y: number, z: number): BlockData | undefined {
+    return this.blockDataStore.get(x, y, z);
+  }
+
+  /** Merge `patch` into a block's side-table state and remesh its subchunk. */
+  setBlockData(x: number, y: number, z: number, patch: BlockData) {
+    this.blockDataStore.set(x, y, z, patch);
+    this.markBlockDirty(x, y, z);
   }
 
   /**
@@ -148,7 +165,10 @@ export class World {
 
   attachLightEngine(lightEngine: LightEngine) {
     this.lightEngine = lightEngine;
-    for (const chunk of this.chunks.values()) chunk.setLightReader(lightEngine.getRawBrightness.bind(lightEngine));
+    for (const chunk of this.chunks.values()) {
+      chunk.setLightReader(lightEngine.getRawBrightness.bind(lightEngine));
+      chunk.setBlockDataReader(this.getBlockData.bind(this));
+    }
     this.lightEngine.rebuildLoadedChunks();
     this.rebuildMeshes();
   }
@@ -291,6 +311,7 @@ export class World {
       if (oldBlock === BlockId.OAK_LOG) {
         this.leavesManager.onLogRemoved(x, y, z, (bx, by, bz) => this.getBlock(bx, by, bz));
       }
+      this.blockDataStore.delete(x, y, z); // drop any facing / lit state
       this.editStore.record(x, y, z, BlockId.AIR);
     }
     if (changed) this.markBlockDirty(x, y, z);
@@ -433,6 +454,7 @@ export class World {
       (x, y, z) => this.getBlock(x, y, z),
       (chunk, x, z) => {
         if (this.lightEngine) chunk.setLightReader(this.lightEngine.getRawBrightness.bind(this.lightEngine));
+        chunk.setBlockDataReader(this.getBlockData.bind(this));
         chunk.setWaterDistanceReader(this.getLiquidDistance.bind(this));
         chunk.setWaterFlowReader(this.getWaterFlow.bind(this));
         chunk.setSmoothLighting(this.smoothLighting);
