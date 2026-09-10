@@ -12,7 +12,7 @@ export type ModelAdjustments = {
 };
 
 // --- Shared skin atlas (textures/player.png, a 64x64 Minecraft skin) ---
-const ATLAS_PATH = '/textures/player.png';
+const ATLAS_PATH = new URL('../textures/player.png', import.meta.url).href;
 const ATLAS_W = 64;
 const ATLAS_H = 64;
 
@@ -306,7 +306,7 @@ export class PlayerModel {
   private async loadTexture() {
     const textureLoader = new THREE.TextureLoader();
     try {
-      const texture = await textureLoader.loadAsync('/textures/player.png');
+      const texture = await textureLoader.loadAsync(ATLAS_PATH);
       texture.magFilter = THREE.NearestFilter;
       texture.minFilter = THREE.NearestFilter;
       texture.colorSpace = THREE.SRGBColorSpace;

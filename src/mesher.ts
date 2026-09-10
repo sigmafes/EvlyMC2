@@ -403,7 +403,7 @@ export function buildSubchunkGeometry(
               ? getSmoothVertexLight(readLight, worldX, y, worldZ, face, corner)
               : readLight(worldX + faceLight[0], faceLight[1], worldZ + faceLight[2]);
             const brightness = getFaceBrightness(level, faceIndex)
-              * (ambientOcclusion && !isLiquid ? getAmbientOcclusion(readBlock, worldX, y, worldZ, face, corner) : 1);
+              * (ambientOcclusion && !isWater && !isLava ? getAmbientOcclusion(readBlock, worldX, y, worldZ, face, corner) : 1);
             colors[material].push(brightness, brightness, brightness);
           }
           let faceUVs = [0, 0, 0, 1, 1, 1, 1, 0];
