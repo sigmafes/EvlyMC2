@@ -1,0 +1,1298 @@
+@font-face {
+  font-family: 'Tricraft';
+  src: url('../gui/tricraft.otf') format('opentype');
+  font-display: swap;
+}
+
+* {
+  font-family: 'Tricraft', sans-serif;
+}
+
+body {
+  margin: 0;
+  font-family: 'Tricraft', sans-serif;
+}
+
+#inventory {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  transform: translateX(-50%);
+  filter: drop-shadow(3px 3px 0 rgba(0, 0, 0, .55));
+}
+
+.inventory-slot {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border: 0;
+  background: url('../gui/slot.png') center / 100% 100% no-repeat;
+  cursor: pointer;
+}
+
+.inventory-slot.selected::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  background: url('../gui/hotbar_high.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+.slot-number {
+  display: none;
+}
+
+.inventory-block {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 44px;
+  height: 44px;
+  pointer-events: none;
+}
+
+.slot-count {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 15px;
+  line-height: 1;
+  color: #ffffff;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+}
+
+#backpack {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, .55);
+  /* Whole-inventory zoom. Survival stays centred (sole flex child); the creative
+     panel is taken out of flow and parked just to its right. */
+  --inv-scale: 1.18;
+}
+
+#backpack[hidden] {
+  display: none;
+}
+
+/* Panels: the artwork already draws every slot well, so the slot elements
+   sit transparently on top of it, positioned to line up with the wells.
+   Scale factor is 2 (1 texture px = 2 CSS px); the 256x256 source is shown
+   at 512x512 so its top-left content block lands at the panel's origin. */
+#backpack-panel,
+#creative-panel {
+  position: relative;
+  image-rendering: pixelated;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: 512px 512px;
+  filter: drop-shadow(4px 4px 0 rgba(0, 0, 0, .5));
+}
+
+#backpack-panel {
+  width: 352px;
+  height: 332px;
+  background-image: url('../gui/inventory.png');
+  transform: scale(var(--inv-scale));
+  transform-origin: center;
+}
+
+#creative-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 390px;
+  height: 272px;
+  background-image: url('../gui/inventory_creative.png');
+  /* centre sits 456px right of the viewport centre: half the scaled survival
+     panel (~208) + half the scaled creative panel (~230) + an ~18px gap. */
+  transform: translate(calc(-50% + 456px), -50%) scale(var(--inv-scale));
+  transform-origin: center;
+}
+
+#backpack-grid,
+#backpack-hotbar,
+#creative-grid {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(9, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px; /* 32 + 4 = 18px texture pitch x2 */
+}
+
+/* Player "paper doll" in the survival panel's dark preview box, looks at the cursor. */
+#backpack-doll {
+  position: absolute;
+  left: 52px;
+  top: 16px;
+  width: 98px;
+  height: 140px;
+  display: block;
+  pointer-events: none;
+}
+
+#backpack-grid { left: 16px; top: 168px; }
+#backpack-hotbar { left: 16px; top: 284px; }
+
+/* 2x2 crafting grid + result on the survival panel (inventory.png coords x2). */
+#backpack-craft {
+  position: absolute;
+  left: 196px;
+  top: 36px;
+  display: grid;
+  grid-template-columns: repeat(2, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#backpack-panel .craft-result {
+  position: absolute;
+  left: 296px;
+  top: 52px;
+}
+
+/* ===== 3x3 crafting table GUI (Crafting_table_gui.png) ===== */
+#crafting-table {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+#crafting-table[hidden] { display: none; }
+#crafting-table-panel {
+  position: relative;
+  width: 352px;
+  height: 332px;
+  background: url('../gui/Crafting_table_gui.png') 0 0 / 512px 512px no-repeat;
+  image-rendering: pixelated;
+  transform: scale(1.18);
+  filter: drop-shadow(4px 4px 0 rgba(0, 0, 0, .5));
+}
+#ct-craft {
+  position: absolute;
+  left: 58px;   /* texture (29,17) x2 */
+  top: 34px;
+  display: grid;
+  grid-template-columns: repeat(3, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#crafting-table-panel .ct-result {
+  position: absolute;
+  left: 242px;  /* centred on the wide result well (~x117..141, y30..53) x2 */
+  top: 67px;
+}
+#ct-backpack,
+#ct-hotbar {
+  position: absolute;
+  left: 16px;
+  display: grid;
+  grid-template-columns: repeat(9, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#ct-backpack { top: 168px; }
+#ct-hotbar { top: 284px; }
+#crafting-table .inventory-slot {
+  width: 32px;
+  height: 32px;
+  background: none;
+}
+#crafting-table .inventory-block {
+  top: 1px;
+  left: 1px;
+  width: 30px;
+  height: 30px;
+}
+#creative-grid {
+  left: 18px;
+  top: 36px;
+  width: 324px;
+  height: 216px; /* 6 rows visible */
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+#creative-grid::-webkit-scrollbar { display: none; }
+
+/* Decorative scrollbar matching the creative artwork's groove. */
+#creative-scrollbar {
+  position: absolute;
+  left: 352px;
+  top: 36px;
+  width: 24px;
+  height: 176px;
+}
+#creative-scroller {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 24px;
+  height: 30px;
+  background: url('../gui/Scroller.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+}
+
+#backpack .inventory-slot,
+#creative-panel .inventory-slot {
+  width: 32px;
+  height: 32px;
+  background: none;
+}
+
+#backpack .inventory-block,
+#creative-panel .inventory-block {
+  top: 1px;
+  left: 1px;
+  width: 30px;
+  height: 30px;
+}
+
+#backpack .inventory-slot.selected::after,
+#creative-panel .inventory-slot.selected::after {
+  inset: -2px;
+}
+
+.inventory-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 10;
+  filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, .6));
+  opacity: 0.9;
+}
+
+#game-shell,
+#game-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#game-shell {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#underwater-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: rgba(18, 90, 205, 0.38);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+#underwater-overlay.active {
+  opacity: 1;
+}
+
+#pause-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: clamp(48px, 12vh, 128px);
+  background-image: url('../gui/bg.png');
+  background-repeat: repeat;
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+}
+
+#pause-menu[hidden],
+#pause-menu [hidden] {
+  display: none !important;
+}
+
+.pause-view {
+  display: flex;
+  width: min(360px, calc(100vw - 32px));
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.pause-view h1 {
+  margin: 0 0 18px;
+  color: #ffffff;
+  font-size: clamp(28px, 5vw, 46px);
+  font-weight: 700;
+  text-align: center;
+  text-shadow: 3px 3px 0 #202020;
+}
+
+.texture-button {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  border: 2px solid #181818;
+  color: #ffffff;
+  background-color: #171717;
+  background-image: url('../gui/button.png');
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  background-position: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18), 3px 3px 0 rgba(0, 0, 0, .45);
+  font: 700 16px/1.2 'Tricraft', sans-serif;
+  text-shadow: 2px 2px 0 #202020;
+  cursor: pointer;
+}
+
+.slider-row {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  color: #ffffff;
+  background: url('../gui/slider.png') center / 100% 100% no-repeat;
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, .45);
+  font: 700 16px/1.2 'Tricraft', sans-serif;
+  text-shadow: 2px 2px 0 #202020;
+  cursor: pointer;
+}
+
+.texture-button:hover {
+  background-image: url('../gui/button_high.png');
+  color: #ffff00;
+  text-shadow: 2px 2px 0 #202020;
+}
+
+.toggle-label {
+  position: relative;
+  z-index: 1;
+}
+
+/* Option toggle rendered as a plain text button ("Smooth Lighting: ON"). */
+.option-toggle {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  padding: 0 12px;
+  color: #ffffff;
+  background: url('../gui/button.png') center / 100% 100% no-repeat;
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, .45);
+  font: 700 16px/1.2 'Tricraft', sans-serif;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, .55);
+  cursor: pointer;
+}
+.option-toggle:hover { background-image: url('../gui/button_high.png'); color: #ffff00; }
+.option-toggle:hover .toggle-label { color: #ffff00; }
+.option-toggle:active { filter: brightness(0.9); }
+.option-toggle .toggle-label { color: #ffffff; }
+
+.slider-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  overflow: hidden;
+}
+
+.slider-row span {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  color: inherit;
+  text-align: center;
+  pointer-events: none;
+}
+
+.slider-row input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 1;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.slider-row input::-webkit-slider-runnable-track {
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.slider-row input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 40px;
+  margin-top: 0;
+  border: 0;
+  border-radius: 0;
+  background: url('../gui/slider_handle.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+}
+.slider-row input:hover::-webkit-slider-thumb,
+.slider-row input:active::-webkit-slider-thumb {
+  background-image: url('../gui/slider_handle_high.png');
+}
+
+.slider-row input::-moz-range-track {
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+.slider-row input::-moz-range-thumb {
+  width: 14px;
+  height: 40px;
+  border: 0;
+  border-radius: 0;
+  background: url('../gui/slider_handle.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+}
+.slider-row input:hover::-moz-range-thumb,
+.slider-row input:active::-moz-range-thumb {
+  background-image: url('../gui/slider_handle_high.png');
+}
+
+#diagnostics-panel {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 3;
+  width: 248px;
+  padding: 14px 16px 16px;
+  color: #dce7e5;
+  background: rgba(10, 17, 19, 0.92);
+  border: 1px solid rgba(180, 218, 207, 0.35);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+  font: 11px/1.35 'Tricraft', sans-serif;
+  cursor: copy;
+  pointer-events: auto;
+  user-select: none;
+}
+
+#diagnostics-panel header {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  color: #d6e56e;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid rgba(180, 218, 207, 0.2);
+}
+
+#diagnostics-panel kbd {
+  color: #dce7e5;
+  font: inherit;
+  opacity: 0.7;
+}
+
+#diagnostics-panel dl {
+  margin: 0;
+}
+
+#diagnostics-panel dl > div:not(.metric-section) {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 5px;
+}
+
+#diagnostics-panel dt {
+  color: rgba(220, 231, 229, 0.64);
+}
+
+#diagnostics-panel dd {
+  margin: 0;
+  color: #ffffff;
+  text-align: right;
+}
+
+#block-inspector {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  z-index: 3;
+  width: 218px;
+  padding: 14px 16px 16px;
+  color: #dce7e5;
+  background: rgba(10, 17, 19, 0.92);
+  border: 1px solid rgba(218, 168, 255, 0.45);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+  font: 11px/1.35 'Tricraft', sans-serif;
+  cursor: copy;
+  user-select: none;
+}
+
+#block-inspector header {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  color: #daa8ff;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid rgba(218, 168, 255, 0.2);
+}
+
+#block-inspector kbd {
+  color: #dce7e5;
+  font: inherit;
+  opacity: 0.7;
+}
+
+#block-inspector dl {
+  margin: 0;
+}
+
+#block-inspector dl > div:not(.metric-section) {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 5px;
+}
+
+#block-inspector dt {
+  color: rgba(220, 231, 229, 0.64);
+}
+
+#block-inspector dd {
+  margin: 0;
+  color: #ffffff;
+  text-align: right;
+}
+
+#block-inspector .metric-section {
+  margin: 13px 0 2px;
+  color: #daa8ff;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+#diagnostics-panel .metric-section {
+  margin: 13px 0 2px;
+  color: #d6e56e;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+#crosshair {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 2;
+}
+
+#crosshair::before,
+#crosshair::after {
+  content: '';
+  position: absolute;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+}
+
+#crosshair::before {
+  left: 7px;
+  top: 0;
+  width: 2px;
+  height: 16px;
+}
+
+#crosshair::after {
+  left: 0;
+  top: 7px;
+  width: 16px;
+  height: 2px;
+}
+
+#render-console {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 4;
+  width: min(720px, calc(100vw - 36px));
+  height: min(420px, calc(100vh - 36px));
+  padding: 14px 16px;
+  color: #dce7e5;
+  background: rgba(7, 12, 14, 0.95);
+  border: 1px solid rgba(180, 218, 207, 0.35);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  font: 11px/1.45 'Tricraft', sans-serif;
+  pointer-events: auto;
+  user-select: none;
+}
+
+#render-console header {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 9px;
+  color: #d6e56e;
+  letter-spacing: .08em;
+  border-bottom: 1px solid rgba(180, 218, 207, .2);
+}
+
+#render-console kbd { color: #fff; font: inherit; opacity: .7; }
+#render-console-output { height: calc(100% - 28px); margin: 10px 0 0; overflow: auto; white-space: pre-wrap; }
+
+#model-adjustments-panel {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 3;
+  width: 280px;
+  max-height: calc(100vh - 36px);
+  padding: 14px 16px 16px;
+  color: #dce7e5;
+  background: rgba(10, 17, 19, 0.92);
+  border: 1px solid rgba(255, 182, 193, 0.45);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+  font: 11px/1.35 'Tricraft', sans-serif;
+  pointer-events: auto;
+  overflow-y: auto;
+  user-select: none;
+}
+
+#model-adjustments-panel[hidden] {
+  display: none !important;
+}
+
+#model-adjustments-panel header {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  color: #ffb6c1;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid rgba(255, 182, 193, 0.2);
+}
+
+#model-adjustments-panel kbd {
+  color: #dce7e5;
+  font: inherit;
+  opacity: 0.7;
+}
+
+#model-adjustments-panel > div {
+  padding: 0;
+}
+
+#model-adjustments-panel > div > div {
+  font-weight: bold;
+  margin-top: 0.75em;
+  margin-bottom: 0.4em;
+  color: #ffb6c1;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+#model-adjustments-panel label {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #454545;
+  color: #dce7e5;
+  background: rgba(9, 9, 9, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1);
+  font: 11px/1.35 'Tricraft', sans-serif;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  margin-bottom: 4px;
+  position: relative;
+}
+
+#model-adjustments-panel label span {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  color: inherit;
+  text-align: center;
+  pointer-events: none;
+  font-size: 10px;
+}
+
+#model-adjustments-panel input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 1;
+  appearance: none;
+  cursor: pointer;
+}
+
+#model-adjustments-panel input::-webkit-slider-runnable-track {
+  height: 100%;
+  border: 1px solid #454545;
+  background: rgba(9, 9, 9, 0.6);
+}
+
+#model-adjustments-panel input::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid #454545;
+  background: #61788c;
+  appearance: none;
+}
+
+#model-adjustments-panel input::-moz-range-track {
+  height: 100%;
+  border: 1px solid #454545;
+  background: rgba(9, 9, 9, 0.6);
+}
+
+#model-adjustments-panel input::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid #454545;
+  background: #61788c;
+}
+/* --- Chat --- */
+#chat {
+  position: absolute;
+  left: 12px;
+  bottom: 64px;
+  width: min(52ch, 60vw);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 30;
+  font-family: 'Tricraft', monospace;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+#chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow: hidden;
+}
+
+#chat-log .chat-line {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 6px;
+  color: #fff;
+  background: rgba(0, 0, 0, .5);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, .6);
+  word-wrap: break-word;
+}
+
+#chat-log .chat-line.chat-system { color: #ffd94a; }
+#chat-log .chat-line.chat-error { color: #ff6b5e; }
+
+#chat:not(.chat-open) #chat-log .chat-line.chat-old { opacity: 0; transition: opacity .4s; }
+
+#chat-input {
+  padding: 3px 6px;
+  color: #fff;
+  background: rgba(0, 0, 0, .62);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, .6);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+#chat-caret { animation: chat-blink 1s steps(1) infinite; }
+@keyframes chat-blink { 50% { opacity: 0; } }
+
+/* ===== Main menu ===== */
+#main-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 7vh;
+  overflow: hidden;
+  font-family: 'Tricraft', sans-serif;
+  background: #0b0b12;
+}
+#main-menu[hidden] { display: none; }
+
+#panorama-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+}
+
+#panorama-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.42));
+  pointer-events: none;
+}
+
+#main-menu-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.logo-wrap {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 8vh;
+}
+#menu-logo {
+  display: block;
+  width: min(520px, 72vw);
+  height: auto;
+  image-rendering: pixelated;
+  filter: drop-shadow(4px 4px 0 rgba(0, 0, 0, 0.5));
+}
+#menu-splash {
+  position: absolute;
+  right: -7%;
+  bottom: -6%;
+  color: #ffff00;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 20px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 2px 2px 0 rgba(50, 50, 0, 0.9);
+  transform-origin: center;
+  animation: splash-bounce 0.55s ease-in-out infinite;
+}
+@keyframes splash-bounce {
+  0%, 100% { transform: rotate(-20deg) scale(1); }
+  50%      { transform: rotate(-20deg) scale(0.86); }
+}
+#menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Button texture from gui/button.png (9-slice) */
+.mc-button {
+  width: min(400px, 82vw);
+  height: 44px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  border-image: url('../gui/button.png') 3 fill / 3px / 0 repeat;
+  image-rendering: pixelated;
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 20px;
+  letter-spacing: 0.5px;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+.mc-button > span {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+.mc-button:hover:not(:disabled) {
+  border-image-source: url('../gui/button_high.png');
+  color: #ffff00;
+  filter: none;
+}
+.mc-button:active:not(:disabled) { filter: brightness(0.9); }
+
+/* ===== Standalone options (from main menu) ===== */
+#menu-options {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 6vh 0;
+  overflow-y: auto;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)),
+    url('../gui/bg.png');
+  background-repeat: repeat;
+  background-size: auto, 64px 64px;
+  image-rendering: pixelated;
+  color: #fff;
+  font-family: 'Tricraft', sans-serif;
+}
+#menu-options[hidden] { display: none; }
+#menu-options h1 { margin: 0 0 8px; }
+#menu-options-body {
+  width: min(430px, 88vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ===== Intro (centered Mojang video, running mouse, fade to menu) ===== */
+#intro {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: transparent;
+}
+#intro[hidden] { display: none; }
+#intro-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: #f0323d; /* solid "render" behind the video, fades out over 1s */
+}
+#intro-video {
+  position: relative;
+  z-index: 1;
+  max-width: 80vw;
+  max-height: 80vh;
+}
+#intro-mouse {
+  position: absolute;
+  left: 0;
+  bottom: 34px; /* clear of the Windows taskbar */
+  height: 120px;
+  z-index: 5; /* above the video */
+  pointer-events: none;
+  transform: translate(-160%, 22%);
+}
+#intro-mouse.run {
+  animation: mouse-run 3s linear forwards;
+}
+@keyframes mouse-run {
+  from { transform: translate(-160%, 22%); }
+  to   { transform: translate(calc(100vw + 60%), 22%); }
+}
+
+/* ===== Main menu footer credits ===== */
+#menu-footer-left,
+#menu-footer-right {
+  position: absolute;
+  bottom: 8px;
+  z-index: 2;
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 14px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+#menu-footer-left { left: 10px; }
+#menu-footer-right { right: 10px; }
+
+/* ===== Select World / Create World screens ===== */
+#world-select,
+#world-create {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: url('../gui/bg.png') repeat;
+  background-size: 64px 64px;
+  image-rendering: pixelated;
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+}
+#world-select[hidden],
+#world-create[hidden] { display: none; }
+#world-select h1 {
+  margin: 18px 0 12px;
+  font-size: 22px;
+  font-weight: normal;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+}
+#world-search {
+  width: min(900px, 92vw);
+  height: 34px;
+  margin-bottom: 10px;
+  padding: 0 8px;
+  background: #000000;
+  border: 2px solid #6f6f6f;
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 16px;
+  outline: none;
+}
+#world-search:focus { border-color: #ffffff; }
+#world-list {
+  width: 100%;
+  flex: 1;
+  overflow-y: auto;
+  border-top: 2px solid rgba(0, 0, 0, 0.85);
+  border-bottom: 2px solid rgba(0, 0, 0, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+}
+.world-list-empty {
+  margin: 24px 0;
+  color: #9c9c9c;
+  font-size: 15px;
+}
+.world-row {
+  width: min(900px, 92vw);
+  display: flex;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.world-row:hover { border-color: #6f6f6f; }
+.world-row.selected { border-color: #ffffff; background: rgba(255, 255, 255, 0.08); }
+.world-thumb {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  background: #000000;
+}
+.world-row-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+.world-row-title {
+  font-size: 18px;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.world-row-sub {
+  font-size: 13px;
+  color: #9c9c9c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#world-select-actions {
+  width: min(900px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 0 20px;
+}
+.ws-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.ws-row .mc-button {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.ws-row--primary .mc-button { max-width: 380px; }
+.ws-row--secondary .mc-button { max-width: 210px; }
+.ws-row .mc-button:disabled {
+  filter: grayscale(1) brightness(0.6);
+  cursor: default;
+  color: #a0a0a0;
+}
+.ws-row .mc-button:disabled:hover { filter: grayscale(1) brightness(0.6); }
+
+/* ===== Create World screen ===== */
+#world-create { justify-content: flex-start; }
+#world-create-tabs {
+  width: min(760px, 94vw);
+  display: flex;
+  margin-top: 18px;
+}
+.wc-tab {
+  flex: 1;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  color: #9c9c9c;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 17px;
+  cursor: default;
+}
+.wc-tab.active { color: #ffffff; border-bottom-color: #ffffff; }
+#world-create-body {
+  width: min(520px, 92vw);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding-top: 22px;
+  overflow-y: auto;
+}
+#wc-name-label {
+  align-self: center;
+  color: #cfcfcf;
+  font-size: 15px;
+}
+#wc-name {
+  height: 34px;
+  padding: 0 8px;
+  background: #000000;
+  border: 2px solid #a0a0a0;
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 16px;
+  outline: none;
+}
+#wc-name:focus { border-color: #ffffff; }
+#world-create-body .mc-button { width: 100%; margin-top: 2px; }
+#world-create-body .mc-button:disabled {
+  filter: grayscale(1) brightness(0.62);
+  cursor: default;
+  color: #a6a6a6;
+}
+#world-create-body .mc-button:disabled:hover { filter: grayscale(1) brightness(0.62); }
+#world-create-actions {
+  width: min(760px, 94vw);
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  padding: 16px 0 24px;
+}
+#world-create-actions .mc-button { flex: 1; width: auto; max-width: 340px; }
+
+/* ===== In-game HUD: hearts + XP bar (above the hotbar) ===== */
+#hud {
+  position: fixed;
+  left: 50%;
+  bottom: 72px; /* XP bar sits right on top of the hotbar (52px tall @ bottom:18px) */
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start; /* rows line up with the left edge of the XP bar / hotbar */
+  gap: 3px;
+  image-rendering: pixelated;
+  pointer-events: none;
+  filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, .55));
+}
+#hud-bubbles {
+  display: flex;
+  gap: 2px;
+}
+#hud-bubbles[hidden] { display: none; }
+.hud-bubble {
+  width: 20px;
+  height: 20px;
+  background: center / 100% 100% no-repeat;
+}
+#hud-hearts {
+  display: flex;
+  gap: 2px;
+}
+.hud-heart {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  background: url('../gui/heart_empty.png') center / 100% 100% no-repeat;
+}
+.hud-heart::after {
+  content: '';
+  position: absolute;
+  inset: 2px; /* full/half heart drawn a touch smaller so the empty outline shows */
+  background: var(--heart-fill, none) center / 100% 100% no-repeat;
+}
+#hud-xp {
+  position: relative;
+  width: 468px; /* same as the hotbar: 9 slots x 52px */
+  height: 9px;
+  background: url('../gui/xp_empty.png') center / 100% 100% no-repeat;
+  overflow: hidden;
+}
+#hud-xp-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0%;
+  background: url('../gui/xp.png') left center / 468px 100% no-repeat;
+}
+
+/* ===== Hover tooltip (block names in the inventory) ===== */
+#ui-tooltip {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  padding: 8px 10px;
+  border: 0;
+  border-image: url('../gui/tooltip_bg.png') 8 fill / 8px / 0 repeat;
+  image-rendering: pixelated;
+  font: 16px/1 'Tricraft', sans-serif;
+  color: #ffffff;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, .7);
+  white-space: nowrap;
+}
+#ui-tooltip[hidden] { display: none; }
+.ui-tooltip-frame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 0;
+  border-image: url('../gui/tooltip_frame.png') 10 / 10px / 0 repeat;
+}
+.ui-tooltip-label { position: relative; }
+
+/* ===== Death screen ===== */
+#death-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(130, 0, 0, 0.78); /* opaque red wash over the frozen scene */
+  font-family: 'Tricraft', sans-serif;
+}
+#death-screen[hidden] { display: none; }
+#death-screen h1 {
+  margin: 0 0 26px;
+  color: #ffffff;
+  font-size: clamp(36px, 7vw, 64px);
+  font-weight: normal;
+  text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.5);
+}
+#death-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: min(420px, 82vw);
+}
+#death-panel .mc-button { width: 100%; }

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bedrock World</title>
+  </head>
+  <body style="background:#000000">
+    <section id="intro" hidden>
+      <div id="intro-bg"></div>
+      <video id="intro-video" playsinline></video>
+      <img id="intro-mouse" alt="" />
+    </section>
+    <section id="main-menu" hidden>
+      <canvas id="panorama-canvas"></canvas>
+      <div id="panorama-veil"></div>
+      <div id="menu-footer-left">EvlyMC Beta 0.1.0</div>
+      <div id="menu-footer-right">by sigmafes. Minecraft &reg;/TM, Mojang Studios's fangame!</div>
+      <div id="main-menu-content">
+        <div class="logo-wrap">
+          <img id="menu-logo" alt="EvlyMC" />
+          <span id="menu-splash"></span>
+        </div>
+        <div id="menu-buttons">
+          <button class="mc-button" data-action="singleplayer" type="button"><span>Singleplayer</span></button>
+          <button class="mc-button" data-action="options" type="button"><span>Options</span></button>
+        </div>
+      </div>
+    </section>
+    <section id="menu-options" hidden>
+      <h1>Options</h1>
+      <div id="menu-options-body">
+        <label class="slider-row" for="menu-fov"><span>FOV: <output id="menu-fov-value">70</output></span><input id="menu-fov" type="range" min="50" max="110" value="70" /></label>
+        <label class="slider-row" for="menu-sensitivity"><span>Mouse Sensitivity: <output id="menu-sensitivity-value">100</output></span><input id="menu-sensitivity" type="range" min="1" max="100" value="100" /></label>
+        <label class="slider-row" for="menu-render-distance"><span>Render Distance: <output id="menu-render-distance-value">5</output></span><input id="menu-render-distance" type="range" min="2" max="8" step="1" value="5" /></label>
+        <button id="menu-smooth-lighting" class="option-toggle" type="button" data-label="Smooth Lighting"><span class="toggle-label">Smooth Lighting: ON</span></button>
+        <button id="menu-fog" class="option-toggle" type="button" data-label="Fog"><span class="toggle-label">Fog: ON</span></button>
+        <button id="menu-alex-skin" class="option-toggle" type="button" data-label="Skin Type" data-on="Slim" data-off="Classic"><span class="toggle-label">Skin Type: Classic</span></button>
+        <button id="menu-view-bob" class="option-toggle" type="button" data-label="View Bobbing"><span class="toggle-label">View Bobbing: ON</span></button>
+      </div>
+      <button class="mc-button" data-action="options-back" type="button"><span>Done</span></button>
+    </section>
+    <section id="world-select" hidden>
+      <h1>Select World</h1>
+      <input id="world-search" type="text" autocomplete="off" spellcheck="false" aria-label="Search worlds" />
+      <div id="world-list" role="listbox" aria-label="Worlds"></div>
+      <div id="world-select-actions">
+        <div class="ws-row ws-row--primary">
+          <button class="mc-button" data-action="play" type="button"><span>Play Selected World</span></button>
+          <button class="mc-button" data-action="create" type="button"><span>Create New World</span></button>
+        </div>
+        <div class="ws-row ws-row--secondary">
+          <button class="mc-button" data-action="edit" type="button"><span>Edit</span></button>
+          <button class="mc-button" data-action="delete" type="button"><span>Delete</span></button>
+          <button class="mc-button" data-action="recreate" type="button"><span>Re-Create</span></button>
+          <button class="mc-button" data-action="cancel" type="button"><span>Cancel</span></button>
+        </div>
+      </div>
+    </section>
+    <section id="world-create" hidden>
+      <div id="world-create-tabs">
+        <button class="wc-tab active" data-tab="game" type="button" disabled>Game</button>
+        <button class="wc-tab" data-tab="world" type="button" disabled>World</button>
+        <button class="wc-tab" data-tab="more" type="button" disabled>More</button>
+      </div>
+      <div id="world-create-body">
+        <label id="wc-name-label" for="wc-name">World Name</label>
+        <input id="wc-name" type="text" autocomplete="off" spellcheck="false" value="New World" />
+        <button class="mc-button" id="wc-gamemode" type="button" disabled><span>Game Mode: Survival</span></button>
+        <button class="mc-button" id="wc-difficulty" type="button" disabled><span>Difficulty: Normal</span></button>
+        <button class="mc-button" id="wc-cheats" type="button"><span>Allow Cheats: OFF</span></button>
+      </div>
+      <div id="world-create-actions">
+        <button class="mc-button" data-action="wc-create" type="button"><span>Create New World</span></button>
+        <button class="mc-button" data-action="wc-cancel" type="button"><span>Cancel</span></button>
+      </div>
+    </section>
+    <section id="death-screen" hidden>
+      <h1>Game Over</h1>
+      <div id="death-panel">
+        <button id="death-respawn" class="mc-button" type="button"><span>Respawn</span></button>
+        <button id="death-title" class="mc-button" type="button"><span>Title screen</span></button>
+      </div>
+    </section>
+    <main id="game-shell">
+      <div id="underwater-overlay" aria-hidden="true"></div>
+      <div id="crosshair" aria-hidden="true"></div>
+      <div id="chat" aria-live="polite">
+        <div id="chat-log"></div>
+        <div id="chat-input" hidden><span id="chat-input-text"></span><span id="chat-caret">_</span></div>
+      </div>
+      <div id="hud" aria-hidden="true">
+        <div id="hud-bubbles" hidden></div>
+        <div id="hud-hearts"></div>
+        <div id="hud-xp"><div id="hud-xp-fill"></div></div>
+      </div>
+      <nav id="inventory" aria-label="Player inventory hotbar"></nav>
+      <section id="backpack" hidden aria-label="Inventario">
+        <div id="backpack-panel">
+          <canvas id="backpack-doll" aria-hidden="true"></canvas>
+          <div id="backpack-craft" aria-label="Crafting 2x2">
+            <button class="inventory-slot craft-slot" type="button" data-craft="0"></button>
+            <button class="inventory-slot craft-slot" type="button" data-craft="1"></button>
+            <button class="inventory-slot craft-slot" type="button" data-craft="2"></button>
+            <button class="inventory-slot craft-slot" type="button" data-craft="3"></button>
+          </div>
+          <button class="inventory-slot craft-result" type="button" aria-label="Crafting result"></button>
+          <div id="backpack-grid" aria-label="Backpack slots"></div>
+          <div id="backpack-hotbar" aria-label="Hotbar slots"></div>
+        </div>
+      </section>
+      <section id="crafting-table" hidden aria-label="Crafting Table">
+        <div id="crafting-table-panel">
+          <div id="ct-craft"></div>
+          <button class="inventory-slot ct-result" type="button" aria-label="Crafting result"></button>
+          <div id="ct-backpack"></div>
+          <div id="ct-hotbar"></div>
+        </div>
+      </section>
+      <section id="pause-menu" hidden aria-label="Game Paused">
+        <div id="pause-view" class="pause-view">
+          <h1>Game Paused</h1>
+          <button id="back-to-game" class="texture-button" type="button">Back to Game</button>
+          <button id="open-options" class="texture-button" type="button">Options</button>
+          <button id="leave-world" class="texture-button" type="button">Leave World</button>
+        </div>
+        <div id="options-view" class="pause-view" hidden>
+          <h1>Options</h1>
+          <label class="slider-row" for="fov-slider">
+            <span>FOV: <output id="fov-value">70</output></span>
+            <input id="fov-slider" type="range" min="50" max="110" value="70" />
+          </label>
+          <label class="slider-row" for="sensitivity-slider">
+            <span>Mouse Sensitivity: <output id="sensitivity-value">100</output></span>
+            <input id="sensitivity-slider" type="range" min="1" max="100" value="100" />
+          </label>
+          <label class="slider-row" for="render-distance-slider">
+            <span>Render Distance: <output id="render-distance-value">5</output></span>
+            <input id="render-distance-slider" type="range" min="2" max="8" step="1" value="5" />
+          </label>
+          <button id="fog-toggle" class="option-toggle" type="button" data-label="Fog"><span class="toggle-label">Fog: OFF</span></button>
+          <button id="smooth-lighting-toggle" class="option-toggle" type="button" data-label="Smooth Lighting"><span class="toggle-label">Smooth Lighting: OFF</span></button>
+          <button id="alex-skin-toggle" class="option-toggle" type="button" data-label="Skin Type" data-on="Slim" data-off="Classic"><span class="toggle-label">Skin Type: Classic</span></button>
+          <button id="view-bob-toggle" class="option-toggle" type="button" data-label="View Bobbing"><span class="toggle-label">View Bobbing: ON</span></button>
+          <button id="options-back" class="texture-button" type="button">Back</button>
+        </div>
+      </section>
+      <aside id="diagnostics-panel" aria-label="Panel de diagnóstico de rendimiento" role="button" tabindex="0" hidden>
+        <header>
+          <span>RENDER DIAGNOSTICS</span>
+          <kbd id="diagnostics-copy-status">CLICK TO COPY</kbd>
+        </header>
+        <dl>
+          <div class="metric-section">RENDIMIENTO</div>
+          <div><dt>FPS</dt><dd id="metric-fps">--</dd></div>
+          <div><dt>Frame time</dt><dd id="metric-frame">--</dd></div>
+          <div><dt>Pixel ratio</dt><dd id="metric-pixel-ratio">--</dd></div>
+          <div class="metric-section">RENDER</div>
+          <div><dt>Draw calls</dt><dd id="metric-calls">--</dd></div>
+          <div><dt>Triángulos</dt><dd id="metric-triangles">--</dd></div>
+          <div><dt>Geometrías</dt><dd id="metric-geometries">--</dd></div>
+          <div><dt>Texturas</dt><dd id="metric-textures">--</dd></div>
+          <div><dt>Programas</dt><dd id="metric-programs">--</dd></div>
+          <div class="metric-section">MUNDO</div>
+          <div><dt>Hora del juego</dt><dd id="metric-game-time">--:--:--</dd></div>
+          <div><dt>Bloques totales</dt><dd id="metric-blocks">--</dd></div>
+          <div><dt>Subchunks visibles</dt><dd id="metric-visible-blocks">--</dd></div>
+          <div><dt>Posición</dt><dd id="metric-position">--</dd></div>
+          <div class="metric-section">ILUMINACIÓN</div>
+          <div><dt>Cola pendiente</dt><dd id="metric-light-queue">--</dd></div>
+          <div><dt>Procesados/frame</dt><dd id="metric-light-processed">--</dd></div>
+          <div><dt>Subchunks sucios</dt><dd id="metric-light-dirty">--</dd></div>
+          <div><dt>Sky darken</dt><dd id="metric-sky-darken">--</dd></div>
+          <div class="metric-section">MEMORIA JS</div>
+          <div><dt>Usada</dt><dd id="metric-memory-used">--</dd></div>
+          <div><dt>Disponible</dt><dd id="metric-memory-limit">--</dd></div>
+          <div><dt>Device memory</dt><dd id="metric-device-memory">--</dd></div>
+        </dl>
+      </aside>
+      <aside id="block-inspector" aria-label="Inspector de bloque" role="button" tabindex="0" hidden>
+        <header><span>BLOCK INSPECTOR</span><kbd id="block-copy-status">CLICK TO COPY</kbd></header>
+        <dl>
+          <div><dt>Tipo</dt><dd id="block-name">Ninguno</dd></div>
+          <div><dt>ID</dt><dd id="block-id">--</dd></div>
+          <div><dt>Posición</dt><dd id="block-position">--</dd></div>
+          <div class="metric-section">ILUMINACIÓN</div>
+          <div><dt>Sky light</dt><dd id="block-sky-light">--</dd></div>
+          <div><dt>Block light</dt><dd id="block-block-light">--</dd></div>
+          <div><dt>Brillo</dt><dd id="block-brightness">--</dd></div>
+          <div class="metric-section">PROPIEDADES</div>
+          <div><dt>Opacidad</dt><dd id="block-opacity">--</dd></div>
+          <div><dt>Emisión</dt><dd id="block-emission">--</dd></div>
+        </dl>
+      </aside>
+      <canvas id="game-canvas"></canvas>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

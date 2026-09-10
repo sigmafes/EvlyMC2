@@ -1,0 +1,43 @@
+/**
+ * Shared hover tooltip (Minecraft item-name style). One element, reused: call
+ * showTooltip on pointer move over a slot, hideTooltip on leave.
+ */
+let el: HTMLElement | null = null;
+let labelEl: HTMLElement | null = null;
+
+function ensure(): HTMLElement {
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'ui-tooltip';
+  el.hidden = true;
+  const frame = document.createElement('div');
+  frame.className = 'ui-tooltip-frame';
+  labelEl = document.createElement('span');
+  labelEl.className = 'ui-tooltip-label';
+  el.append(frame, labelEl);
+  document.body.appendChild(el);
+  return el;
+}
+
+export function showTooltip(text: string, x: number, y: number): void {
+  const tip = ensure();
+  if (labelEl!.textContent !== text) labelEl!.textContent = text;
+  tip.hidden = false;
+  moveTooltip(x, y);
+}
+
+export function moveTooltip(x: number, y: number): void {
+  if (!el || el.hidden) return;
+  const pad = 14;
+  const r = el.getBoundingClientRect();
+  let left = x + pad;
+  let top = y + pad;
+  if (left + r.width > window.innerWidth) left = x - r.width - pad;
+  if (top + r.height > window.innerHeight) top = y - r.height - pad;
+  el.style.left = `${Math.max(2, left)}px`;
+  el.style.top = `${Math.max(2, top)}px`;
+}
+
+export function hideTooltip(): void {
+  if (el) el.hidden = true;
+}

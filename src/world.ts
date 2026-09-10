@@ -1,0 +1,408 @@
+import * as THREE from 'three';
+import { BlockId, BlockMaterials } from './block';
+import { BlockCollider, CHUNK_HEIGHT, CHUNK_SIZE } from './chunk';
+import { BlockStore } from './block-store';
+import { ChunkManager } from './chunk-manager';
+import { ChunkEditStore } from './chunk-edits';
+import { LeavesManager } from './leaves-manager';
+import { TerrainNoise } from './terrain-noise';
+import type { LightEngine } from './light-engine';
+import type { LavaEngine, WaterEngine } from './water-engine';
+import type { FireEngine } from './fire-engine';
+import type { SoundManager } from './sound-manager';
+
+export type WorldBounds = {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+};
+
+export class World {
+  viewRadius = 5;
+  // Infinite world: kept only so PlayerPhysics' optional clamp stays a no-op.
+  readonly bounds: WorldBounds = { minX: -1e7, maxX: 1e7, minZ: -1e7, maxZ: 1e7 };
+
+  get chunks() {
+    return this.chunkManager.chunks;
+  }
+
+  private readonly blockStore: BlockStore;
+  private readonly chunkManager: ChunkManager;
+  private readonly leavesManager: LeavesManager;
+  private readonly editStore: ChunkEditStore;
+  private lightEngine?: LightEngine;
+  private waterEngine?: WaterEngine;
+  private lavaEngine?: LavaEngine;
+  private fireEngine?: FireEngine;
+  private lastDirtySubchunks = 0;
+  private pendingLightReason = 'idle';
+  private smoothLighting = true;
+  private ambientOcclusion = false;
+
+  constructor(
+    private readonly scene: THREE.Scene,
+    private readonly materials: BlockMaterials,
+    private readonly terrainNoise: TerrainNoise,
+    readonly seed: number,
+    private readonly soundManager?: SoundManager,
+  ) {
+    this.chunkManager = new ChunkManager({
+      viewRadius: this.viewRadius,
+      seed,
+    });
+    this.blockStore = new BlockStore(this.chunkManager.chunks);
+    this.leavesManager = new LeavesManager();
+    this.editStore = new ChunkEditStore(seed);
+    this.chunkManager.updateLoadedChunks(0, 0, (chunk, x, z) => {
+      chunk.dispose();
+      this.markAdjacentChunksDirty(x, z);
+    });
+  }
+
+  /** Write any pending block edits to disk now (e.g. before leaving the world). */
+  async flushEdits() {
+    await this.editStore.flush();
+  }
+
+  /** Load persisted player edits for this seed. Await before the game loop starts. */
+  async loadPersistedEdits() {
+    await this.editStore.load();
+  }
+
+  getSurfaceHeight(x: number, z: number) {
+    return Math.floor(this.terrainNoise.sample(x, z));
+  }
+
+  getBlock(x: number, y: number, z: number): BlockId {
+    return this.blockStore.getBlock(x, y, z, this.isInsideWorld(x, z));
+  }
+
+  getLight(channel: 'skyLight' | 'blockLight', x: number, y: number, z: number) {
+    return this.blockStore.getLight(channel, x, y, z, 0, CHUNK_HEIGHT);
+  }
+
+  setLight(channel: 'skyLight' | 'blockLight', x: number, y: number, z: number, level: number) {
+    const changed = this.blockStore.setLight(channel, x, y, z, level);
+    if (changed) {
+      this.markLightDirty(x, y, z);
+    }
+    return changed;
+  }
+
+  attachLightEngine(lightEngine: LightEngine) {
+    this.lightEngine = lightEngine;
+    for (const chunk of this.chunks.values()) chunk.setLightReader(lightEngine.getRawBrightness.bind(lightEngine));
+    this.lightEngine.rebuildLoadedChunks();
+    this.rebuildMeshes();
+  }
+
+  attachWaterEngine(waterEngine: WaterEngine) {
+    this.waterEngine = waterEngine;
+    for (const chunk of this.chunks.values()) {
+      chunk.setWaterDistanceReader(this.getLiquidDistance.bind(this));
+      chunk.setWaterFlowReader(this.getWaterFlow.bind(this));
+    }
+  }
+
+  getWaterDistance(x: number, y: number, z: number): number {
+    return this.waterEngine?.getWaterDistance(x, y, z) ?? 0;
+  }
+
+  getLiquidDistance(id: BlockId, x: number, y: number, z: number): number {
+    return id === BlockId.LAVA
+      ? this.lavaEngine?.getWaterDistance(x, y, z) ?? 0
+      : this.waterEngine?.getWaterDistance(x, y, z) ?? 0;
+  }
+
+  getWaterFlow(x: number, y: number, z: number): THREE.Vector3 {
+    return this.waterEngine?.getWaterFlow(x, y, z) ?? new THREE.Vector3();
+  }
+
+  attachFireEngine(fireEngine: FireEngine) {
+    this.fireEngine = fireEngine;
+  }
+
+  updateWater(delta: number) {
+    const waterChanged = this.waterEngine?.update(delta) ?? false;
+    const lavaChanged = this.lavaEngine?.update(delta) ?? false;
+    return waterChanged || lavaChanged;
+  }
+
+  updateFire(delta: number) {
+    return this.fireEngine?.update(delta, this.lavaEngine) ?? false;
+  }
+
+  setBlock(x: number, y: number, z: number, id: BlockId) {
+    if (!this.isInsideWorld(x, z)) return false;
+    const oldSkyLight = this.getLight('skyLight', x, y, z);
+    const oldBlockLight = this.getLight('blockLight', x, y, z);
+    const changed = this.blockStore.setBlockRaw(x, y, z, id);
+    if (changed) {
+      this.pendingLightReason = 'water-flow';
+      this.lightEngine?.queueBlockUpdate(x, y, z, oldSkyLight, oldBlockLight, 'water-flow');
+      this.markBlockDirty(x, y, z);
+      if (id === BlockId.FIRE) this.fireEngine?.onFirePlaced(x, y, z);
+      else this.fireEngine?.onFireRemoved(x, y, z);
+      if (id === BlockId.WATER || id === BlockId.LAVA) this.resolveLiquidInteractionAt(x, y, z);
+    }
+    return changed;
+  }
+
+  rebuildMeshes() {
+    for (const chunk of this.chunks.values()) chunk.markAllDirty();
+  }
+
+  updateWaterAnimation(time: number) {
+    this.materials.updateWaterAnimation?.(time);
+  }
+
+  setSmoothLighting(enabled: boolean) {
+    if (this.smoothLighting === enabled) return;
+    this.smoothLighting = enabled;
+    for (const chunk of this.chunks.values()) chunk.setSmoothLighting(enabled);
+    this.rebuildMeshes();
+  }
+
+  setAmbientOcclusion(enabled: boolean) {
+    if (this.ambientOcclusion === enabled) return;
+    this.ambientOcclusion = enabled;
+    for (const chunk of this.chunks.values()) chunk.setAmbientOcclusion(enabled);
+    this.rebuildMeshes();
+  }
+
+  rebuildDirtyMeshes(playerX = 0, playerY = 0, playerZ = 0, maxSubchunks = 1) {
+    let rebuilt = 0;
+    const chunksByDistance = [...this.chunks.values()].sort((a, b) => {
+      const aDistance = (a.minX + 7.5 - playerX) ** 2 + (a.minZ + 7.5 - playerZ) ** 2;
+      const bDistance = (b.minX + 7.5 - playerX) ** 2 + (b.minZ + 7.5 - playerZ) ** 2;
+      return aDistance - bDistance;
+    });
+    for (const chunk of chunksByDistance) {
+      if (rebuilt >= maxSubchunks) break;
+      rebuilt += chunk.rebuildDirty(maxSubchunks - rebuilt, playerY);
+    }
+    this.lastDirtySubchunks = rebuilt;
+    return rebuilt;
+  }
+
+  attachLavaEngine(lavaEngine: LavaEngine) {
+    this.lavaEngine = lavaEngine;
+    for (const chunk of this.chunks.values()) {
+      chunk.setWaterDistanceReader(this.getLiquidDistance.bind(this));
+      chunk.setWaterFlowReader(this.getWaterFlow.bind(this));
+    }
+  }
+
+  get dirtySubchunks() { return [...this.chunks.values()].reduce((total, chunk) => total + chunk.pendingDirtySubchunks, 0); }
+
+  add(x: number, y: number, z: number, id: BlockId) {
+    if (!this.isInsideWorld(x, z)) return false;
+    const oldSkyLight = this.getLight('skyLight', x, y, z);
+    const oldBlockLight = this.getLight('blockLight', x, y, z);
+    const changed = this.blockStore.addBlockRaw(x, y, z, id);
+    if (changed) {
+      const reason = id === BlockId.GLOWSTONE ? 'glowstone-place' : id === BlockId.FIRE ? 'fire-place' : 'block-place';
+      this.pendingLightReason = reason;
+      this.lightEngine?.queueBlockUpdate(x, y, z, oldSkyLight, oldBlockLight, reason);
+      this.waterEngine?.onBlockPlaced(x, y, z, id);
+      this.lavaEngine?.onBlockPlaced(x, y, z, id);
+      if (id === BlockId.FIRE) this.fireEngine?.onFirePlaced(x, y, z);
+      if (id === BlockId.WATER || id === BlockId.LAVA) this.resolveLiquidInteractionAt(x, y, z);
+      if (id === BlockId.OAK_LEAVES) {
+        this.leavesManager.addLeaf(x, y, z);
+      }
+      this.editStore.record(x, y, z, id);
+    }
+    if (changed) this.markBlockDirty(x, y, z);
+    return changed;
+  }
+
+  remove(x: number, y: number, z: number) {
+    if (!this.isInsideWorld(x, z)) return false;
+    const oldBlock = this.getBlock(x, y, z);
+    const oldSkyLight = this.getLight('skyLight', x, y, z);
+    const oldBlockLight = this.getLight('blockLight', x, y, z);
+    const changed = this.blockStore.removeBlockRaw(x, y, z);
+    if (changed) {
+      const reason = oldBlockLight > 0 ? 'glowstone-break' : 'block-break';
+      this.pendingLightReason = reason;
+      this.lightEngine?.queueBlockUpdate(x, y, z, oldSkyLight, oldBlockLight, reason);
+      this.waterEngine?.onBlockRemoved(x, y, z);
+      this.lavaEngine?.onBlockRemoved(x, y, z);
+      this.fireEngine?.onFireRemoved(x, y, z);
+      this.leavesManager.removeLeaf(x, y, z);
+      if (oldBlock === BlockId.OAK_LOG) {
+        this.leavesManager.onLogRemoved(x, y, z, (bx, by, bz) => this.getBlock(bx, by, bz));
+      }
+      this.editStore.record(x, y, z, BlockId.AIR);
+    }
+    if (changed) this.markBlockDirty(x, y, z);
+    return changed;
+  }
+
+  processLightUpdates(budget = 4096) {
+    return this.lightEngine?.processUpdates(budget) ?? false;
+  }
+
+  consumeLightUpdateReason() {
+    const reason = this.pendingLightReason;
+    this.pendingLightReason = 'idle';
+    return reason;
+  }
+
+  updateLeavesDecay() {
+    const positionsToRemove = this.leavesManager.update((x, y, z) => this.getBlock(x, y, z));
+    for (const [x, y, z] of positionsToRemove) {
+      this.setBlock(x, y, z, BlockId.AIR);
+    }
+  }
+
+  getMeshObjects() {
+    return this.chunkManager.getMeshObjects();
+  }
+
+  getCollidersInBounds(minX: number, maxX: number, minY: number, maxY: number, minZ: number, maxZ: number): BlockCollider[] {
+    return this.chunkManager.getCollidersInBounds(minX, maxX, minY, maxY, minZ, maxZ);
+  }
+
+  updateLoadedChunks(playerX: number, playerZ: number) {
+    this.chunkManager.updateLoadedChunks(
+      playerX,
+      playerZ,
+      (chunk, x, z) => {
+        chunk.dispose();
+        this.markAdjacentChunksDirty(x, z);
+      },
+    );
+  }
+
+  /** Render distance in chunks (2..8). Recomputes which chunks are loaded. */
+  setViewRadius(chunks: number) {
+    this.viewRadius = Math.max(2, Math.min(8, Math.round(chunks)));
+    this.chunkManager.setViewRadius(this.viewRadius);
+  }
+
+  /** Build queued chunks within a per-frame time budget. Returns how many were built. */
+  loadPendingChunks(budgetMs = 3, maxPerFrame = 32): number {
+    const start = performance.now();
+    let built = 0;
+    while (built < maxPerFrame && performance.now() - start < budgetMs && this.loadNextPendingChunk()) {
+      built += 1;
+    }
+    return built;
+  }
+
+  get totalBlocks() { return this.chunkManager.totalBlocks; }
+  get visibleSubchunks() { return this.chunkManager.visibleSubchunks; }
+
+  // Infinite world — nothing is out of bounds horizontally. A block access in an
+  // ungenerated chunk still resolves to AIR / a no-op write in BlockStore.
+  isInsideWorld(_x: number, _z: number) {
+    return true;
+  }
+
+  private markLightDirty(x: number, y: number, z: number) {
+    const chunkX = this.blockStore.getChunkCoordinate(x);
+    const chunkZ = this.blockStore.getChunkCoordinate(z);
+    const chunk = this.chunkManager.getChunk(chunkX, chunkZ);
+    chunk?.markLightDirty(x, y, z);
+    this.markEdgeNeighbors(chunkX, chunkZ, x, z, y);
+  }
+
+  private markBlockDirty(x: number, y: number, z: number) {
+    const chunkX = this.blockStore.getChunkCoordinate(x);
+    const chunkZ = this.blockStore.getChunkCoordinate(z);
+    this.markEdgeNeighbors(chunkX, chunkZ, x, z, y);
+    this.markFireNeighborsDirty(x, y, z);
+  }
+
+  /** A fire cell's mesh depends on its neighbours (floor vs wall/ceiling fire). */
+  private markFireNeighborsDirty(x: number, y: number, z: number) {
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      const nx = x + dx, ny = y + dy, nz = z + dz;
+      if (this.getBlock(nx, ny, nz) === BlockId.FIRE) this.blockStore.markDirty(nx, ny, nz);
+    }
+  }
+
+  private markEdgeNeighbors(chunkX: number, chunkZ: number, x: number, z: number, y: number) {
+    const localX = x - (chunkX * CHUNK_SIZE - 8);
+    const localZ = z - (chunkZ * CHUNK_SIZE - 8);
+    const neighbors: [number, number][] = [];
+    if (localX === 0) neighbors.push([chunkX - 1, chunkZ]);
+    if (localX === CHUNK_SIZE - 1) neighbors.push([chunkX + 1, chunkZ]);
+    if (localZ === 0) neighbors.push([chunkX, chunkZ - 1]);
+    if (localZ === CHUNK_SIZE - 1) neighbors.push([chunkX, chunkZ + 1]);
+    for (const [neighborX, neighborZ] of neighbors) {
+      const chunk = this.chunkManager.getChunk(neighborX, neighborZ);
+      chunk?.markLightDirty(x, y, z);
+    }
+  }
+
+  private markAdjacentChunksDirty(chunkX: number, chunkZ: number) {
+    for (const [x, z] of [[chunkX - 1, chunkZ], [chunkX + 1, chunkZ], [chunkX, chunkZ - 1], [chunkX, chunkZ + 1]]) {
+      this.chunkManager.getChunk(x, z)?.markAllDirty();
+    }
+  }
+
+  private resolveLiquidInteractionAt(x: number, y: number, z: number) {
+    const current = this.getBlock(x, y, z);
+    if (current !== BlockId.WATER && current !== BlockId.LAVA) return;
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      const nx = x + dx;
+      const ny = y + dy;
+      const nz = z + dz;
+      const neighbor = this.getBlock(nx, ny, nz);
+      const touchesOpposingLiquid = (current === BlockId.WATER && neighbor === BlockId.LAVA)
+        || (current === BlockId.LAVA && neighbor === BlockId.WATER);
+      if (!touchesOpposingLiquid) continue;
+
+      const lavaX = current === BlockId.LAVA ? x : nx;
+      const lavaY = current === BlockId.LAVA ? y : ny;
+      const lavaZ = current === BlockId.LAVA ? z : nz;
+      const replacement = this.lavaEngine?.isSource(lavaX, lavaY, lavaZ)
+        ? BlockId.OBSIDIAN
+        : BlockId.COBBLESTONE;
+      this.lavaEngine?.clearAt(lavaX, lavaY, lavaZ);
+      this.setBlock(lavaX, lavaY, lavaZ, replacement);
+      this.soundManager?.playSingleSound('Fizz', 0.7);
+    }
+  }
+
+  private loadNextPendingChunk(): boolean {
+    return this.chunkManager.loadNextPendingChunk(
+      this.scene,
+      this.materials,
+      this.terrainNoise,
+      (x, y, z) => this.getBlock(x, y, z),
+      (chunk, x, z) => {
+        if (this.lightEngine) chunk.setLightReader(this.lightEngine.getRawBrightness.bind(this.lightEngine));
+        chunk.setWaterDistanceReader(this.getLiquidDistance.bind(this));
+        chunk.setWaterFlowReader(this.getWaterFlow.bind(this));
+        chunk.setSmoothLighting(this.smoothLighting);
+        chunk.setAmbientOcclusion(this.ambientOcclusion);
+        this.lightEngine?.initializeChunk(chunk);
+        this.markAdjacentChunksDirty(x, z);
+        this.reapplyLiquidEdits(x, z);
+      },
+      (cx, cz) => this.editStore.get(cx, cz),
+    );
+  }
+
+  /** Re-register liquids/fire from persisted edits so a placed source flows again. */
+  private reapplyLiquidEdits(chunkX: number, chunkZ: number) {
+    const edits = this.editStore.get(chunkX, chunkZ);
+    if (!edits) return;
+    const minX = chunkX * CHUNK_SIZE - 8;
+    const minZ = chunkZ * CHUNK_SIZE - 8;
+    for (const [idx, id] of edits) {
+      if (id !== BlockId.WATER && id !== BlockId.LAVA && id !== BlockId.FIRE) continue;
+      const wx = minX + (idx % CHUNK_SIZE);
+      const wz = minZ + (Math.floor(idx / CHUNK_SIZE) % CHUNK_SIZE);
+      const wy = Math.floor(idx / (CHUNK_SIZE * CHUNK_SIZE));
+      if (id === BlockId.WATER) this.waterEngine?.onBlockPlaced(wx, wy, wz, id);
+      else if (id === BlockId.LAVA) this.lavaEngine?.onBlockPlaced(wx, wy, wz, id);
+      else this.fireEngine?.onFirePlaced(wx, wy, wz);
+    }
+  }
+}
