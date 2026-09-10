@@ -2,6 +2,7 @@ import { renderBlockPreview, renderItemIcon } from './block-preview';
 import { isBlock, maxStackOf } from './item';
 import { showTooltip, hideTooltip } from './tooltip';
 import { CraftingGrid } from './crafting-grid';
+import { lockPointer } from './is-touch';
 
 export type InventorySlot = {
   /** BlockId value (1..23) for blocks, ItemId value (100+) for items, null when empty. */
@@ -608,7 +609,7 @@ export class Inventory {
     }
     const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
     if (this.backpackOpen) document.exitPointerLock();
-    else canvas?.requestPointerLock();
+    else lockPointer(canvas);
     this.onToggle?.(this.backpackOpen);
   }
 

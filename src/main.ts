@@ -29,6 +29,7 @@ import { BLOCK_CATALOG } from './creative-palette';
 import { ITEMS, maxStackOf } from './item';
 import { CraftingTableUI } from './crafting-table-ui';
 import { TouchControls } from './touch-controls';
+import { lockPointer } from './is-touch';
 import { makeStack } from './item-stack';
 import { DayNightCycle } from './day-night-cycle';
 import { SkyRenderer } from './sky-renderer';
@@ -272,7 +273,7 @@ function respawn() {
   hud.setHealth(playerHealth.current);
   deathScreen.hidden = true;
   player.setMovementLocked(false);
-  canvas.requestPointerLock();
+  lockPointer(canvas);
 }
 
 document.querySelector<HTMLButtonElement>('#death-respawn')!.addEventListener('click', () => {

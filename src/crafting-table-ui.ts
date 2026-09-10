@@ -1,4 +1,5 @@
 import { CraftingGrid } from './crafting-grid';
+import { lockPointer } from './is-touch';
 import type { Inventory } from './inventory';
 
 /**
@@ -56,6 +57,6 @@ export class CraftingTableUI {
     this.grid.returnAll((s) => this.inventory.addItem(s));
     this.root.hidden = true;
     this.onToggle(false);
-    document.querySelector<HTMLCanvasElement>('#game-canvas')?.requestPointerLock();
+    lockPointer(document.querySelector<HTMLCanvasElement>('#game-canvas'));
   }
 }

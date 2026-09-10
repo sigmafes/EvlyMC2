@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { playClick } from './ui-sound';
+import { lockPointer } from './is-touch';
 
 export type ModelAdjustments = {
   head: { x: number; y: number; z: number };
@@ -132,7 +133,7 @@ export class PauseMenu {
     this.paused = false;
     this.root.hidden = true;
     this.showOptions(false);
-    document.querySelector<HTMLCanvasElement>('#game-canvas')?.requestPointerLock();
+    lockPointer(document.querySelector<HTMLCanvasElement>('#game-canvas'));
   };
 
   private showOptions(show: boolean) {

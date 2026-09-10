@@ -1,3 +1,5 @@
+import { lockPointer } from './is-touch';
+
 export type ChatCommandHandler = (args: string[]) => string | void;
 
 type ChatOptions = {
@@ -84,7 +86,7 @@ export class Chat {
     this.root.classList.remove('chat-open');
     this.idleTimer = 0;
     this.opts.onOpenChange(false);
-    if (regrabPointer) this.opts.canvas.requestPointerLock();
+    if (regrabPointer) lockPointer(this.opts.canvas);
   }
 
   private submit() {

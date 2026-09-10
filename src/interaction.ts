@@ -8,6 +8,7 @@ import { BlockPlacer } from './block-placer';
 import { BreakOverlay } from './break-overlay';
 import { breakTime } from './block-hardness';
 import { getBlockSound } from './block-sounds';
+import { lockPointer } from './is-touch';
 import type { ParticleSystem } from './particles';
 import type { PlayerController } from './player';
 import type { World } from './world';
@@ -408,7 +409,7 @@ export class BlockInteraction {
     if (event.code === 'KeyQ' && this.engaged && !event.repeat) this.onDropSelected?.(event.ctrlKey);
   };
 
-  private capturePointer = () => this.canvas.requestPointerLock();
+  private capturePointer = () => lockPointer(this.canvas);
   private updatePointerState = () => {
     this.isPlaying = document.pointerLockElement === this.canvas;
     if (!this.isPlaying) this.onMouseUp();

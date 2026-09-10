@@ -5,6 +5,8 @@
  * tap-to-place and hold-to-break.
  */
 
+import { isTouchDevice } from './is-touch';
+
 export type TouchControlsCallbacks = {
   /** Analog stick from the d-pad: x = strafe (+right), z = forward(-1)/back(+1). */
   onMoveAxis: (x: number, z: number) => void;
@@ -28,10 +30,7 @@ const MOVE_TOL = 12;    // px of drift still counted as "held", not a drag
 export class TouchControls {
   /** Coarse pointer (finger) as the primary input. */
   static isTouchDevice(): boolean {
-    return (
-      (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) ||
-      (navigator.maxTouchPoints ?? 0) > 1
-    );
+    return isTouchDevice();
   }
 
   private readonly root: HTMLElement;

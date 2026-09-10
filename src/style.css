@@ -1399,16 +1399,17 @@ body.touch #touch-actions .tc-sneak.pressed {
   filter: drop-shadow(0 0 6px rgba(90, 160, 255, 0.9));
 }
 
-/* Lift the hotbar + its HUD row clear above the d-pad / action buttons, and
-   shrink them so the 468px-wide bar fits a phone screen. */
+/* Hotbar + its HUD row (hearts, XP) stay pinned to the bottom-centre. Shrunk so
+   the 468px bar fits a phone; the d-pad / jump sit in the bottom corners and the
+   bar sits in the gap between them (works in landscape, the play orientation). */
 body.touch #inventory {
-  bottom: 236px;
-  transform: translateX(-50%) scale(0.66);
+  bottom: max(10px, env(safe-area-inset-bottom));
+  transform: translateX(-50%) scale(0.62);
   transform-origin: center bottom;
 }
 body.touch #hud {
-  bottom: 272px;
-  transform: translateX(-50%) scale(0.66);
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 42px);
+  transform: translateX(-50%) scale(0.62);
   transform-origin: center bottom;
 }
 
