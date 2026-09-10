@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { enterFullscreen } from './fullscreen';
 import logoUrl from '../gui/logo.png';
 import pano0 from '../gui/bg/panorama_0.png';
 import pano1 from '../gui/bg/panorama_1.png';
@@ -150,6 +151,7 @@ export class MainMenu {
     if (!this.worldSelect) {
       this.worldSelect = new WorldSelect({
         onPlay: () => {
+          enterFullscreen(); // still inside the Play button's click gesture
           this.dispose();
           this.root.hidden = true;
           handlers.onSingleplayer();

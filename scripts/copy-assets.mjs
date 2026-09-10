@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = resolve(root, 'dist');
 const FOLDERS = ['textures', 'sounds', 'gui'];
+const FILES = ['manifest.webmanifest'];
 
 if (!existsSync(dist)) {
   console.error('copy-assets: dist/ not found - run `vite build` first.');
@@ -33,4 +34,14 @@ for (const folder of FOLDERS) {
   await mkdir(to, { recursive: true });
   await cp(from, to, { recursive: true });
   console.log(`copy-assets: ${folder}/ -> dist/${folder}/`);
+}
+
+for (const file of FILES) {
+  const from = resolve(root, file);
+  if (!existsSync(from)) {
+    console.error(`copy-assets: missing source file "${file}"`);
+    process.exit(1);
+  }
+  await cp(from, resolve(dist, file));
+  console.log(`copy-assets: ${file} -> dist/${file}`);
 }

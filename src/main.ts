@@ -30,6 +30,7 @@ import { ITEMS, maxStackOf } from './item';
 import { CraftingTableUI } from './crafting-table-ui';
 import { TouchControls } from './touch-controls';
 import { lockPointer } from './is-touch';
+import { keepFullscreenOnGesture, linkPwaManifest } from './fullscreen';
 import { makeStack } from './item-stack';
 import { DayNightCycle } from './day-night-cycle';
 import { SkyRenderer } from './sky-renderer';
@@ -44,6 +45,8 @@ import { activeWorld } from './worlds';
 
 async function startGame() {
 const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas')!;
+keepFullscreenOnGesture();
+linkPwaManifest();
 const diagnosticsPanel = document.querySelector<HTMLElement>('#diagnostics-panel')!;
 const underwaterOverlay = document.querySelector<HTMLElement>('#underwater-overlay')!;
 const scene = new THREE.Scene();
