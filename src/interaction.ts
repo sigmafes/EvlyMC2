@@ -75,7 +75,7 @@ export class BlockInteraction {
     private readonly onSwing?: () => void,
     private readonly onPlace?: () => void,
     private readonly particles?: ParticleSystem,
-    private readonly onInteract?: (id: BlockId) => void,
+    private readonly onInteract?: (id: BlockId, pos: THREE.Vector3) => void,
     private readonly onDrop?: (id: number, count: number, pos: THREE.Vector3) => void,
     private readonly onEat?: (heal: number) => void,
     private readonly onEatProgress?: (t01: number) => void,
@@ -340,7 +340,7 @@ export class BlockInteraction {
     // Right-clicking an interactive block (crafting table) opens its GUI instead of placing.
     const clicked = this.world.getBlock(hit.blockPosition.x, hit.blockPosition.y, hit.blockPosition.z);
     if (isInteractive(clicked)) {
-      this.onInteract?.(clicked);
+      this.onInteract?.(clicked, hit.blockPosition.clone());
       return;
     }
 

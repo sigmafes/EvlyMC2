@@ -29,6 +29,7 @@ import { playClick } from './ui-sound';
 import { BLOCK_CATALOG } from './creative-palette';
 import { ITEMS, maxStackOf } from './item';
 import { CraftingTableUI } from './crafting-table-ui';
+import { FurnaceUI } from './furnace-ui';
 import { TouchControls } from './touch-controls';
 import { lockPointer } from './is-touch';
 import { keepFullscreenOnGesture, linkPwaManifest } from './fullscreen';
@@ -186,7 +187,10 @@ const interaction = new BlockInteraction(
   () => hand.swing(),
   () => { hand.bump(); inventory.consumeSelected(); },
   particles,
-  (id) => { if (id === BlockId.CRAFTING_TABLE) craftingTableUI.open(); },
+  (id, pos) => {
+    if (id === BlockId.CRAFTING_TABLE) craftingTableUI.open();
+    else if (id === BlockId.FURNACE) furnaceUI.open(pos);
+  },
   (id, count, pos) => droppedItems.spawn(id, count, pos),
   (heal) => {
     playerHealth.heal(heal);
@@ -231,6 +235,11 @@ const inventory = new Inventory(
   },
 );
 const craftingTableUI = new CraftingTableUI(inventory, (open) => {
+  inventoryOpen = open;
+  player.setMovementLocked(open);
+  if (!open) persistPlayer();
+});
+const furnaceUI = new FurnaceUI(inventory, world, (open) => {
   inventoryOpen = open;
   player.setMovementLocked(open);
   if (!open) persistPlayer();
@@ -537,6 +546,7 @@ function animate() {
   interaction.update(delta);
   particles.update(delta);
   blockInspector.update();
+  furnaceUI.update();
   chat.update(delta);
 
   // Rendering
@@ -561,7 +571,7 @@ function fitInventoryPanels() {
     (window.innerWidth - 16) / 352,
     (window.innerHeight - 16) / 332,
   );
-  for (const sel of ['#backpack', '#crafting-table']) {
+  for (const sel of ['#backpack', '#crafting-table', '#furnace']) {
     document.querySelector<HTMLElement>(sel)?.style.setProperty('--inv-scale', String(scale));
   }
 }

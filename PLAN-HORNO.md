@@ -92,12 +92,25 @@ toda la ruta on/off + relight está lista.
 **Falta la GUI (Fase 5)** para meter/sacar items; hasta entonces el `FurnaceManager` está
 inerte (nadie llena `FurnaceState`).
 
-### Fase 5 — GUI del horno
-- Assets: `gui/furnace_gui.png`, `gui/Lit_progress.png` (llama), `gui/Burn_progress.png` (flecha).
-- `index.html`: `<section id="furnace">` con slots input/fuel/output + espejo de los 36
-  slots del inventario.
-- `src/furnace-ui.ts`: calcado de `CraftingTableUI` (`attachExtraSlots`, `setExternalUiOpen`).
-- El horno sigue cocinando con la GUI abierta.
+### Fase 5 — GUI del horno  ✅ HECHO
+- `inventory.ts`: nuevo `SlotSource` `'ext'` (`ExtSlot { id, read, write, takeOnly? }`) →
+  `readSlot`/`writeSlot`/`sameSource` lo soportan; `bindExternalSlot(el, ext)` +
+  `takeFromExternal` (slot output: stack completo o merge al cursor). El paint-drag
+  incluye `.furnace-slot` (salta los `takeOnly`).
+- `index.html`: `<section id="furnace">` con `#furnace-input/fuel/output`, `#furnace-flame`,
+  `#furnace-arrow`, `#furnace-backpack/hotbar`.
+- `style.css`: `#furnace-panel` (mismo patrón 512px que la mesa), posiciones de slots
+  (layout MC 176×166 ×2), gauges con `clip-path` (llama baja desde arriba, flecha llena
+  de izq a der).
+- `src/furnace-ui.ts`: 3 slots vía `bindExternalSlot` con closures que leen/escriben
+  `world.getFurnaceState`/`setFurnaceState` (crea `emptyFurnace()` al primer item);
+  36 slots espejo vía `attachExtraSlots`; `update()` cada frame refresca slots (solo si
+  cambió la firma id:count — `renderSlot` de un bloque hace un draw WebGL) y los gauges.
+- `main.ts`: `onInteract(FURNACE, pos)` → `furnaceUI.open(pos)`; `furnaceUI.update()` en el
+  loop; `#furnace` en `fitInventoryPanels`. `interaction.ts` `onInteract` ahora pasa la posición.
+- La GUI no pausa el juego: `FurnaceManager` sigue cocinando y ambos comparten el mismo
+  objeto `FurnaceState` por referencia (sin clobber). Cerrar con E/Esc o el botón
+  Inventario táctil.
 
 ### Fase 6 — Antorcha
 - `textures/blocks/torch.png` ya está en el repo (desbloqueada).

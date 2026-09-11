@@ -55,13 +55,24 @@ export function renderSlot(element: HTMLElement, slot: InventorySlot) {
 }
 
 /** Where a picked-up stack came from (so it can be put back / swapped). */
+/** A single slot owned by an external GUI (furnace), backed by live state. */
+export type ExtSlot = {
+  id: string;                                  // unique, for sameSource
+  read: () => InventorySlot;
+  write: (slot: InventorySlot | null) => void;
+  takeOnly?: boolean;                          // e.g. a furnace output slot
+};
+
 type SlotSource =
   | { kind: 'stored'; index: number }
   | { kind: 'craft'; grid: CraftingGrid; index: number }
+  | { kind: 'ext'; ext: ExtSlot }
   | null;
 
 function sameSource(a: SlotSource, b: SlotSource): boolean {
-  if (!a || !b || a.kind !== b.kind || a.index !== b.index) return false;
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === 'ext') return a.ext.id === (b as { ext: ExtSlot }).ext.id;
+  if (a.index !== (b as { index: number }).index) return false;
   return a.kind === 'stored' || a.grid === (b as { grid: CraftingGrid }).grid;
 }
 
@@ -270,12 +281,15 @@ export class Inventory {
   // --- Slot access via a SlotSource -------------------------------------------
 
   private readSlot(src: NonNullable<SlotSource>): InventorySlot {
-    return src.kind === 'stored' ? slots[src.index] : src.grid.get(src.index);
+    if (src.kind === 'stored') return slots[src.index];
+    if (src.kind === 'craft') return src.grid.get(src.index);
+    return src.ext.read();
   }
 
   private writeSlot(src: NonNullable<SlotSource>, slot: InventorySlot | null) {
     if (src.kind === 'stored') this.setSlot(src.index, slot);
-    else src.grid.set(src.index, slot);
+    else if (src.kind === 'craft') src.grid.set(src.index, slot);
+    else src.ext.write(slot);
   }
 
   /**
@@ -477,6 +491,7 @@ export class Inventory {
   /** Drop exactly one of the held stack into `src` (right-click / swipe deposit). */
   private depositOne(src: NonNullable<SlotSource>): boolean {
     if (!this.heldItem) return false;
+    if (src.kind === 'ext' && src.ext.takeOnly) return false;
     const held = this.heldItem;
     const slot = this.readSlot(src);
     if (slot.id === null) {
@@ -505,7 +520,7 @@ export class Inventory {
 
   private slotElAt(x: number, y: number): HTMLElement | null {
     const el = document.elementFromPoint(x, y) as HTMLElement | null;
-    const slotEl = el?.closest<HTMLElement>('.inventory-slot, .craft-slot, .ct-slot');
+    const slotEl = el?.closest<HTMLElement>('.inventory-slot, .craft-slot, .ct-slot, .furnace-slot');
     return slotEl && this.slotSourceByEl.has(slotEl) ? slotEl : null;
   }
 
@@ -617,6 +632,45 @@ export class Inventory {
     if (this.backpackOpen) document.exitPointerLock();
     else lockPointer(canvas);
     this.onToggle?.(this.backpackOpen);
+  }
+
+  /** Wire a single external-GUI slot (furnace input/fuel/output) into the cursor flow. */
+  bindExternalSlot(el: HTMLElement, ext: ExtSlot) {
+    this.slotSourceByEl.set(el, { kind: 'ext', ext });
+    el.addEventListener('click', () => {
+      if (this.consumeClickSuppression()) return;
+      if (ext.takeOnly) { this.takeFromExternal(ext); return; }
+      if (this.heldItem) this.placeHeld({ kind: 'ext', ext });
+      else this.pickUpFrom({ kind: 'ext', ext });
+    });
+    el.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (ext.takeOnly) { this.takeFromExternal(ext); return; }
+      this.onSlotRightClick({ kind: 'ext', ext });
+    });
+  }
+
+  /** Output-style slot: whole stack onto the cursor, or merged if it fits. */
+  private takeFromExternal(ext: ExtSlot) {
+    const slot = ext.read();
+    if (slot.id == null) return;
+    if (this.heldItem) {
+      if (this.heldItem.id !== slot.id) return;
+      if ((this.heldItem.count ?? 1) + (slot.count ?? 1) > maxStackOf(slot.id)) return;
+      this.heldItem.count = (this.heldItem.count ?? 1) + (slot.count ?? 1);
+      ext.write(null);
+      this.updateGhostCount();
+      return;
+    }
+    this.restoreHeld();
+    this.clearHeldVisuals();
+    this.heldItem = { ...slot };
+    this.heldFrom = { kind: 'ext', ext }; // closing the GUI puts it back here
+    ext.write(null);
+    this.spawnGhost();
+    document.addEventListener('pointermove', this.onGhostMove);
+    document.addEventListener('contextmenu', this.cancelHeld);
   }
 
   private onWheel = (event: WheelEvent) => {
