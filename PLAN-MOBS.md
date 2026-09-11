@@ -139,24 +139,31 @@ pixel hasta ahora) da igual sin importar el orden interno de `dx`/`dz` - los
 sub-splits internos de una textura de pelaje no tienen borde de color visible
 para chequear a ojo.
 
-## Fase G — Animación idle + caminata
-Dentro de `MobModel.update(delta)`: bob de cabeza sutil en idle, y cuando
-`setWalking(true)` un ciclo de piernas alternadas (mismo patrón de fase/retorno
-suave que `PlayerModel`). Sin input de movimiento real todavía — esto es lo que la
-futura IA va a llamar, pero se puede probar ya mismo forzando `setWalking(true)` a
-mano.
+## Fase G — Animación idle + caminata  ✅ HECHO (ya venía de la Fase B)
+`MobModel.update(delta)` ya tenía esto desde que se escribió en la Fase B: bob de
+cabeza sutil en idle + ciclo de piernas diagonales alternadas al caminar, con
+easing suave in/out en vez de un state machine de retorno explícito. No hizo
+falta código nuevo acá, solo quedaba marcarla como hecha una vez que las 3
+especies (D/E/F) confirmaron que el diseño genérico les sirve tal cual.
 
-## Fase H — Scaffold mínimo para verlos en el mundo (sin IA)
-Sin un sistema de entidades todavía, hace falta ALGO para poder mirarlos en el
-juego. Propuesta acotada, en la línea de `DroppedItems`/`FurnaceManager`:
-- `MobManager` simple: lista de mobs activos, cada uno con posición fija (world
-  space) + su `MobModel`; `update(delta, getLight)` solo avanza la animación y
-  aplica `tintByLight` — nada de física ni movimiento.
+## Fase H — Scaffold mínimo para verlos en el mundo (sin IA)  ✅ HECHO
+- `src/mob-manager.ts`: `MobManager` simple - lista de mobs activos, cada uno
+  con posición fija (world space) + su `MobModel`; `update(delta, getLight)`
+  solo avanza la animación y aplica `setLightLevel` según la luz del mundo en
+  la posición del mob - nada de física ni movimiento propio.
 - Comando de chat `/summon <pig|cow|sheep>` (mismo patrón/gating por cheats que
-  `/give`, `/panorama`, `/fly`) que instancia uno frente al jugador, quieto, con
-  `setWalking(true)` fijo para poder ver el ciclo de caminata sin esperar a la IA.
-- Sin persistencia todavía (no sobreviven un reload) — no tiene sentido guardarlos
-  hasta que exista colocación/spawn real.
+  `/give`, `/panorama`, `/fly`) en main.ts: instancia uno ~3 bloques delante del
+  jugador, mirando hacia él, con `setWalking(true)` fijo para poder ver el
+  ciclo de caminata sin esperar a la IA.
+- Sin persistencia todavía (no sobreviven un reload) - no tiene sentido
+  guardarlos hasta que exista colocación/spawn real.
+
+Con esto termina el alcance de este plan (modelos + animación, sin IA). Compila
+y buildea limpio, desplegado a `evlymc.pages.dev` para probar con `/summon pig`,
+`/summon cow` o `/summon sheep` (necesita cheats habilitados en el mundo, mismo
+requisito que el resto de los comandos). Las proporciones/pivots de cada
+especie son una aproximación razonada (documentado en sus fases D/E/F) - a
+ajustar a ojo ahora que por fin se pueden ver puestos.
 
 ## Explícitamente fuera de esta tanda
 IA/pathing, colisión con el terreno, spawn natural por bioma, reproducción/breeding,

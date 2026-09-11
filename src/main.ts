@@ -20,6 +20,11 @@ import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { DroppedItems } from './dropped-items';
 import { FurnaceManager } from './furnace';
+import { MobManager } from './mob-manager';
+import type { QuadrupedSpec } from './mob-model';
+import { PIG_SPEC } from './pig-model';
+import { COW_SPEC } from './cow-model';
+import { SHEEP_SPEC } from './sheep-model';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
@@ -286,6 +291,10 @@ await droppedItems.loadPersisted();
 // side table; the phase-5 GUI feeds it items.
 const furnaceManager = new FurnaceManager(world);
 
+// Mobs (PLAN-MOBS.md): models + animation only for now, no AI yet - see
+// mob-manager.ts. Spawned in via /summon for now, nothing places them on its own.
+const mobManager = new MobManager(scene);
+
 // --- Health & death ---
 const deathScreen = document.querySelector<HTMLElement>('#death-screen')!;
 const playerHealth = new PlayerHealth(
@@ -410,6 +419,22 @@ chat.registerCommand('fly', () => {
     : 'Flight disabled.';
 });
 
+const MOB_SPECS: Record<string, QuadrupedSpec> = { pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC };
+chat.registerCommand('summon', (args) => {
+  const kind = (args[0] ?? '').toLowerCase();
+  const spec = MOB_SPECS[kind];
+  if (!spec) return 'Usage: /summon <pig|cow|sheep>';
+
+  // A few blocks in front of the player, facing back toward them; forward
+  // direction matches PlayerController's own yaw convention. state.position
+  // is eye height, so drop back down to ground level for the mob's origin.
+  const dir = new THREE.Vector3(-Math.sin(player.state.yaw), 0, -Math.cos(player.state.yaw));
+  const pos = player.state.position.clone().addScaledVector(dir, 3);
+  pos.y -= 1.62;
+  mobManager.spawn(spec, pos, player.state.yaw + Math.PI);
+  return `Summoned a ${kind}.`;
+});
+
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 chat.registerCommand('give', (args) => {
   if (args.length === 0) return 'Usage: /give <item|block> [count]';
@@ -500,6 +525,7 @@ function animate() {
     playerHealth.tick(delta);
     droppedItems.update(delta, player.state.position, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
     furnaceManager.tick(delta);
+    mobManager.update(delta, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
 
     if (player.consumeWaterEntry()) soundManager.playRandom('player/Water_splash', 2, 0.5);
 
