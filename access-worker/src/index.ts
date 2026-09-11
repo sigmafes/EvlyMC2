@@ -122,9 +122,10 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   if (!isValidPassword(password)) {
     return json({ ok: false, error: `Password must be ${PASSWORD_MIN}-${PASSWORD_MAX} characters` }, 400, request, env);
   }
-  if (!(await isWhitelisted(env, username))) {
-    return json({ ok: false, error: 'This name does not have access to the beta' }, 403, request, env);
-  }
+  // Registration itself stays open (anyone can create an account, up to the
+  // per-IP cap below) - the whitelist gate is enforced at login only, see
+  // handleLogin(). That way people can claim their name/account ahead of
+  // time; actually getting into the game is what needs an invite.
 
   const accountKey = `account:${username.toLowerCase()}`;
   if (await env.ACCESS_KV.get(accountKey)) {
