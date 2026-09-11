@@ -23,10 +23,13 @@ const HEAD_UV: FaceRects = {
   nx: [0, 6, 5, 13], nz: [6, 6, 13, 13], px: [14, 6, 19, 13], pz: [20, 6, 27, 13],
 };
 
-// Body: texOffs(18,4), size 12x18x10 px.
+// Body: texOffs(18,4), size 12x18x10 px. Same reassignment as the pig's body
+// (see its comment): the authored "row 1" pair are the end caps along the
+// body's length (dx*dz - front chest/rear), and "row 2" front/back (dx*dy)
+// are what end up as world top/bottom once standing.
 const BODY_UV: FaceRects = {
-  py: [28, 4, 39, 13], ny: [40, 4, 51, 13],
-  nx: [18, 14, 27, 31], nz: [28, 14, 39, 31], px: [40, 14, 49, 31], pz: [50, 14, 61, 31],
+  py: [28, 14, 39, 31], ny: [50, 14, 61, 31],
+  nx: [18, 14, 27, 31], nz: [28, 4, 39, 13], px: [40, 14, 49, 31], pz: [40, 4, 51, 13],
 };
 
 // Leg: texOffs(0,16), size 4x12x4 px - taller than the pig's, shared by all 4 legs.

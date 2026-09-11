@@ -23,10 +23,15 @@ const HEAD_UV: FaceRects = {
   nx: [0, 8, 7, 15], nz: [8, 8, 15, 15], px: [16, 8, 23, 15], pz: [24, 8, 31, 15],
 };
 
-// Body: texOffs(28,8), size 10x16x8 px.
+// Body: texOffs(28,8), size 10x16x8 px. The authored "row 1" pair (dx*dz) are
+// the end caps along the body's length (chest/rear, dz=8 tall) - NOT world
+// top/bottom - and the "row 2" front/back pair (dx*dy) are the ones that end
+// up as world top/bottom once standing (confirmed dimensionally: dx*dy = the
+// same shape as the py/ny faces below, dx*dz matches nz/pz). Row1's second
+// block carries a little tail-curl icon, so it's the rear cap -> pz.
 const BODY_UV: FaceRects = {
-  py: [36, 8, 45, 15], ny: [46, 8, 55, 15],
-  nx: [28, 16, 35, 31], nz: [36, 16, 45, 31], px: [46, 16, 53, 31], pz: [54, 16, 63, 31],
+  py: [36, 16, 45, 31], ny: [54, 16, 63, 31],
+  nx: [28, 16, 35, 31], nz: [36, 8, 45, 15], px: [46, 16, 53, 31], pz: [46, 8, 55, 15],
 };
 
 // Leg: texOffs(0,16), size 4x6x4 px - shared by all 4 legs, just repositioned.

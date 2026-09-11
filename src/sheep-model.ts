@@ -32,10 +32,14 @@ const HEAD_UV: FaceRects = {
   nx: [0, 8, 7, 13], nz: [8, 8, 13, 13], px: [14, 8, 21, 13], pz: [22, 8, 27, 13],
 };
 
-// Body: texOffs(28,8), size 8x16x6 px.
+// Body: texOffs(28,8), size 8x16x6 px. Same reassignment as the pig's body
+// (see its comment): the authored "row 1" pair are the end caps along the
+// body's length (dx*dz - front chest/rear), and "row 2" front/back (dx*dy)
+// are what end up as world top/bottom once standing - which for the sheep
+// is exactly where the wool pattern needs to be.
 const BODY_UV: FaceRects = {
-  py: [34, 8, 41, 13], ny: [42, 8, 49, 13],
-  nx: [28, 14, 33, 29], nz: [34, 14, 41, 29], px: [42, 14, 47, 29], pz: [48, 14, 55, 29],
+  py: [34, 14, 41, 29], ny: [48, 14, 55, 29],
+  nx: [28, 14, 33, 29], nz: [34, 8, 41, 13], px: [42, 14, 47, 29], pz: [42, 8, 49, 13],
 };
 
 // Leg: texOffs(0,16), size 4x12x4 px - shared by all 4 legs.
