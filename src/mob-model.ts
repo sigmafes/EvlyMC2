@@ -98,7 +98,8 @@ export class MobModel {
   private lightLevel01 = 1;
   private hurtFlashTimer = 0;
   private static readonly HURT_FLASH_DURATION = 0.2;
-  private static readonly HURT_TINT = new THREE.Color(1, 0.5, 0.5); // ~50% opaque red over the texture
+  private static readonly HURT_TINT_STRENGTH = 0.75;
+  private static readonly HURT_RED = new THREE.Color(1, 0, 0);
 
   constructor(private readonly spec: QuadrupedSpec) {
     const texture = getMobTexture(spec.texturePath);
@@ -167,12 +168,15 @@ export class MobModel {
   update(delta: number): void {
     this.idleTime += delta;
 
+    const b = Math.pow(this.lightLevel01, 1.25);
     if (this.hurtFlashTimer > 0) {
       this.hurtFlashTimer = Math.max(0, this.hurtFlashTimer - delta);
-      this.material.color.copy(MobModel.HURT_TINT);
-      if (this.overlayMaterial) this.overlayMaterial.color.copy(MobModel.HURT_TINT);
+      // Non-emissive: tint the lit base colour toward red instead of
+      // overriding it outright, so the flash still darkens in shade.
+      const tinted = new THREE.Color().setScalar(b).lerp(MobModel.HURT_RED, MobModel.HURT_TINT_STRENGTH);
+      this.material.color.copy(tinted);
+      if (this.overlayMaterial) this.overlayMaterial.color.copy(tinted);
     } else {
-      const b = Math.pow(this.lightLevel01, 1.25);
       this.material.color.setScalar(b);
       if (this.overlayMaterial) this.overlayMaterial.color.setScalar(b);
     }

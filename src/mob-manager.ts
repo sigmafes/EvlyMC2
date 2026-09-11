@@ -3,6 +3,7 @@ import { MobModel, type QuadrupedSpec } from './mob-model';
 import { ItemId } from './item';
 import { playMobSound } from './mob-sounds';
 import type { SoundManager } from './sound-manager';
+import { findPath, type PathPoint } from './mob-pathfinding';
 
 export type MobKind = 'pig' | 'cow' | 'sheep';
 
@@ -53,10 +54,15 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
 
 const GRAVITY = 24;
 const FLEE_DURATION = 3; // seconds, LCE PanicGoal-style
-const WANDER_MOVE_MIN = 1.5;
-const WANDER_MOVE_MAX = 3.5;
 const WANDER_PAUSE_MIN = 1;
 const WANDER_PAUSE_MAX = 2.5;
+const WANDER_RADIUS_MIN = 3;
+const WANDER_RADIUS_MAX = 6;
+const FLEE_RADIUS_MIN = 5;
+const FLEE_RADIUS_MAX = 8;
+const FLEE_REPATH_CONE = Math.PI / 2; // random point within +-90 deg of "away from the attacker"
+const WAYPOINT_REACH_DIST = 0.3;
+const TURN_RATE = 10; // yaw-easing rate; higher = snappier turning
 const STEP_INTERVAL = 0.45;
 const IDLE_SOUND_MIN = 4;
 const IDLE_SOUND_MAX = 9;
@@ -81,12 +87,13 @@ type Mob = {
   radius: number;
   height: number;
   grounded: boolean;
+  facingYaw: number;
   // AI
   fleeTimer: number;
-  fleeDir: THREE.Vector3;
-  wanderDir: THREE.Vector3;
-  wanderTimer: number; // >0 while walking toward wanderDir, counts down
-  pauseTimer: number;  // >0 while idling, counts down
+  fleeDir: THREE.Vector3; // unit vector away from the last thing that hurt this mob
+  path: PathPoint[] | null;
+  pathIndex: number;
+  pauseTimer: number; // >0 while idling with no path, counts down
   // Sound
   stepTimer: number;
   idleSoundTimer: number;
@@ -140,10 +147,11 @@ export class MobManager {
       radius: stats.radius,
       height: stats.height,
       grounded: false,
+      facingYaw: yaw,
       fleeTimer: 0,
       fleeDir: new THREE.Vector3(),
-      wanderDir: new THREE.Vector3(),
-      wanderTimer: 0,
+      path: null,
+      pathIndex: 0,
       pauseTimer: ri(0, 20) / 10, // stagger initial wander so a group doesn't move in lockstep
       stepTimer: 0,
       idleSoundTimer: ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10,
@@ -189,14 +197,15 @@ export class MobManager {
     if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
     mob.model.hurt(); // 0.2s red flash
 
-    // Flee straight away from the hit's source (LCE PanicGoal picks a random
-    // direction biased away from the attacker - this is the simplified
-    // straight-away version).
+    // Panic (LCE PanicGoal): forget whatever it was doing and start pathing
+    // to random points biased away from the attacker for a few seconds - see
+    // pickFleeTarget(), called from updateAI() once `path` is cleared here.
     const pos = mob.model.getGroup().position;
     mob.fleeDir.set(pos.x - fromPos.x, 0, pos.z - fromPos.z);
     if (mob.fleeDir.lengthSq() < 1e-6) mob.fleeDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
     mob.fleeDir.normalize();
     mob.fleeTimer = FLEE_DURATION;
+    mob.path = null;
 
     // Knockback: an instant shove away from the attacker plus a small hop,
     // decaying over the next few frames (see updatePhysics) - independent of
@@ -215,7 +224,7 @@ export class MobManager {
       this.updatePhysics(mob, delta);
 
       const group = mob.model.getGroup();
-      const moving = mob.fleeTimer > 0 || mob.wanderTimer > 0;
+      const moving = mob.path !== null && mob.pathIndex < mob.path.length;
       mob.model.setWalking(moving);
 
       if (getLight) {
@@ -254,52 +263,134 @@ export class MobManager {
   private updateAI(mob: Mob, delta: number): void {
     if (mob.fleeTimer > 0) {
       mob.fleeTimer -= delta;
-      this.moveHorizontal(mob, mob.fleeDir, mob.walkSpeed * mob.fleeSpeedMult, delta);
+      if (!mob.path || mob.pathIndex >= mob.path.length) this.pickFleeTarget(mob);
+      this.followPath(mob, mob.walkSpeed * mob.fleeSpeedMult, delta);
       return;
     }
 
-    if (mob.wanderTimer > 0) {
-      mob.wanderTimer -= delta;
-      this.moveHorizontal(mob, mob.wanderDir, mob.walkSpeed, delta);
-      if (mob.wanderTimer <= 0) mob.pauseTimer = ri(WANDER_PAUSE_MIN * 10, WANDER_PAUSE_MAX * 10) / 10;
+    if (mob.path && mob.pathIndex < mob.path.length) {
+      this.followPath(mob, mob.walkSpeed, delta);
       return;
     }
 
     mob.pauseTimer -= delta;
     if (mob.pauseTimer <= 0) {
-      const angle = Math.random() * Math.PI * 2;
-      mob.wanderDir.set(Math.sin(angle), 0, Math.cos(angle));
-      mob.wanderTimer = ri(WANDER_MOVE_MIN * 10, WANDER_MOVE_MAX * 10) / 10;
+      this.pickWanderTarget(mob);
+      if (!mob.path) mob.pauseTimer = 0.5; // nowhere reachable found - try again shortly
     }
   }
 
-  /** Walks `mob` along `dir` (world-space, normalised) at `speed`; stops (without falling back to idle) if the way ahead is blocked. */
-  private moveHorizontal(mob: Mob, dir: THREE.Vector3, speed: number, delta: number): void {
-    if (dir.lengthSq() < 1e-6) return;
-    const group = mob.model.getGroup();
-    const step = speed * delta;
-    const nextX = group.position.x + dir.x * step;
-    const nextZ = group.position.z + dir.z * step;
+  /** Path::A* (mob-pathfinding.ts) to a random reachable point a few blocks away. */
+  private pickWanderTarget(mob: Mob): void {
+    const pos = mob.model.getGroup().position;
+    const angle = Math.random() * Math.PI * 2;
+    const radius = WANDER_RADIUS_MIN + Math.random() * (WANDER_RADIUS_MAX - WANDER_RADIUS_MIN);
+    const path = findPath(this.isSolid, pos, pos.x + Math.sin(angle) * radius, pos.z + Math.cos(angle) * radius);
+    mob.path = path;
+    mob.pathIndex = path ? 1 : 0; // path[0] is the mob's own current cell
+  }
 
-    const feetY = Math.round(group.position.y + 0.1);
-    const blocked = this.isSolid(Math.round(nextX), feetY, Math.round(nextZ))
-      || this.isSolid(Math.round(nextX), feetY + 1, Math.round(nextZ));
-    if (blocked) {
-      mob.wanderTimer = 0; // give up this direction early instead of pushing into the wall
-      mob.pauseTimer = 0.3;
+  /**
+   * LCE/loro PanicGoal-style: a random reachable point biased away from
+   * whatever last hurt this mob (not a rigid straight line), re-picked
+   * whenever the current escape path runs out while still panicking.
+   */
+  private pickFleeTarget(mob: Mob): void {
+    const pos = mob.model.getGroup().position;
+    const baseAngle = Math.atan2(mob.fleeDir.x, mob.fleeDir.z);
+    const angle = baseAngle + (Math.random() - 0.5) * FLEE_REPATH_CONE;
+    const radius = FLEE_RADIUS_MIN + Math.random() * (FLEE_RADIUS_MAX - FLEE_RADIUS_MIN);
+    const goalX = pos.x + Math.sin(angle) * radius;
+    const goalZ = pos.z + Math.cos(angle) * radius;
+    const path = findPath(this.isSolid, pos, goalX, goalZ);
+    if (path) {
+      mob.path = path;
+      mob.pathIndex = 1;
+    } else {
+      // Boxed in / nothing reachable - shuffle directly away for a moment
+      // rather than standing still and panicking in place.
+      mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: pos.x + mob.fleeDir.x * 2, y: pos.y, z: pos.z + mob.fleeDir.z * 2 }];
+      mob.pathIndex = 1;
+    }
+  }
+
+  /** Steps `mob` toward its current path waypoint, advancing to the next one once close enough. */
+  private followPath(mob: Mob, speed: number, delta: number): void {
+    if (!mob.path || mob.pathIndex >= mob.path.length) return;
+    const group = mob.model.getGroup();
+    const wp = mob.path[mob.pathIndex];
+    const dx = wp.x - group.position.x;
+    const dz = wp.z - group.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < WAYPOINT_REACH_DIST) {
+      mob.pathIndex++;
+      if (mob.pathIndex >= mob.path.length) {
+        mob.path = null;
+        mob.pauseTimer = ri(WANDER_PAUSE_MIN * 10, WANDER_PAUSE_MAX * 10) / 10;
+      }
       return;
     }
-
-    group.position.x = nextX;
-    group.position.z = nextZ;
-    // Face the direction of travel: an Object3D at rotation.y=θ has its local
-    // -Z (this model's "front" - see mob-model.ts) pointing world-(-sinθ,-cosθ),
-    // so matching that to `dir` needs the negated atan2 - the un-negated form
-    // points the model's BACK the way it's walking (a moonwalk).
-    group.rotation.y = Math.atan2(-dir.x, -dir.z);
+    this.moveHorizontal(mob, dx / dist, dz / dist, speed, delta);
   }
 
-  /** Gravity + knockback decay + a simple ground snap (sample the block below, land on its top). No horizontal collision resolution beyond moveHorizontal's blocked-ahead check. */
+  /** Moves `mob` by (dirX,dirZ) (normalised) at `speed`, resolving collisions per-axis (so it can slide along a wall) using its actual hitbox instead of a single point - and eases its facing yaw toward the direction of travel instead of snapping. */
+  private moveHorizontal(mob: Mob, dirX: number, dirZ: number, speed: number, delta: number): void {
+    const group = mob.model.getGroup();
+    const step = speed * delta;
+    const y = group.position.y;
+
+    let blocked = false;
+    const tryX = group.position.x + dirX * step;
+    if (!this.overlapsSolid(tryX, y, group.position.z, mob.radius, mob.height)) {
+      group.position.x = tryX;
+    } else {
+      blocked = true;
+    }
+
+    const tryZ = group.position.z + dirZ * step;
+    if (!this.overlapsSolid(group.position.x, y, tryZ, mob.radius, mob.height)) {
+      group.position.z = tryZ;
+    } else {
+      blocked = true;
+    }
+
+    if (blocked) {
+      // Unexpected obstruction mid-path (pathfinding missed it, or the world
+      // changed under it) - drop the path and take a short beat before
+      // re-deciding, instead of grinding against the wall every frame.
+      mob.path = null;
+      mob.pauseTimer = 0.3;
+    }
+
+    // Object3D at rotation.y=θ has local -Z (this model's "front" - see
+    // mob-model.ts) pointing world (-sinθ,-cosθ), so the target yaw is the
+    // negated atan2 - the un-negated form points the model's BACK the way
+    // it's walking (a moonwalk). Eased instead of snapped so turning reads
+    // as an actual turn, not an instant flip, now that pathfinding changes
+    // direction more often than the old straight-line wander did.
+    const targetYaw = Math.atan2(-dirX, -dirZ);
+    let deltaYaw = targetYaw - mob.facingYaw;
+    deltaYaw = ((deltaYaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    mob.facingYaw += deltaYaw * Math.min(1, TURN_RATE * delta);
+    group.rotation.y = mob.facingYaw;
+  }
+
+  /** Does mob's hitbox (a `radius`-wide, `height`-tall column centred on x,z with feet at feetY) overlap any solid block? */
+  private overlapsSolid(x: number, feetY: number, z: number, radius: number, height: number): boolean {
+    const x0 = Math.round(x - radius), x1 = Math.round(x + radius);
+    const z0 = Math.round(z - radius), z1 = Math.round(z + radius);
+    const y0 = Math.round(feetY + 0.05), y1 = Math.round(feetY + height - 0.05);
+    for (let bx = x0; bx <= x1; bx++) {
+      for (let bz = z0; bz <= z1; bz++) {
+        for (let by = y0; by <= y1; by++) {
+          if (this.isSolid(bx, by, bz)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Gravity + knockback decay + a simple ground snap (sample the block below, land on its top). */
   private updatePhysics(mob: Mob, delta: number): void {
     const group = mob.model.getGroup();
 
