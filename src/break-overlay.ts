@@ -20,6 +20,12 @@ const CRACK_STRENGTH = 0.55;
  * where 2*0.5 = 1 is the neutral value. Ours is drawn on white instead, so
  * plain multiply is the same idea in this asset's own encoding.
  *
+ * Note the blend is spelled out with explicit blendSrc/blendDst factors
+ * rather than THREE.MultiplyBlending: the preset didn't actually take effect
+ * in this setup (proved by the overlay still honouring the texture's alpha -
+ * a multiply ignores alpha entirely, and can never brighten, yet forcing the
+ * background to alpha 255 painted the block solid white).
+ *
  * The one adjustment: our crack pixels are quite dark (61 and 155 of 255),
  * and multiplying a block down to 24% of its colour reads as flat black
  * paint rather than a crack. So the atlas is softened toward white by
@@ -60,9 +66,12 @@ export class BreakOverlay {
         // Lerp each channel toward white, weighted by the pixel's own alpha:
         // the "empty" background is white at alpha ~0 and must stay exactly
         // white (the blend's neutral), the opaque crack lines get softened.
+        // The alpha channel is left alone on purpose - the multiply blend
+        // ignores it, but it's what keeps the background invisible if the
+        // blend ever falls back to plain alpha compositing (forcing it to
+        // 255 here turned the whole face into an opaque white box).
         const a = d[i + 3] / 255;
         for (let c = 0; c < 3; c++) d[i + c] = 255 - (255 - d[i + c]) * CRACK_STRENGTH * a;
-        d[i + 3] = 255; // alpha plays no part in a multiply blend
       }
       ctx.putImageData(pixels, 0, 0);
       this.texture.needsUpdate = true;
@@ -78,7 +87,14 @@ export class BreakOverlay {
     this.material = new THREE.MeshBasicMaterial({
       map: this.texture,
       transparent: true,
-      blending: THREE.MultiplyBlending,
+      opacity: 0.75,
+      // out = 0*src + src*dst, spelled out with explicit factors rather than
+      // the MultiplyBlending preset (which didn't take effect here - the
+      // giveaway was that the overlay still honoured the texture's alpha).
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.ZeroFactor,
+      blendDst: THREE.SrcColorFactor,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
