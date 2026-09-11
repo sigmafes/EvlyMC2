@@ -96,11 +96,16 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   // and burns away fast once it does.
   [BlockId.WOOL]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: { catchOdds: 30, burnOdds: 60 } },
   // Stairs/slabs don't fill their cell, so `cull: false` keeps their
-  // neighbours drawing the faces a full cube would have hidden.
-  [BlockId.OAK_STAIRS]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
-  [BlockId.COBBLESTONE_STAIRS]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: null },
-  [BlockId.OAK_SLAB]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
-  [BlockId.COBBLESTONE_SLAB]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: null },
+  // neighbours drawing the faces a full cube would have hidden. Their opacity
+  // is 1, not 15, for the same reason: light is stored per cell, and 15 makes
+  // LightEngine.processIncrease() pin the whole cell to 0, which blacked out
+  // the half of it that is actually open air. 1 keeps the cell lit (one level
+  // down from its brightest neighbour, like leaves and ice) while still
+  // casting shade on what's underneath.
+  [BlockId.OAK_STAIRS]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
+  [BlockId.COBBLESTONE_STAIRS]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
+  [BlockId.OAK_SLAB]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
+  [BlockId.COBBLESTONE_SLAB]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */

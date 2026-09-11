@@ -304,7 +304,13 @@ function addShapeBox(
       positionData.push(worldX - 0.5 + lx, y - 0.5 + ly, worldZ - 0.5 + lz);
       const [u, v] = faceUV(faceIndex, lx, ly, lz);
       uvData.push(u, v);
-      const level = readLight(worldX + nx, y + ny, worldZ + nz);
+      // A face that stops short of the cell boundary (a slab's top, a stair's
+      // riser) is lit by the air in THIS cell, not by whatever is in the next
+      // one - sampling the neighbour turned a slab's top face black as soon
+      // as anything solid was placed above it.
+      const level = flush
+        ? readLight(worldX + nx, y + ny, worldZ + nz)
+        : readLight(worldX, y, worldZ);
       const brightness = getFaceBrightness(level, faceIndex);
       colors[material].push(brightness, brightness, brightness);
     }
