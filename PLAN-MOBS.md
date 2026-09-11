@@ -104,9 +104,16 @@ razonada, no números vainilla exactos, así que van a necesitar un ajuste fino
 visual una vez que exista la Fase H para verlo puesto en el mundo.
 Compila y buildea limpio; no instanciado en ningún lado todavía (eso es H).
 
-## Fase E — Cow
-Igual que el pig pero con las dimensiones de la vaca (más alta y más grande, cabeza
-más angosta). Mismo `MobModel`, otro `QuadrupedSpec`.
+## Fase E — Cow  ✅ HECHO
+`src/cow-model.ts`. Mismo método de medición que la Fase C/D, esta vez contra
+`cow.png`: texOffs hipotetizado + verificado exacto contra los píxeles reales -
+cabeza 8×8×6 px, cuerpo 12×18×10 px rotado 90°, pata 4×12×4 px (más alta que la
+del pig, tiene sentido para un animal más grande). Un parche de ~6×6px cerca de
+(52-61, 0-6) no encaja con ninguna de las 3 partes (cuernos/ubre por posición y
+forma) y quedó sin mapear, misma decisión que el resto suelto del pig en la Fase C.
+Altura total resultante (patas + cuerpo parado) ≈ 1.375 bloques, cerca de la
+proporción vainilla real de la vaca (~1.4). Compila limpio; pivots con la misma
+salvedad que el pig (aproximación razonada, ajuste visual pendiente de la Fase H).
 
 ## Fase F — Sheep (con lana)
 Igual, más el `overlay` de lana: caja inflada sobre cuerpo+patas con alpha, mismo
