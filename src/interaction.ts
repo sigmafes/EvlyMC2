@@ -39,6 +39,11 @@ const CHIP_INTERVAL = 0.18;    // dig particles + tick sound this often while mi
 const EAT_DURATION = 1.6;      // seconds to finish eating (LCE: 32 ticks)
 const EAT_TICK = 0.35;         // chew sound + crumb particles this often while eating
 
+/** The 6 face neighbours, for sampling the light that actually falls on a block. */
+const NEIGHBOR_OFFSETS: [number, number, number][] = [
+  [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+];
+
 /**
  * Block interaction controller.
  * Orchestrates raycast, highlight, progressive breaking, and placing.
@@ -163,6 +168,23 @@ export class BlockInteraction {
     return (this.getLight?.(Math.round(p.x), Math.round(p.y), Math.round(p.z)) ?? 15) / 15;
   }
 
+  /**
+   * Brightness 0..1 *around* a block, for shading its crack overlay and the
+   * chips flying off it. Sampling the block's own cell returns 0 - a solid
+   * block holds no sky/block light inside itself - which tinted every break
+   * particle pure black; the light that actually falls on the block is the
+   * light in the open cells next to it.
+   */
+  private blockSurfaceLight(p: THREE.Vector3): number {
+    if (!this.getLight) return 1;
+    const x = Math.round(p.x), y = Math.round(p.y), z = Math.round(p.z);
+    let best = this.getLight(x, y, z);
+    for (const [dx, dy, dz] of NEIGHBOR_OFFSETS) {
+      best = Math.max(best, this.getLight(x + dx, y + dy, z + dz));
+    }
+    return best / 15;
+  }
+
   // --- Eating -------------------------------------------------------------
 
   private startEating() {
@@ -277,7 +299,7 @@ export class BlockInteraction {
   }
 
   private finishMining(pos: THREE.Vector3, id: BlockId, canHarvest: boolean) {
-    const light = this.lightAt(pos);
+    const light = this.blockSurfaceLight(pos);
     if (id === BlockId.FURNACE) {
       // Spill the furnace's contents before the block (and its data) are gone.
       const f = this.world.getBlockData(pos.x, pos.y, pos.z)?.furnace;
@@ -317,7 +339,7 @@ export class BlockInteraction {
     }
 
     this.mining.elapsed += delta;
-    const light = this.lightAt(this.mining.pos);
+    const light = this.blockSurfaceLight(this.mining.pos);
     this.breakOverlay.setProgress(this.mining.pos, this.mining.elapsed / this.mining.total, light);
 
     this.chipTimer += delta;

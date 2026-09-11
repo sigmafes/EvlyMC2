@@ -8,6 +8,7 @@ const DRAG = 0.86; // per-second-ish velocity retention (applied as pow(DRAG, dt
 const FAR_AWAY = -100000;
 const CHIP_UV_SIZE = 0.25; // fraction of the source texture a chip samples, like vanilla MC's particle crop
 const FADE_TAIL = 0.15; // seconds of fade-out before a particle dies
+const MIN_TINT = 0.25; // never let the light tint multiply a chip all the way to black
 
 /**
  * Textured-chip particle pool: each active slot is its own small quad mesh
@@ -107,7 +108,10 @@ export class ParticleSystem {
     (geo.attributes.uv as THREE.BufferAttribute).set([u0, v0, u1, v0, u0, v1, u1, v1]);
     geo.attributes.uv.needsUpdate = true;
 
-    const b = Math.pow(THREE.MathUtils.clamp(light01, 0, 1), 1.25);
+    // Floor the tint: a chip is a lit-from-somewhere fleck of the block, and
+    // a caller that samples light from inside a solid cell (0) would
+    // otherwise multiply the texture down to a pure black square.
+    const b = Math.max(MIN_TINT, Math.pow(THREE.MathUtils.clamp(light01, 0, 1), 1.25));
     (geo.attributes.color as THREE.BufferAttribute).set(new Array(4).fill([b, b, b]).flat());
     geo.attributes.color.needsUpdate = true;
 
@@ -131,7 +135,7 @@ export class ParticleSystem {
         (Math.random() - 0.5) * 4.5,
         id,
         0.5 + Math.random() * 0.45,
-        0.16 + Math.random() * 0.07,
+        0.12 + Math.random() * 0.05,
         light01,
       );
     }
@@ -149,7 +153,7 @@ export class ParticleSystem {
         faceNormal.z * 1.2 + (Math.random() - 0.5) * 1.4,
         id,
         0.3 + Math.random() * 0.2,
-        0.13 + Math.random() * 0.05,
+        0.10 + Math.random() * 0.04,
         light01,
       );
     }
