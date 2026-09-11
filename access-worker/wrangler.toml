@@ -10,5 +10,7 @@ id = "3d06a90a42994a5b9021d443b599061f"
 preview_id = "8da4fc6148f945f688b0d8e50b2e207a"
 
 [vars]
-# Only this origin gets CORS-allowed responses. Update if the site ever moves.
-ALLOWED_ORIGIN = "https://sigmafes.github.io"
+# Comma-separated list of origins allowed CORS access. evlymc.pages.dev is the
+# new primary site; the old GitHub Pages URL stays listed until it's fully
+# retired. Update this if either address changes.
+ALLOWED_ORIGINS = "https://evlymc.pages.dev,https://sigmafes.github.io"

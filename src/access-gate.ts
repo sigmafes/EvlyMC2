@@ -1,5 +1,8 @@
-const UNLOCK_KEY = 'evlymc-access-unlocked';
-const VALIDATE_URL = 'https://evlymc-access.mrfierrocarrilgames.workers.dev/validate';
+import { savePlayerName } from './player-skin';
+
+const UNLOCK_KEY = 'evlymc-account-unlocked';
+const ACCOUNT_NAME_KEY = 'evlymc-account-name';
+const API_BASE = 'https://evlymc-access.mrfierrocarrilgames.workers.dev';
 
 function isUnlocked(): boolean {
   try {
@@ -9,83 +12,155 @@ function isUnlocked(): boolean {
   }
 }
 
-function markUnlocked(): void {
+function markUnlocked(username: string): void {
   try {
     localStorage.setItem(UNLOCK_KEY, '1');
+    localStorage.setItem(ACCOUNT_NAME_KEY, username);
   } catch {
     /* private mode / storage disabled: the gate will just reappear next visit */
   }
 }
 
+type ApiResult = { ok: true; username: string } | { ok: false; error: string };
+
+async function callApi(path: '/login' | '/register', username: string, password: string): Promise<ApiResult> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; username?: string; error?: string } | null;
+    if (!res.ok || !data?.ok) {
+      return { ok: false, error: data?.error ?? 'Something went wrong' };
+    }
+    return { ok: true, username: data.username ?? username };
+  } catch {
+    return { ok: false, error: 'Could not reach the server - check your connection' };
+  }
+}
+
 /**
- * Blocks until a valid name+key pair is submitted, or resolves immediately if
- * this browser already unlocked it before. Call this before anything else in
- * main.ts runs - awaiting it holds up the entire rest of module init (world,
- * player, the intro sequence, all of it) until the gate is cleared.
+ * Blocks until the player logs in or creates an account, or resolves
+ * immediately if this browser already did so before. Call this before
+ * anything else in main.ts runs - awaiting it holds up the entire rest of
+ * module init (world, player, the intro sequence, all of it) until the gate
+ * is cleared.
  *
- * Validation happens server-side (access-worker/, a Cloudflare Worker backed
- * by KV) so the key list and "used" state never ship in this client bundle.
+ * Accounts (name/password, hashed server-side with PBKDF2) live in Workers KV
+ * behind access-worker/ - see its README for the max-2-accounts-per-IP and
+ * hashing details.
  */
 export function waitForAccessGate(): Promise<void> {
   if (isUnlocked()) return Promise.resolve();
 
   const root = document.querySelector<HTMLElement>('#access-gate')!;
   const message = document.querySelector<HTMLElement>('#access-gate-message')!;
-  const nameInput = document.querySelector<HTMLInputElement>('#access-gate-name')!;
-  const keyInput = document.querySelector<HTMLInputElement>('#access-gate-key')!;
-  const continueBtn = document.querySelector<HTMLButtonElement>('#access-gate-continue')!;
+  const modeButtons = document.querySelector<HTMLElement>('#access-gate-mode-buttons')!;
+  const loginForm = document.querySelector<HTMLFormElement>('#access-gate-login-form')!;
+  const registerForm = document.querySelector<HTMLFormElement>('#access-gate-register-form')!;
+  const loginUsername = document.querySelector<HTMLInputElement>('#login-username')!;
+  const loginPassword = document.querySelector<HTMLInputElement>('#login-password')!;
+  const registerUsername = document.querySelector<HTMLInputElement>('#register-username')!;
+  const registerPassword = document.querySelector<HTMLInputElement>('#register-password')!;
+  const registerPasswordConfirm = document.querySelector<HTMLInputElement>('#register-password-confirm')!;
 
   root.hidden = false;
-  nameInput.focus();
 
   return new Promise<void>((resolve) => {
     const setMessage = (text: string, error: boolean) => {
       message.textContent = text;
       message.classList.toggle('access-gate-error', error);
     };
-    const setNormal = () => setMessage('Enter your access key', false);
+    const showButtons = () => {
+      modeButtons.hidden = false;
+      loginForm.hidden = true;
+      registerForm.hidden = true;
+      setMessage('Log in or create an account to continue', false);
+    };
+    const showLogin = () => {
+      modeButtons.hidden = true;
+      loginForm.hidden = false;
+      registerForm.hidden = true;
+      setMessage('Log in to your account', false);
+      loginUsername.focus();
+    };
+    const showRegister = () => {
+      modeButtons.hidden = true;
+      loginForm.hidden = true;
+      registerForm.hidden = false;
+      setMessage('Create a new account', false);
+      registerUsername.focus();
+    };
 
-    let checking = false;
-    const submit = async () => {
-      if (checking) return;
-      const name = nameInput.value.trim();
-      const key = keyInput.value.trim();
-      if (!name || !key) {
-        setMessage('Invalid access key', true);
+    const succeed = (username: string) => {
+      markUnlocked(username);
+      savePlayerName(username);
+      root.hidden = true;
+      resolve();
+    };
+
+    let busy = false;
+
+    loginForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (busy) return;
+      const username = loginUsername.value.trim();
+      const password = loginPassword.value;
+      if (!username || !password) {
+        setMessage('Enter your name and password', true);
+        return;
+      }
+      busy = true;
+      setMessage('Checking...', false);
+      void callApi('/login', username, password).then((result) => {
+        busy = false;
+        if (!result.ok) {
+          setMessage(result.error, true);
+          return;
+        }
+        succeed(result.username);
+      });
+    });
+
+    registerForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (busy) return;
+      const username = registerUsername.value.trim();
+      const password = registerPassword.value;
+      const confirm = registerPasswordConfirm.value;
+
+      // Client-side pre-checks are just UX - the Worker re-validates all of
+      // this itself and is the only copy that actually matters.
+      if (username.length < 4 || username.length > 16) {
+        setMessage('Name must be 4-16 characters', true);
+        return;
+      }
+      if (password.length < 8 || password.length > 16) {
+        setMessage('Password must be 8-16 characters', true);
+        return;
+      }
+      if (password !== confirm) {
+        setMessage('Passwords do not match', true);
         return;
       }
 
-      checking = true;
-      continueBtn.disabled = true;
-      setMessage('Checking...', false);
-      try {
-        const res = await fetch(VALIDATE_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, key }),
-        });
-        const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
-        if (!res.ok || !data?.ok) {
-          setMessage(data?.error ?? 'Invalid access key', true);
+      busy = true;
+      setMessage('Creating account...', false);
+      void callApi('/register', username, password).then((result) => {
+        busy = false;
+        if (!result.ok) {
+          setMessage(result.error, true);
           return;
         }
-        markUnlocked();
-        root.hidden = true;
-        resolve();
-      } catch {
-        setMessage('Could not reach the server - check your connection', true);
-      } finally {
-        checking = false;
-        continueBtn.disabled = false;
-      }
-    };
-
-    continueBtn.addEventListener('click', () => { void submit(); });
-    for (const input of [nameInput, keyInput]) {
-      input.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') void submit();
+        succeed(result.username);
       });
-      input.addEventListener('input', setNormal);
+    });
+
+    document.querySelector('#access-gate-show-login')!.addEventListener('click', showLogin);
+    document.querySelector('#access-gate-show-register')!.addEventListener('click', showRegister);
+    for (const backBtn of document.querySelectorAll('.access-gate-form [data-back]')) {
+      backBtn.addEventListener('click', showButtons);
     }
   });
 }

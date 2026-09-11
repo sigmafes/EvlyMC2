@@ -9,16 +9,42 @@
     <section id="access-gate" hidden>
       <div id="access-gate-panel">
         <h1>Beta Closed!</h1>
-        <p id="access-gate-message">Enter your access key</p>
-        <label class="access-gate-row" for="access-gate-name">
-          <span>Name</span>
-          <input id="access-gate-name" type="text" autocomplete="off" spellcheck="false" />
-        </label>
-        <label class="access-gate-row" for="access-gate-key">
-          <span>Key</span>
-          <input id="access-gate-key" type="text" autocomplete="off" spellcheck="false" />
-        </label>
-        <button id="access-gate-continue" class="mc-button" type="button"><span>Continue</span></button>
+        <p id="access-gate-message">Log in or create an account to continue</p>
+
+        <div id="access-gate-mode-buttons">
+          <button id="access-gate-show-login" class="mc-button" type="button"><span>Login</span></button>
+          <button id="access-gate-show-register" class="mc-button" type="button"><span>Create Account</span></button>
+        </div>
+
+        <form id="access-gate-login-form" class="access-gate-form" hidden>
+          <label class="access-gate-row" for="login-username">
+            <span>Name</span>
+            <input id="login-username" type="text" maxlength="16" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="access-gate-row" for="login-password">
+            <span>Password</span>
+            <input id="login-password" type="password" maxlength="16" autocomplete="off" />
+          </label>
+          <button class="mc-button" type="submit"><span>Log In</span></button>
+          <button class="access-gate-link" type="button" data-back>Back</button>
+        </form>
+
+        <form id="access-gate-register-form" class="access-gate-form" hidden>
+          <label class="access-gate-row" for="register-username">
+            <span>Name (4-16 characters)</span>
+            <input id="register-username" type="text" maxlength="16" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="access-gate-row" for="register-password">
+            <span>Password (8-16 characters)</span>
+            <input id="register-password" type="password" maxlength="16" autocomplete="off" />
+          </label>
+          <label class="access-gate-row" for="register-password-confirm">
+            <span>Confirm Password</span>
+            <input id="register-password-confirm" type="password" maxlength="16" autocomplete="off" />
+          </label>
+          <button class="mc-button" type="submit"><span>Create Account</span></button>
+          <button class="access-gate-link" type="button" data-back>Back</button>
+        </form>
       </div>
     </section>
     <section id="intro" hidden>
