@@ -413,13 +413,17 @@ export class BlockInteraction {
     // Torches can't hang from a ceiling.
     if (this.selectedBlock === BlockId.TORCH && hit.intersection.face.normal.y < -0.5) return;
 
-    // Slab onto its matching other half -> one full block (LCE StoneSlabTileItem::useOn).
+    // Slab onto its matching other half -> one full block. LCE
+    // StoneSlabTileItem::useOn merges only on the face pointing into the
+    // slab's empty half: the top face of a bottom slab, or the bottom face
+    // of a top one.
     if (this.selectedBlock != null && isSlab(this.selectedBlock) && clicked === this.selectedBlock) {
       const b = hit.blockPosition;
       const data = this.world.getBlockData(b.x, b.y, b.z);
-      const clickedTop = data?.half === 'top';
-      const wantsTop = this.placedHalfIsTop(hit) === 'top';
-      if (!data?.double && clickedTop !== wantsTop) {
+      const isUpper = data?.half === 'top';
+      const ny = hit.intersection.face?.normal.y ?? 0;
+      const fillsEmptyHalf = (ny > 0.5 && !isUpper) || (ny < -0.5 && isUpper);
+      if (!data?.double && fillsEmptyHalf) {
         this.world.setBlockData(b.x, b.y, b.z, { ...data, half: 'bottom', double: true });
         this.onSwing?.();
         this.onPlace?.();

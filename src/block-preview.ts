@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BlockId } from './block';
+import { itemShapeBoxes, type ShapeBox } from './block-shapes';
 import type { InventorySlot } from './inventory';
 
 /**
@@ -248,6 +249,35 @@ export function disposeBlockMesh(root: THREE.Object3D) {
  * `onTextureLoad` fires when a texture finishes decoding (needed only by the
  * one-shot offscreen preview, which must re-draw).
  */
+/** Edge length of a preview block, matching the cube path below. */
+const SIZE = 1.5;
+
+/**
+ * Remaps a sub-box's UVs to the slice of the texture that part of a full
+ * block would show, so a slab's side isn't the whole plank texture squashed
+ * to half height. BoxGeometry's face order is +X,-X,+Y,-Y,+Z,-Z, 4 verts
+ * each, with each face's UVs spanning 0..1.
+ */
+function cropBoxUVs(geo: THREE.BoxGeometry, box: ShapeBox) {
+  const uv = geo.attributes.uv as THREE.BufferAttribute;
+  const ranges: [number, number, number, number][] = [
+    [box.z0, box.z1, box.y0, box.y1], // +X: across = Z, up = Y
+    [box.z0, box.z1, box.y0, box.y1], // -X
+    [box.x0, box.x1, box.z0, box.z1], // +Y: across = X, "up" = Z
+    [box.x0, box.x1, box.z0, box.z1], // -Y
+    [box.x0, box.x1, box.y0, box.y1], // +Z: across = X, up = Y
+    [box.x0, box.x1, box.y0, box.y1], // -Z
+  ];
+  for (let face = 0; face < 6; face += 1) {
+    const [u0, u1, v0, v1] = ranges[face];
+    for (let corner = 0; corner < 4; corner += 1) {
+      const i = face * 4 + corner;
+      uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
+    }
+  }
+  uv.needsUpdate = true;
+}
+
 export function buildBlockMesh(slot: InventorySlot, onTextureLoad: () => void = () => {}): THREE.Group {
   const group = new THREE.Group();
   const isWater = slot.id === BlockId.WATER;
@@ -339,6 +369,30 @@ export function buildBlockMesh(slot: InventorySlot, onTextureLoad: () => void = 
     mat.userData.baseColor = new THREE.Color(base);
     return mat;
   });
+
+  // Stairs and slabs are drawn from the same sub-boxes the world mesher uses,
+  // so they read as an actual stair/slab in the hotbar, in hand and as a
+  // dropped item instead of a plain cube.
+  const shapeBoxes = slot.id == null ? null : itemShapeBoxes(slot.id);
+  if (shapeBoxes) {
+    const shaped = new THREE.Group();
+    for (const box of shapeBoxes) {
+      const geo = new THREE.BoxGeometry(
+        (box.x1 - box.x0) * SIZE, (box.y1 - box.y0) * SIZE, (box.z1 - box.z0) * SIZE,
+      );
+      cropBoxUVs(geo, box);
+      const mesh = new THREE.Mesh(geo, faceMaterials);
+      mesh.position.set(
+        ((box.x0 + box.x1) / 2 - 0.5) * SIZE,
+        ((box.y0 + box.y1) / 2 - 0.5) * SIZE,
+        ((box.z0 + box.z1) / 2 - 0.5) * SIZE,
+      );
+      shaped.add(mesh);
+    }
+    shaped.rotation.y = Math.PI / 4;
+    group.add(shaped);
+    return group;
+  }
 
   const cubeHeight = isLiquid ? 1.5 * 0.9 : 1.5;
   const cube = new THREE.Mesh(

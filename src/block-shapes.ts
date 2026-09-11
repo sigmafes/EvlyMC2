@@ -164,6 +164,18 @@ export function shapeBoxesFor(
   return null;
 }
 
+/**
+ * The shape to draw a stair/slab with as an ITEM (hotbar icon, held in hand,
+ * dropped entity), or null for blocks that are just cubes. Stairs get a
+ * straight piece ascending away from the viewer so the icon reads as a
+ * staircase profile rather than hiding the step behind the tall side.
+ */
+export function itemShapeBoxes(id: BlockId): ShapeBox[] | null {
+  if (isSlab(id)) return slabBoxes(false);
+  if (isStairs(id)) return stairBoxes(2, false, 'straight');
+  return null;
+}
+
 /** True if `id` fills its whole cell opaquely, so a shaped block's face flush against it can be dropped. */
 export function coversWholeFace(id: BlockId): boolean {
   return isSolidBlock(id) && !isShapedBlock(id) && blockLightProperties[id]?.cull !== false;
