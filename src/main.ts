@@ -308,7 +308,10 @@ const mobManager = new MobManager(
   (id, count, pos) => spawnDrop?.(id, count, pos),
   soundManager,
   (x, y, z) => world.getBlock(x, y, z) === BlockId.WATER,
-  (pos) => smokeParticles.burst(pos),
+  (pos) => {
+    smokeParticles.burst(pos);
+    mobSpawnBlockTimer = MOB_SPAWN_DEATH_COOLDOWN; // no new ambient spawns for a while after a death/despawn
+  },
 );
 hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);
 attackMobFn = (mobId) => {
@@ -487,9 +490,11 @@ const MOB_SPAWN_INTERVAL_MAX = 15;
 const MOB_SPAWN_MIN_RADIUS = 14; // outside the player's immediate view, so herds don't pop in visibly
 const MOB_SPAWN_MAX_RADIUS = 36;
 const MOB_SPAWN_GROUP_JITTER = 4; // blocks a group member can land from the group's anchor point
-const MOB_SPAWN_GLOBAL_CAP = 30; // total live mobs before spawning stops entirely
+const MOB_SPAWN_GLOBAL_CAP = 9; // total live mobs before spawning stops entirely
 const MOB_SPAWN_LOCAL_CAP = 8; // live mobs within MOB_SPAWN_MAX_RADIUS of the player before spawning pauses nearby
+const MOB_SPAWN_DEATH_COOLDOWN = 60; // seconds spawning pauses for after a mob dies/despawns
 let mobSpawnTimer = MOB_SPAWN_INTERVAL_MIN + Math.random() * (MOB_SPAWN_INTERVAL_MAX - MOB_SPAWN_INTERVAL_MIN);
+let mobSpawnBlockTimer = 0; // >0 while the post-death cooldown is active
 
 /** True if (x,gy,z) is generated grass with two clear blocks above - a valid spot for a passive mob to stand. */
 function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
@@ -499,6 +504,7 @@ function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
 }
 
 function tryNaturalMobSpawn(): void {
+  if (mobSpawnBlockTimer > 0) return; // still cooling down after the last death/despawn
   if (mobManager.count >= MOB_SPAWN_GLOBAL_CAP) return;
   const p = player.state.position;
   if (mobManager.countNear(p, MOB_SPAWN_MAX_RADIUS) >= MOB_SPAWN_LOCAL_CAP) return;
@@ -636,6 +642,7 @@ function animate() {
     furnaceManager.tick(delta);
     mobManager.update(delta, (x, y, z) => lightEngine.getRawBrightness(x, y, z), player.state.position);
 
+    if (mobSpawnBlockTimer > 0) mobSpawnBlockTimer -= delta;
     mobSpawnTimer -= delta;
     if (mobSpawnTimer <= 0) {
       mobSpawnTimer = MOB_SPAWN_INTERVAL_MIN + Math.random() * (MOB_SPAWN_INTERVAL_MAX - MOB_SPAWN_INTERVAL_MIN);

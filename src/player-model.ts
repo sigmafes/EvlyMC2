@@ -682,9 +682,11 @@ export class PlayerModel {
       return 0;
     }
     const t = this.swingTime / this.SWING_DURATION;
-    // Single forward-and-back arc (positive = backward for this arm, see
-    // setRightArmRotation, so the attack swing itself is negative).
-    return -Math.sin(t * Math.PI) * this.SWING_ARC;
+    // Single forward-and-back arc. setRightArmRotation's own doc comment
+    // claims positive = backward, but that reads backward in practice (the
+    // negative sign this used to have threw the arm behind the body instead
+    // of forward into the swing) - positive is what actually swings forward.
+    return Math.sin(t * Math.PI) * this.SWING_ARC;
   }
 
   /**

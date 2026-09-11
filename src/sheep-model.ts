@@ -77,11 +77,11 @@ const LEG_SIZE: [number, number, number] = [PX(4), PX(12), PX(4)];
 const LEG_TOP_Y = LEG_SIZE[1];                     // ground -> top of legs
 const BODY_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] / 2;
 const BODY_HALF_LENGTH = BODY_SIZE[2] / 2;
-const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 0.85; // raised - was 0.55 (barely above body centre), read as low/hunched
-const HEAD_PIVOT_Z = -BODY_HALF_LENGTH - HEAD_SIZE[2] / 2; // snug against the body's front face
+const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 1.3; // raised further still - was 1.05, then 0.85, then 0.55 originally
+const HEAD_PIVOT_Z = -BODY_HALF_LENGTH - HEAD_SIZE[2] / 2 + PX(1.5); // pulled in a bit - was flush against the body's front face, read as jutting too far forward
 
-const LEG_INSET_X = BODY_SIZE[0] / 2 - LEG_SIZE[0] / 2 - PX(0.3); // wider stance - was PX(1) (too tucked-in)
-const LEG_Z = BODY_HALF_LENGTH * 0.78; // more front/back separation - was 0.6
+const LEG_INSET_X = BODY_SIZE[0] / 2 - LEG_SIZE[0] / 2 - PX(-0.9); // wider stance again - was PX(-0.3), then PX(0.3), then PX(1) originally
+const LEG_Z = BODY_HALF_LENGTH * 0.78;
 
 export const SHEEP_SPEC: QuadrupedSpec = {
   texturePath: TEXTURE_PATH,

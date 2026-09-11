@@ -6,7 +6,7 @@ import type { FaceRects } from './atlas-box';
 // guess at pixel coordinates that might land on the wrong art, they're built
 // as small solid-coloured boxes (same trick as the sheep's wool overlay).
 const HORN_TEXTURE_SIZE = 4;
-const HORN_COLOR_TEXTURE = createSolidColorTexture('#e8dfc4', HORN_TEXTURE_SIZE); // pale horn/bone colour
+const HORN_COLOR_TEXTURE = createSolidColorTexture('#3a3a3a', HORN_TEXTURE_SIZE); // dark grey
 const HORN_FULL_RECT: [number, number, number, number] = [0, 0, HORN_TEXTURE_SIZE, HORN_TEXTURE_SIZE];
 const HORN_UV: FaceRects = {
   py: HORN_FULL_RECT, ny: HORN_FULL_RECT,
