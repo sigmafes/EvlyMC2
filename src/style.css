@@ -14,6 +14,21 @@ html, body {
   overflow: hidden;
   overscroll-behavior: none;   /* kill pull-to-refresh / rubber-band on mobile */
 }
+
+/* Nothing in a game UI should be selectable: dragging across the hotbar used
+   to highlight the slot numbers blue on desktop, and long-pressing a touch
+   button popped up Android's selection handles / context callout mid-play.
+   Text inputs opt back in below. */
+* {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
 body {
   font-family: 'Tricraft', sans-serif;
 }

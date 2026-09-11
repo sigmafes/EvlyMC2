@@ -38,7 +38,9 @@ const TEXTURE_URLS = import.meta.glob('../textures/**/*.png', {
   import: 'default',
 }) as Record<string, string>;
 
-function resolveTextureUrl(path: string): string {
+/** Catalog path ("items/apple.png") -> hashed asset URL. Exported because the
+ *  particle system needs the same resolution for its item chips. */
+export function resolveTextureUrl(path: string): string {
   const url = TEXTURE_URLS[`../textures/${path}`];
   if (!url) console.warn(`block-preview: no texture for "${path}"`);
   return url ?? '';

@@ -39,7 +39,7 @@ const SWING_INTERVAL = 0.28;   // hand swings again this often while mining
 const CHIP_INTERVAL = 0.18;    // dig particles + tick sound this often while mining
 
 const EAT_DURATION = 1.6;      // seconds to finish eating (LCE: 32 ticks)
-const EAT_TICK = 0.35;         // chew sound + crumb particles this often while eating
+const EAT_TICK = 0.175;        // chew sound + crumb particles this often while eating (twice per old tick)
 
 /** The 6 face neighbours, for sampling the light that actually falls on a block. */
 const NEIGHBOR_OFFSETS: [number, number, number][] = [
@@ -246,7 +246,7 @@ export class BlockInteraction {
       down.y -= 0.6;
       down.normalize();
       mouth.addScaledVector(down, 0.35);
-      this.particles?.mine(mouth, down, this.selectedItemId ?? 0, this.lightAt(mouth));
+      this.particles?.eat(mouth, down, this.selectedItemId ?? 0, this.lightAt(mouth));
     }
 
     if (this.eatTime >= EAT_DURATION) {

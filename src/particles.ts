@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BlockMaterials } from './block';
 import { ITEMS, isBlock } from './item';
+import { resolveTextureUrl } from './block-preview';
 
 const MAX = 200;
 const GRAVITY = 16;
@@ -66,7 +67,11 @@ export class ParticleSystem {
     } else {
       const itemTexture = ITEMS[id]?.texture;
       if (itemTexture) {
-        source = this.itemLoader.load(new URL(`../textures/${itemTexture}`, import.meta.url).href);
+        // Must go through block-preview's glob-backed resolver: a dynamic
+        // `new URL('../textures/' + path, import.meta.url)` only globs one
+        // directory level, so it silently resolved to nothing for the
+        // items/ subfolder and the eating crumbs came out untextured.
+        source = this.itemLoader.load(resolveTextureUrl(itemTexture));
         source.magFilter = THREE.NearestFilter;
         source.minFilter = THREE.NearestFilter;
         source.colorSpace = THREE.SRGBColorSpace;
@@ -175,6 +180,27 @@ export class ParticleSystem {
   }
 
   /** Advances physics and fade-out, and billboards every live particle to face `camera`. */
+  /**
+   * Crumbs spat out while eating: a small cone of chips of the food's own
+   * icon, thrown down and away from the mouth (MC's ITEM_SNAPSHOT munch).
+   */
+  eat(pos: THREE.Vector3, dir: THREE.Vector3, id: number, light01 = 1): void {
+    for (let k = 0; k < 5; k++) {
+      this.spawnOne(
+        pos.x + (Math.random() - 0.5) * 0.12,
+        pos.y + (Math.random() - 0.5) * 0.12,
+        pos.z + (Math.random() - 0.5) * 0.12,
+        dir.x * 1.4 + (Math.random() - 0.5) * 1.2,
+        dir.y * 1.4 + Math.random() * 0.9,
+        dir.z * 1.4 + (Math.random() - 0.5) * 1.2,
+        id,
+        0.4 + Math.random() * 0.25,
+        0.07 + Math.random() * 0.04,
+        light01,
+      );
+    }
+  }
+
   update(dt: number, camera: THREE.Camera): void {
     const damp = Math.pow(DRAG, dt);
     for (let i = 0; i < MAX; i++) {
