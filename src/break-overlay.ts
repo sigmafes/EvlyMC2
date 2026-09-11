@@ -4,9 +4,12 @@ const STAGES = 10; // break.png is a 160x16 atlas: 10 crack stages
 
 /**
  * The block-cracking overlay: a slightly inflated textured cube showing the
- * current destroy stage from `break.png`, at 40% opacity, over the target block.
- * Its colour tracks the target block's light level so it isn't a bright patch in
- * the dark.
+ * current destroy stage from `break.png`, over the target block. Uses a
+ * multiply blend at full opacity (vanilla Minecraft's own technique - dst =
+ * src * dst) instead of a flat alpha blend, so the crack lines darken the
+ * block's own texture underneath instead of hazing the whole face with a
+ * translucent grey square. Its colour also tracks the target block's light
+ * level (multiplied in the same way) so it isn't a bright patch in the dark.
  */
 export class BreakOverlay {
   private readonly mesh: THREE.Mesh;
@@ -26,7 +29,8 @@ export class BreakOverlay {
     this.material = new THREE.MeshBasicMaterial({
       map: this.texture,
       transparent: true,
-      opacity: 0.4,
+      opacity: 1,
+      blending: THREE.MultiplyBlending,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,

@@ -115,7 +115,10 @@ await soundManager.initialize();
 // droppedItems is constructed later (needs `world`); this indirection lets
 // World's constructor take the drop callback right away, same as soundManager.
 let spawnDrop: ((id: number, count: number, pos: THREE.Vector3) => void) | undefined;
-const world = new World(scene, createBlockMaterials(), terrainNoise, worldSeed, soundManager, (id, count, pos) => spawnDrop?.(id, count, pos));
+// Shared with ParticleSystem below, so break/mine chips sample the same
+// already-loaded block textures instead of loading their own copies.
+const blockMaterials = createBlockMaterials();
+const world = new World(scene, blockMaterials, terrainNoise, worldSeed, soundManager, (id, count, pos) => spawnDrop?.(id, count, pos));
 await world.loadPersistedEdits(); // apply saved builds before any chunk is generated
 const lightEngine = new LightEngine(world);
 world.attachLightEngine(lightEngine);
@@ -200,7 +203,7 @@ pauseMenu.setViewBob(menuSettings.viewBob);
   set('render-distance-slider', 'render-distance-value', menuSettings.renderDistance);
 }
 
-const particles = new ParticleSystem();
+const particles = new ParticleSystem(blockMaterials);
 particles.attachToScene(scene);
 const smokeParticles = new SmokeParticles();
 smokeParticles.attachToScene(scene);

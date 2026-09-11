@@ -1,103 +1,131 @@
 import * as THREE from 'three';
-import { BlockId } from './block';
-import { ItemId } from './item';
+import type { BlockMaterials } from './block';
+import { ITEMS, isBlock } from './item';
 
-const MAX = 700;
+const MAX = 200;
 const GRAVITY = 16;
 const DRAG = 0.86; // per-second-ish velocity retention (applied as pow(DRAG, dt))
 const FAR_AWAY = -100000;
-
-/** Rough representative colour per block/item, for dig / break / eat bits. */
-const COLOR: Record<number, number> = {
-  [BlockId.DIRT]: 0x775539,
-  [BlockId.GRASS]: 0x5b8a3c,
-  [BlockId.STONE]: 0x8a8a8a,
-  [BlockId.COBBLESTONE]: 0x7d7d7d,
-  [BlockId.OAK_PLANKS]: 0xa07f45,
-  [BlockId.OAK_LOG]: 0x6b5330,
-  [BlockId.SAND]: 0xdbcc8f,
-  [BlockId.OAK_LEAVES]: 0x4a7a2a,
-  [BlockId.OBSIDIAN]: 0x241a33,
-  [BlockId.ICE]: 0x9cc3ff,
-  [BlockId.GLASS]: 0xbfe3f0,
-  [BlockId.FURNACE]: 0x6a6a6a,
-  [BlockId.TORCH]: 0xffcc55,
-  [BlockId.GLOWSTONE]: 0xe8c95a,
-  [BlockId.BEDROCK]: 0x555555,
-  [BlockId.COAL_ORE]: 0x6a6a6a,
-  [BlockId.IRON_ORE]: 0x9a8a7a,
-  [BlockId.GOLD_ORE]: 0xb0975a,
-  [BlockId.DIAMOND_ORE]: 0x7fd3d0,
-  [BlockId.EMERALD_ORE]: 0x54b060,
-  [BlockId.LAPIS_ORE]: 0x2c50a0,
-  [BlockId.REDSTONE_ORE]: 0x9a4a4a,
-  [BlockId.WATER]: 0x3f76e4,
-  [BlockId.LAVA]: 0xff6a00,
-  [BlockId.FIRE]: 0xffa030,
-  [ItemId.APPLE]: 0xc0392b,
-};
+const CHIP_UV_SIZE = 0.25; // fraction of the source texture a chip samples, like vanilla MC's particle crop
+const FADE_TAIL = 0.15; // seconds of fade-out before a particle dies
 
 /**
- * Minimal GPU particle pool (one THREE.Points, ring-buffer recycled). Used for
- * the bits that fly off a block while it's mined and when it breaks.
+ * Textured-chip particle pool (one small billboard-ish plane mesh per slot,
+ * ring-buffer recycled). Each particle samples a small random square out of
+ * the actual block/item texture it came from (vanilla MC's own technique),
+ * rather than a flat approximated colour - used for the bits that fly off a
+ * block while it's mined, when it breaks, and while eating.
  */
 export class ParticleSystem {
-  private readonly pos = new Float32Array(MAX * 3);
-  private readonly col = new Float32Array(MAX * 3);
-  private readonly vel = new Float32Array(MAX * 3);
-  private readonly life = new Float32Array(MAX); // seconds left, 0 = dead
-  private readonly geo = new THREE.BufferGeometry();
-  private readonly points: THREE.Points;
+  private readonly group = new THREE.Group();
+  private readonly meshes: THREE.Mesh[] = [];
+  private readonly vel: THREE.Vector3[] = [];
+  private readonly angVel: THREE.Vector3[] = [];
+  private readonly life: number[] = [];
   private cursor = 0;
-  private readonly tmpColor = new THREE.Color();
+  /** Cached per-id texture clones (own offset/repeat, sharing the same GPU image as the world/item texture). */
+  private readonly textureCache = new Map<number, THREE.Texture | null>();
+  private readonly itemLoader = new THREE.TextureLoader();
 
-  constructor() {
-    for (let i = 0; i < MAX; i++) this.pos[i * 3 + 1] = FAR_AWAY;
-    this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
-    this.geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3));
-    const material = new THREE.PointsMaterial({
-      size: 0.11,
-      sizeAttenuation: true,
-      vertexColors: true,
-      transparent: true,
-      depthWrite: false,
-    });
-    this.points = new THREE.Points(this.geo, material);
-    this.points.frustumCulled = false;
+  constructor(private readonly blockMaterials: BlockMaterials) {
+    const geo = new THREE.PlaneGeometry(1, 1);
+    for (let i = 0; i < MAX; i++) {
+      const material = new THREE.MeshBasicMaterial({
+        transparent: true, alphaTest: 0.05, side: THREE.DoubleSide, depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      mesh.position.y = FAR_AWAY;
+      this.group.add(mesh);
+      this.meshes.push(mesh);
+      this.vel.push(new THREE.Vector3());
+      this.angVel.push(new THREE.Vector3());
+      this.life.push(0);
+    }
   }
 
   attachToScene(scene: THREE.Scene): void {
-    scene.add(this.points);
+    scene.add(this.group);
   }
 
-  private emit(
+  /** The texture to chip particles from for a block or item id, or null if there isn't one (falls back to a plain white quad). */
+  private textureFor(id: number): THREE.Texture | null {
+    if (this.textureCache.has(id)) return this.textureCache.get(id)!;
+
+    let source: THREE.Texture | null = null;
+    if (isBlock(id)) {
+      const mat = (this.blockMaterials as Record<number, THREE.Material | THREE.Material[]>)[id];
+      const base = Array.isArray(mat) ? mat[0] : mat;
+      source = (base as THREE.MeshBasicMaterial | undefined)?.map ?? null;
+    } else {
+      const itemTexture = ITEMS[id]?.texture;
+      if (itemTexture) {
+        source = this.itemLoader.load(new URL(`../textures/${itemTexture}`, import.meta.url).href);
+        source.magFilter = THREE.NearestFilter;
+        source.minFilter = THREE.NearestFilter;
+        source.colorSpace = THREE.SRGBColorSpace;
+      }
+    }
+
+    // Clone so this id's random offset/repeat never fights the source's own
+    // (the world mesh's texture is still animated/scrolled for water etc).
+    const texture = source ? source.clone() : null;
+    if (texture) {
+      texture.needsUpdate = true;
+      texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.magFilter = THREE.NearestFilter;
+    }
+    this.textureCache.set(id, texture);
+    return texture;
+  }
+
+  private spawnOne(
     x: number, y: number, z: number,
     vx: number, vy: number, vz: number,
-    color: number, ttl: number, light = 1,
+    id: number, ttl: number, scale: number, light01: number,
   ): void {
     const i = this.cursor;
     this.cursor = (this.cursor + 1) % MAX;
-    this.pos[i * 3] = x; this.pos[i * 3 + 1] = y; this.pos[i * 3 + 2] = z;
-    this.vel[i * 3] = vx; this.vel[i * 3 + 1] = vy; this.vel[i * 3 + 2] = vz;
-    this.tmpColor.set(color);
-    const b = Math.pow(Math.min(Math.max(light, 0), 1), 1.25);
-    this.col[i * 3] = this.tmpColor.r * b; this.col[i * 3 + 1] = this.tmpColor.g * b; this.col[i * 3 + 2] = this.tmpColor.b * b;
+    const mesh = this.meshes[i];
+    const material = mesh.material as THREE.MeshBasicMaterial;
+
+    const texture = this.textureFor(id);
+    material.map = texture;
+    if (texture) {
+      const ox = Math.random() * (1 - CHIP_UV_SIZE);
+      const oy = Math.random() * (1 - CHIP_UV_SIZE);
+      texture.offset.set(ox, oy);
+      texture.repeat.set(CHIP_UV_SIZE, CHIP_UV_SIZE);
+    }
+    const b = Math.pow(THREE.MathUtils.clamp(light01, 0, 1), 1.25);
+    material.color.setScalar(b);
+    material.opacity = 1;
+    material.needsUpdate = true;
+
+    mesh.position.set(x, y, z);
+    mesh.scale.setScalar(scale);
+    mesh.rotation.set(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2);
+    mesh.visible = true;
+
+    this.vel[i].set(vx, vy, vz);
+    this.angVel[i].set((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
     this.life[i] = ttl;
   }
 
-  /** Burst of bits when a block is destroyed. `light01` shades them to the world. */
+  /** Burst of bits when a block is destroyed. Bigger and fewer than a mine() chip. `light01` shades them to the world. */
   burst(pos: THREE.Vector3, id: number, light01 = 1): void {
-    const color = COLOR[id] ?? 0x888888;
-    for (let k = 0; k < 34; k++) {
-      this.emit(
+    for (let k = 0; k < 16; k++) {
+      this.spawnOne(
         pos.x + (Math.random() - 0.5) * 0.9,
         pos.y + (Math.random() - 0.5) * 0.9,
         pos.z + (Math.random() - 0.5) * 0.9,
         (Math.random() - 0.5) * 4.5,
         Math.random() * 4 + 1.5,
         (Math.random() - 0.5) * 4.5,
-        color,
+        id,
         0.5 + Math.random() * 0.45,
+        0.28 + Math.random() * 0.12,
         light01,
       );
     }
@@ -105,17 +133,17 @@ export class ParticleSystem {
 
   /** A few chips off the hit face while mining. `light01` shades them to the world. */
   mine(pos: THREE.Vector3, faceNormal: THREE.Vector3, id: number, light01 = 1): void {
-    const color = COLOR[id] ?? 0x888888;
     for (let k = 0; k < 4; k++) {
-      this.emit(
+      this.spawnOne(
         pos.x + faceNormal.x * 0.52 + (Math.random() - 0.5) * 0.55,
         pos.y + faceNormal.y * 0.52 + (Math.random() - 0.5) * 0.55,
         pos.z + faceNormal.z * 0.52 + (Math.random() - 0.5) * 0.55,
         faceNormal.x * 1.2 + (Math.random() - 0.5) * 1.4,
         faceNormal.y * 1.2 + Math.random() * 1.8,
         faceNormal.z * 1.2 + (Math.random() - 0.5) * 1.4,
-        color,
+        id,
         0.3 + Math.random() * 0.2,
+        0.22 + Math.random() * 0.08,
         light01,
       );
     }
@@ -126,18 +154,23 @@ export class ParticleSystem {
     for (let i = 0; i < MAX; i++) {
       if (this.life[i] <= 0) continue;
       this.life[i] -= dt;
+      const mesh = this.meshes[i];
       if (this.life[i] <= 0) {
-        this.pos[i * 3 + 1] = FAR_AWAY;
+        mesh.visible = false;
+        mesh.position.y = FAR_AWAY;
         continue;
       }
-      this.vel[i * 3] *= damp;
-      this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * damp - GRAVITY * dt;
-      this.vel[i * 3 + 2] *= damp;
-      this.pos[i * 3] += this.vel[i * 3] * dt;
-      this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
-      this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
+      this.vel[i].x *= damp;
+      this.vel[i].y = this.vel[i].y * damp - GRAVITY * dt;
+      this.vel[i].z *= damp;
+      mesh.position.addScaledVector(this.vel[i], dt);
+      mesh.rotation.x += this.angVel[i].x * dt;
+      mesh.rotation.y += this.angVel[i].y * dt;
+      mesh.rotation.z += this.angVel[i].z * dt;
+
+      if (this.life[i] < FADE_TAIL) {
+        (mesh.material as THREE.MeshBasicMaterial).opacity = this.life[i] / FADE_TAIL;
+      }
     }
-    (this.geo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-    (this.geo.attributes.color as THREE.BufferAttribute).needsUpdate = true;
   }
 }
