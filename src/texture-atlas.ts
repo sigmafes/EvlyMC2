@@ -74,13 +74,23 @@ export async function buildAtlas(
   return { canvas, texture, rects, atlasWidth, atlasHeight };
 }
 
-/** A rect's U/V bounds within the atlas (top-left pixel origin -> bottom-left-origin UV space). */
+// Tiles are packed edge-to-edge with no gap between them, so a UV that
+// samples exactly on a tile's boundary can land on the neighbouring tile's
+// edge texel instead - not from filtering (everything's NearestFilter, no
+// mipmaps), but from ordinary perspective-correct interpolation across a
+// face plus the renderer's own antialiasing landing a hair past the edge.
+// Insetting the sampled rect by half a texel keeps every sample a full texel
+// away from the next tile - imperceptible on a 16px tile, and it fixes the
+// seam without needing to repack the atlas with padding between tiles.
+const HALF_TEXEL_INSET = 0.5;
+
+/** A rect's U/V bounds within the atlas (top-left pixel origin -> bottom-left-origin UV space), inset half a texel to avoid bleeding into the next tile. */
 export function atlasUV(rect: PixelRect, atlasWidth: number, atlasHeight: number) {
   const [x0, y0, x1, y1] = rect;
   return {
-    uMin: x0 / atlasWidth,
-    uMax: (x1 + 1) / atlasWidth,
-    vMin: 1 - (y1 + 1) / atlasHeight,
-    vMax: 1 - y0 / atlasHeight,
+    uMin: (x0 + HALF_TEXEL_INSET) / atlasWidth,
+    uMax: (x1 + 1 - HALF_TEXEL_INSET) / atlasWidth,
+    vMin: 1 - (y1 + 1 - HALF_TEXEL_INSET) / atlasHeight,
+    vMax: 1 - (y0 + HALF_TEXEL_INSET) / atlasHeight,
   };
 }
