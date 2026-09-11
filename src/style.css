@@ -160,8 +160,8 @@ body {
 }
 #backpack-panel .craft-result {
   position: absolute;
-  left: 296px;
-  top: 52px;
+  left: 308px; /* tex (154,28) x2 - measured off inventory.png's actual output-slot pixels */
+  top: 56px;
 }
 
 /* ===== 3x3 crafting table GUI (Crafting_table_gui.png) ===== */
@@ -1289,8 +1289,12 @@ body {
 }
 #hud-bubbles[hidden] { display: none; }
 .hud-bubble {
-  width: 20px;
-  height: 20px;
+  /* 2x the 9px source sprite: integer scaling keeps pixelated art crisp and
+     on-grid (the old 20px was a non-integer 2.22x, which under
+     image-rendering:pixelated replicates source pixels unevenly and reads
+     as "misaligned" between adjacent icons). */
+  width: 18px;
+  height: 18px;
   background: center / 100% 100% no-repeat;
 }
 #hud-hearts {
@@ -1299,14 +1303,19 @@ body {
 }
 .hud-heart {
   position: relative;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   background: url('../gui/heart_empty.png') center / 100% 100% no-repeat;
 }
 .hud-heart::after {
   content: '';
   position: absolute;
-  inset: 2px; /* full/half heart drawn a touch smaller so the empty outline shows */
+  /* Same box as the empty-heart layer below it (heart_full/heart_half are
+     full 9x9 sprites with their own outline, same as heart_empty) - the old
+     `inset: 2px` scaled this layer down to 16x16 while the empty layer below
+     stayed 20x20, so the two outlines landed at different pixel positions
+     and never lined up. */
+  inset: 0;
   background: var(--heart-fill, none) center / 100% 100% no-repeat;
 }
 #hud-xp {
