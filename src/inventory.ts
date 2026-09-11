@@ -2,6 +2,7 @@ import { renderBlockPreview, renderItemIcon } from './block-preview';
 import { isBlock, maxStackOf } from './item';
 import { maxDurability } from './tools';
 import { showTooltip, hideTooltip } from './tooltip';
+import { showHeldItemName } from './held-item-name';
 import { CraftingGrid } from './crafting-grid';
 import { lockPointer, unlockPointerForGui } from './is-touch';
 
@@ -102,6 +103,8 @@ export class Inventory {
   private readonly backpackPanel: HTMLElement;
   private selectedIndex = 0;
   private backpackOpen = false;
+  /** Slot+item last announced over the HUD, so a count change doesn't re-flash it. */
+  private lastHeldKey: string | null = null;
 
   /** 2x2 crafting grid drawn on the survival inventory panel. */
   private readonly craftGrid = new CraftingGrid(2);
@@ -326,7 +329,10 @@ export class Inventory {
     for (const element of this.elementsByIndex[index] ?? []) {
       renderSlot(element, slots[index]);
     }
-    if (index === this.selectedIndex) this.onSelect(slots[index].id);
+    if (index === this.selectedIndex) {
+      this.announceHeld(slots[index]);
+      this.onSelect(slots[index].id);
+    }
   }
 
   /** Read-only view of a stored slot. */
@@ -661,7 +667,23 @@ export class Inventory {
     this.elementsByIndex.forEach((elements, elementIndex) => {
       elements.forEach((element) => element.classList.toggle('selected', elementIndex === index));
     });
+    this.announceHeld(slot);
     this.onSelect(slot.id);
+  }
+
+  /**
+   * Flash the held item's name over the HUD, MC-style. Skipped while the
+   * backpack is open (its own tooltips cover that), on the very first
+   * selection at world load, and when only the stack COUNT changed - mining
+   * or placing shouldn't re-announce what you're already holding.
+   */
+  private announceHeld(slot: InventorySlot) {
+    const key = `${this.selectedIndex}:${slot.id ?? ''}`;
+    const first = this.lastHeldKey === null;
+    const changed = key !== this.lastHeldKey;
+    this.lastHeldKey = key;
+    if (first || !changed || this.backpackOpen) return;
+    showHeldItemName(slot.id === null ? null : slot.name);
   }
 
   private toggleBackpack(forceOpen?: boolean) {

@@ -1550,14 +1550,21 @@ body.custom-cursor-active * { cursor: none !important; }
   background: url('../gui/xp.png') left center / 468px 100% no-repeat;
 }
 
-/* ===== Hover tooltip (block names in the inventory) ===== */
+/* ===== Hover tooltip (block/item names in every inventory GUI) =====
+   gui/tooltip.png is 100x100: an 8px transparent margin, then a 1px
+   rgba(15,0,15,.94) outline, a 1px #35008a inner line, and the same dark fill
+   in the middle. Slicing at 10 keeps the margin + both border lines intact in
+   the corners and stretches only that flat middle, so the frame never
+   distorts however wide the name is. The 8px transparent ring means the
+   visible box sits 8px inside the element, which the small cursor offset in
+   tooltip.ts already accounts for. */
 #ui-tooltip {
   position: fixed;
   z-index: 50;
   pointer-events: none;
-  padding: 8px 10px;
-  border: 0;
-  border-image: url('../gui/tooltip_bg.png') 8 fill / 8px / 0 repeat;
+  padding: 3px 7px;
+  border: 10px solid transparent;
+  border-image: url('../gui/tooltip.png') 10 fill / 10px / 0 stretch;
   image-rendering: pixelated;
   font: 16px/1 'Tricraft', sans-serif;
   color: #ffffff;
@@ -1565,14 +1572,26 @@ body.custom-cursor-active * { cursor: none !important; }
   white-space: nowrap;
 }
 #ui-tooltip[hidden] { display: none; }
-.ui-tooltip-frame {
-  position: absolute;
-  inset: 0;
+
+/* ===== Held item name, flashed over the HUD on slot change (MC-style) ===== */
+#held-item-name {
+  position: fixed;
+  left: 50%;
+  bottom: 108px; /* clears the hotbar (18px + 52px) and the hearts/XP rows above it */
+  transform: translateX(-50%);
+  z-index: 3;
   pointer-events: none;
-  border: 0;
-  border-image: url('../gui/tooltip_frame.png') 10 / 10px / 0 repeat;
+  font: 20px/1 'Tricraft', sans-serif;
+  color: #ffffff;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, .75);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity .35s ease-out;
 }
-.ui-tooltip-label { position: relative; }
+#held-item-name.visible {
+  opacity: 1;
+  transition: none; /* snap in, fade out */
+}
 
 /* ===== Death screen ===== */
 #death-screen {
