@@ -1,0 +1,14 @@
+name = "evlymc-access"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+# Created by `wrangler kv namespace create ACCESS_KV` - paste the id it prints
+# below (and the preview_id from `--preview`, for `wrangler dev`).
+[[kv_namespaces]]
+binding = "ACCESS_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"
+
+[vars]
+# Only this origin gets CORS-allowed responses. Update if the site ever moves.
+ALLOWED_ORIGIN = "https://sigmafes.github.io"

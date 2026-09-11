@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+access-worker/node_modules/
+access-worker/.wrangler/
 
 # Build output
 dist/
