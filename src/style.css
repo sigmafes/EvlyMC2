@@ -87,6 +87,14 @@ body {
   height: 100%;
 }
 
+/* The HUD hotbar sits on its own textured bar, so the wear bar needs to ride
+   a little higher and narrower there to stay inside the slot's artwork. */
+#inventory .slot-durability {
+  left: 7px;
+  right: 7px;
+  bottom: 7px;
+}
+
 #backpack {
   position: fixed;
   inset: 0;
