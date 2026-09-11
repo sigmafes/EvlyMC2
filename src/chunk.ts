@@ -604,9 +604,13 @@ export class Chunk {
   }
 
   /**
-   * Loose sand/gravel patches scattered across dry surface ground - a much
-   * smaller, shallower version of placeOreVein's lens blob, restricted to
-   * the top couple of layers under grass/dirt instead of anywhere in stone.
+   * Loose sand patches scattered across dry surface ground - a much smaller,
+   * shallower version of placeOreVein's lens blob, restricted to the top
+   * couple of layers under grass/dirt instead of anywhere in stone. Sand
+   * only, never gravel: gravel is reserved for the submerged bed of a water
+   * body (chunk.ts's isWaterBody branch above) - every water edge (river,
+   * lake or ocean shore) is always sand, so a loose surface patch can't end
+   * up reading as "the shore is made of gravel" by landing right next to one.
    */
   private generateSurfacePatches() {
     const rng = mulberry32(hashSeed(this.chunkX, this.chunkZ, this.seed ^ 0x9a7c1e));
@@ -621,7 +625,7 @@ export class Chunk {
       const cz = this.minZ + rngInt(CHUNK_SIZE);
       const surfaceY = Math.min(CHUNK_MAX_Y, Math.max(5, Math.floor(this.getTerrainHeight(cx, cz))));
       if (surfaceY <= WATER_LEVEL + 2) continue; // shore/underwater already has its own sand/gravel
-      const patchId = rng() < 0.5 ? BlockId.SAND : BlockId.GRAVEL;
+      const patchId = BlockId.SAND;
       const radius = 2 + rngInt(3); // 2-4 blocks
       const depth = 1 + rngInt(2); // replace the top 1-2 layers
 
