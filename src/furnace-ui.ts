@@ -28,7 +28,10 @@ export class FurnaceUI {
 
   private isOpen = false;
   private pos: Pos = { x: 0, y: 0, z: 0 };
-  private lastSig: Record<SlotKey, string> = { input: '', fuel: '', output: '' };
+  /** `null` = "unknown, force a repaint" — distinct from '' (the real signature
+   *  of an empty slot), so a furnace that finished cooking to empty while the
+   *  GUI was closed doesn't skip its repaint on reopen (both would read ''). */
+  private lastSig: Record<SlotKey, string | null> = { input: null, fuel: null, output: null };
 
   constructor(
     private readonly inventory: Inventory,
@@ -65,7 +68,7 @@ export class FurnaceUI {
     this.pos = { x: pos.x, y: pos.y, z: pos.z };
     this.isOpen = true;
     this.root.hidden = false;
-    this.lastSig = { input: '', fuel: '', output: '' };
+    this.lastSig = { input: null, fuel: null, output: null };
     this.inventory.refreshAll();
     this.refresh();
     this.inventory.setExternalUiOpen(true, () => this.close());
@@ -80,6 +83,9 @@ export class FurnaceUI {
     this.root.hidden = true;
     this.onToggle(false);
     lockPointer(document.querySelector<HTMLCanvasElement>('#game-canvas'));
+    // Force a real repaint next open() rather than trusting whatever the slots
+    // happened to show when this one closed (the furnace keeps cooking while shut).
+    this.lastSig = { input: null, fuel: null, output: null };
   }
 
   /** Per-frame while open: keep the slots and gauges in step with smelting. */

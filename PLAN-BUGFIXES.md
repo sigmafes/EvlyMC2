@@ -5,22 +5,27 @@ real, y en 3 casos con un test de nodo) antes de planear, para no adivinar duran
 implementación. Agrupados en 7 fases por subsistema — cada fase es un commit+deploy
 independiente, de menor a mayor riesgo.
 
-## Fase A — Horno: pulido
-1. **Sprite atascado en el slot de input** al cerrar el GUI con algo cocinando.
-   `FurnaceUI.refresh()` solo repinta un slot si su firma `id:count` cambió
-   (`lastSig`), para no hacer un draw WebGL cada frame. Sospecho una carrera entre
-   `close()` (que ya no llama `update()`) y el último estado visible quedando cacheado.
-   Fix: forzar un repintado completo (bypass `lastSig`) en `close()`, y auditar el
-   camino de `restoreHeld`/`clearHeldVisuals` para un item tomado del input que nunca
-   se re-deposita.
-2. **Falta la receta `cobblestone → stone`** en `smelting.ts` (`SMELT` solo tiene
-   `oak_log`, `sand`, `raw_iron`, `raw_gold`). Una línea.
-3. **Cara on/off del horno no siempre mira al jugador.** Verifiqué `facingTowardPlayer()`
-   con un barrido numérico de 3600 ángulos contra las 4 caras — matemáticamente siempre
-   elige la cara óptima. El código de `interaction.ts` que la invoca también se ve
-   correcto. Como no lo puedo reproducir, lo repasaré con ojos frescos en esta fase
-   (candidatos: el caso de reemplazar agua/lava al colocar, o algo en el pipeline de
-   remesh) en vez de asumir que ya está bien.
+## Fase A — Horno: pulido  ✅ HECHO
+1. **Sprite atascado en el slot de input.** Causa real: `lastSig` se reseteaba a
+   `''` (string vacío) tanto en `open()` como al inicializar, y `''` es también la
+   firma legítima de un slot vacío. Si el horno terminó de cocinar (input pasó a
+   vacío) mientras el GUI estaba cerrado, al reabrir el reset a `''` coincidía con
+   la firma real (también `''`) → `paintSlot` creía que no había cambiado nada y
+   nunca volvía a llamar `renderSlot`, dejando el canvas viejo pegado. Fix: `lastSig`
+   ahora es `string | null`, inicializado/reseteado a `null` (una firma que un slot
+   real nunca puede tener), así el primer repintado tras abrir u cerrar siempre
+   fuerza el render. También se resetea en `close()` por robustez.
+2. **Receta `cobblestone → stone`** añadida a `smelting.ts`.
+3. **Cara on/off del horno.** Encontrada la causa real (no era la matemática, que ya
+   había verificado): en `interaction.ts`, `this.onPlace?.()` —que llama
+   `inventory.consumeSelected()`— se ejecutaba *antes* de leer `this.selectedBlock`
+   para decidir la orientación. Si el jugador colocaba el *último* horno de un stack,
+   `consumeSelected()` vacía el slot y dispara `onSelect(null)` →
+   `interaction.selectBlock(null)`, que pone `this.selectedBlock = null` en caliente,
+   justo antes de que el código de `isOrientable`/torch/sonido lo leyera — se saltaba
+   la escritura del `facing` (y también el sonido de colocar, mismo bug). Reproducible
+   con `/give furnace 1` o al craftear solo 1. Fix: capturar `this.selectedBlock` en
+   una variable local *antes* de llamar `onPlace()`, y usar esa copia después.
 
 ## Fase B — Antorcha: pulido
 4. **No debe ser sólida + no debe mostrar el delineado.** `chunk.ts

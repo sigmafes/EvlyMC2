@@ -10,6 +10,7 @@ type SmeltOut = { id: number; count: number };
 const SMELT: Record<number, SmeltOut> = {
   [BlockId.OAK_LOG]: { id: ItemId.CHARCOAL, count: 1 },
   [BlockId.SAND]: { id: BlockId.GLASS, count: 1 },
+  [BlockId.COBBLESTONE]: { id: BlockId.STONE, count: 1 },
   [ItemId.RAW_IRON]: { id: ItemId.IRON_INGOT, count: 1 },
   [ItemId.RAW_GOLD]: { id: ItemId.GOLD_INGOT, count: 1 },
 };

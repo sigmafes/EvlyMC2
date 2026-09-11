@@ -361,14 +361,20 @@ export class BlockInteraction {
       },
     );
     if (placed) {
+      // Snapshot BEFORE onPlace(): consumeSelected() can empty the hotbar slot
+      // (placing your last block of a stack) and that fires onSelect(null),
+      // which nulls this.selectedBlock out from under the code below — losing
+      // the furnace's facing, the torch's floor/wall pick, and the place sound
+      // every time you placed the last one in a stack.
+      const placedBlockId = this.selectedBlock;
       this.onSwing?.();
       this.onPlace?.();
-      if (placedAt && this.selectedBlock != null && isOrientable(this.selectedBlock)) {
+      if (placedAt && placedBlockId != null && isOrientable(placedBlockId)) {
         // Orientable block (furnace): its front (off) face looks at the player.
         const p = placedAt as THREE.Vector3;
         this.world.setBlockData(p.x, p.y, p.z, { facing: facingTowardPlayer(this.player.state.yaw) });
       }
-      if (placedAt && this.selectedBlock === BlockId.TORCH) {
+      if (placedAt && placedBlockId === BlockId.TORCH) {
         // Side face -> wall torch leaning along the face normal; top face -> floor torch.
         const p = placedAt as THREE.Vector3;
         const n = hit.intersection.face.normal;
@@ -377,8 +383,8 @@ export class BlockInteraction {
           this.world.setBlockData(p.x, p.y, p.z, { facing });
         }
       }
-      if (this.selectedBlock) {
-        const sound = getBlockSound(this.selectedBlock, 'place') ?? getBlockSound(this.selectedBlock, 'dig');
+      if (placedBlockId) {
+        const sound = getBlockSound(placedBlockId, 'place') ?? getBlockSound(placedBlockId, 'dig');
         if (sound && this.soundManager) this.soundManager.playSound(sound);
       }
     }
