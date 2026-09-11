@@ -119,9 +119,10 @@ inerte (nadie llena `FurnaceState`).
   (poste 2x2x10 px + llama); variante pared inclinada con offset ~0.27.
 - Requiere soporte sólido debajo/detrás. Dureza 0, self-drop, sonidos `wood_*`.
 
-### Fase 7 — Recetas de crafteo (`crafting.ts`)
-- Horno: `[[C,C,C],[C,_,C],[C,C,C]]` con `C = COBBLESTONE` → 1 `FURNACE`.
-- Antorcha: `[[COAL],[STICK]]` → 4 `TORCH`.
+### Fase 7 — Recetas de crafteo (`crafting.ts`)  ✅ HECHO
+- Horno: `[[C,C,C],[C,_,C],[C,C,C]]` (`C = COBBLESTONE`) → 1 `FURNACE`. Solo 3×3.
+- Antorcha: `[[COAL],[S]]` y `[[CHARCOAL],[S]]` → 4 `TORCH`. 2×2 y 3×3.
+- Verificado con test de nodo (horno solo cuadra en 3×3, antorchas en ambas).
 
 ## Notas de arquitectura útiles
 - El mesher corre en el **hilo principal**, sin worker.
