@@ -537,9 +537,17 @@ function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
 
 function tryNaturalMobSpawn(): void {
   if (mobSpawnBlockTimer > 0) return; // still cooling down after the last death/despawn
-  if (mobManager.count >= MOB_SPAWN_GLOBAL_CAP) return;
+  // Both caps must only count passive mobs - mobManager.count/countNear are
+  // unfiltered (every live mob, any kind), so without excluding zombies here
+  // a healthy hostile population (their own cap allows up to 8 surface + 12
+  // underground) alone clears MOB_SPAWN_GLOBAL_CAP and permanently blocks
+  // animal spawning regardless of how few animals are actually nearby -
+  // tryHostileMobSpawn() already scopes its own caps with isHostileKind for
+  // exactly this reason, this just needed the same treatment.
+  const isPassiveMob = (m: { kind: MobKind }) => !isHostileKind(m.kind);
+  if (mobManager.countAll(isPassiveMob) >= MOB_SPAWN_GLOBAL_CAP) return;
   const p = player.state.position;
-  if (mobManager.countNear(p, MOB_SPAWN_MAX_RADIUS) >= MOB_SPAWN_LOCAL_CAP) return;
+  if (mobManager.countNear(p, MOB_SPAWN_MAX_RADIUS, isPassiveMob) >= MOB_SPAWN_LOCAL_CAP) return;
 
   for (let attempt = 0; attempt < 6; attempt++) {
     const angle = Math.random() * Math.PI * 2;
