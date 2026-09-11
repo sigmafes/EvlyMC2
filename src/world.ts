@@ -461,6 +461,11 @@ export class World {
   private markBlockDirty(x: number, y: number, z: number) {
     const chunkX = this.blockStore.getChunkCoordinate(x);
     const chunkZ = this.blockStore.getChunkCoordinate(z);
+    // The cell itself: add()/remove() already dirty it via chunk.setBlock(),
+    // but a setBlockData() change (a slab doubling, a stair's facing) never
+    // touches the block array, so without this its subchunk kept the old mesh
+    // until some neighbouring edit happened to rebuild it.
+    this.blockStore.markDirty(x, y, z);
     this.markEdgeNeighbors(chunkX, chunkZ, x, z, y);
     this.markFireNeighborsDirty(x, y, z);
     this.markStairNeighborsDirty(x, y, z);

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { ShapeBox } from './block-shapes';
 
 const STAGES = 10; // break.png is a 160x16 atlas: 10 crack stages
 const ATLAS_W = 160;
@@ -41,7 +42,9 @@ const CRACK_STRENGTH = 0.55;
  * inside the solid block - see BlockInteraction.blockSurfaceLight.)
  */
 export class BreakOverlay {
-  private readonly mesh: THREE.Mesh;
+  private readonly group = new THREE.Group();
+  private readonly meshes: THREE.Mesh[] = [];
+  private readonly geometry = new THREE.BoxGeometry(1, 1, 1);
   private readonly material: THREE.MeshBasicMaterial;
   private readonly texture: THREE.Texture;
 
@@ -100,28 +103,56 @@ export class BreakOverlay {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
     });
-    this.mesh = new THREE.Mesh(new THREE.BoxGeometry(1.002, 1.002, 1.002), this.material);
-    this.mesh.renderOrder = 3;
-    this.mesh.visible = false;
+    this.group.visible = false;
   }
 
   attachToScene(scene: THREE.Scene): void {
-    scene.add(this.mesh);
+    scene.add(this.group);
   }
 
-  /** `progress` in [0,1). Any value < 0 hides the overlay. */
-  setProgress(pos: THREE.Vector3, progress: number): void {
+  /** Grows the box pool on demand - a stair needs up to three, everything else one. */
+  private boxAt(index: number): THREE.Mesh {
+    let mesh = this.meshes[index];
+    if (!mesh) {
+      mesh = new THREE.Mesh(this.geometry, this.material);
+      mesh.renderOrder = 3;
+      this.group.add(mesh);
+      this.meshes[index] = mesh;
+    }
+    return mesh;
+  }
+
+  /**
+   * `progress` in [0,1). Any value < 0 hides the overlay. `shape` (local
+   * 0..1 cell coordinates) cracks a stair/slab across its actual faces
+   * instead of wrapping a full cube around it; omit it for normal blocks.
+   */
+  setProgress(pos: THREE.Vector3, progress: number, shape?: ShapeBox[] | null): void {
     if (progress < 0) {
-      this.mesh.visible = false;
+      this.hide();
       return;
     }
     const stage = Math.min(STAGES - 1, Math.max(0, Math.floor(progress * STAGES)));
     this.texture.offset.x = stage / STAGES;
-    this.mesh.position.copy(pos);
-    this.mesh.visible = true;
+
+    const boxes: ShapeBox[] = shape && shape.length > 0
+      ? shape
+      : [{ x0: 0, y0: 0, z0: 0, x1: 1, y1: 1, z1: 1 }];
+    boxes.forEach((b, i) => {
+      const mesh = this.boxAt(i);
+      mesh.position.set(
+        pos.x - 0.5 + (b.x0 + b.x1) / 2,
+        pos.y - 0.5 + (b.y0 + b.y1) / 2,
+        pos.z - 0.5 + (b.z0 + b.z1) / 2,
+      );
+      // The same 1.002 inflation the single cube used, to clear the surface.
+      mesh.scale.set((b.x1 - b.x0) + 0.002, (b.y1 - b.y0) + 0.002, (b.z1 - b.z0) + 0.002);
+    });
+    for (let i = 0; i < this.meshes.length; i += 1) this.meshes[i].visible = i < boxes.length;
+    this.group.visible = true;
   }
 
   hide(): void {
-    this.mesh.visible = false;
+    this.group.visible = false;
   }
 }
