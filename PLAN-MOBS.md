@@ -115,11 +115,29 @@ Altura total resultante (patas + cuerpo parado) ≈ 1.375 bloques, cerca de la
 proporción vainilla real de la vaca (~1.4). Compila limpio; pivots con la misma
 salvedad que el pig (aproximación razonada, ajuste visual pendiente de la Fase H).
 
-## Fase F — Sheep (con lana)
-Igual, más el `overlay` de lana: caja inflada sobre cuerpo+patas con alpha, mismo
-truco que `addOverlay()` del jugador. Esto valida que `MobModel` soporte overlays
-antes de darlo por cerrado (si algo del diseño de la Fase B no alcanza, se ajusta
-acá, con los 3 casos reales ya sobre la mesa en vez de reabrir el diseño después).
+## Fase F — Sheep  ✅ HECHO
+`src/sheep-model.ts`. Cabeza 6×6×8 px, cuerpo 8×16×6 px rotado 90°, pata 4×12×4 px
+- mismo método de medición y verificación que pig/cow.
+
+**Cambio de plan real:** esta textura NO tiene una capa de lana separada e
+inflada como supuse en el diseño original de esta fase (ni como el `addOverlay`
+del jugador) - revisé todo el archivo (nada usado más allá de x=55 en un canvas
+de 64px) y el patrón de lana está directamente horneado en la textura del cuerpo
+normal, no en una segunda región. `MobModel` conserva el soporte de `overlay`
+que armé en la Fase B (nadie lo está usando todavía, pero sigue disponible para
+cuando haga falta un mob real con dos capas), sin inventar un overlay falso acá
+solo por "probarlo".
+
+**Bug real encontrado y corregido en D y E de paso:** la fórmula que usé para
+mapear las caras `left`/`back` tenía el ancho cruzado (usaba `dx` donde iba
+`dz` y viceversa) - con cabezas/patas cúbicas (pig) no se notaba porque
+`dx == dz`, pero en los 3 cuerpos (ninguno cúbico) sí estaba mal. Lo detecté
+al derivar sheep con cuidado extra y volví para arreglar `pig-model.ts` y
+`cow-model.ts` (`BODY_UV`/`HEAD_UV` de la vaca) antes de seguir. Nunca se había
+visto porque el bounding box total (lo único que había verificado pixel a
+pixel hasta ahora) da igual sin importar el orden interno de `dx`/`dz` - los
+sub-splits internos de una textura de pelaje no tienen borde de color visible
+para chequear a ojo.
 
 ## Fase G — Animación idle + caminata
 Dentro de `MobModel.update(delta)`: bob de cabeza sutil en idle, y cuando

@@ -16,16 +16,17 @@ const TEXTURE_H = 32;
 //   row 1 (height dz): [[skip dz] top(dx) | bottom(dx)]
 //   row 2 (height dy): [right(dz) | front(dx) | left(dz) | back(dx)]
 
-// Head: texOffs(0,0), size 8x8x6 px.
+// Head: texOffs(0,0), size 8x8x6 px. right/left are dz(6) wide, front/back are
+// dx(8) wide - not symmetric, left/back can't just mirror right/front's width.
 const HEAD_UV: FaceRects = {
   py: [6, 0, 13, 5], ny: [14, 0, 21, 5],
-  nx: [0, 6, 5, 13], nz: [6, 6, 13, 13], px: [14, 6, 21, 13], pz: [22, 6, 27, 13],
+  nx: [0, 6, 5, 13], nz: [6, 6, 13, 13], px: [14, 6, 19, 13], pz: [20, 6, 27, 13],
 };
 
 // Body: texOffs(18,4), size 12x18x10 px - modelled lying along Z, stood up via rotateX90.
 const BODY_UV: FaceRects = {
   py: [28, 4, 39, 13], ny: [40, 4, 51, 13],
-  nx: [18, 14, 27, 31], nz: [28, 14, 39, 31], px: [40, 14, 51, 31], pz: [52, 14, 61, 31],
+  nx: [18, 14, 27, 31], nz: [28, 14, 39, 31], px: [40, 14, 49, 31], pz: [50, 14, 61, 31],
 };
 
 // Leg: texOffs(0,16), size 4x12x4 px - taller than the pig's, shared by all 4 legs.

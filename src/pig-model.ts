@@ -22,9 +22,11 @@ const HEAD_UV: FaceRects = {
 };
 
 // Body: texOffs(28,8), size 10x16x8 px - modelled lying along Z, stood up via rotateX90.
+// right/left are dz(8) wide, front/back are dx(10) wide - NOT symmetric like the
+// (cubic) head, so left/back can't just mirror right/front's width.
 const BODY_UV: FaceRects = {
   py: [36, 8, 45, 15], ny: [46, 8, 55, 15],
-  nx: [28, 16, 35, 31], nz: [36, 16, 45, 31], px: [46, 16, 55, 31], pz: [56, 16, 63, 31],
+  nx: [28, 16, 35, 31], nz: [36, 16, 45, 31], px: [46, 16, 53, 31], pz: [54, 16, 63, 31],
 };
 
 // Leg: texOffs(0,16), size 4x6x4 px - shared by all 4 legs, just repositioned.
