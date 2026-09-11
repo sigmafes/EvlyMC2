@@ -84,7 +84,12 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.LAPIS_ORE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.REDSTONE_ORE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.CRAFTING_TABLE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: { catchOdds: 5, burnOdds: 20 } },
-  [BlockId.GLASS]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
+  // Glass is fully transparent to light, not just to the eye: opacity 0 is
+  // what LightEngine.hasSkyAccess() requires to keep a column daylit (any
+  // value above 0 anywhere overhead cuts the whole column off from the sky),
+  // and it's also what makes block light cross it at the same 1-per-cell
+  // falloff as air instead of paying an extra level.
+  [BlockId.GLASS]: { opacity: 0, emission: 0, liquid: false, cull: false, flammable: null },
   [BlockId.FURNACE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.TORCH]: { opacity: 0, emission: 15, liquid: false, cull: false, flammable: null },
   // Same odds as real Minecraft wool (as flammable as leaves): catches easily
