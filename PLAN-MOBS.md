@@ -38,7 +38,7 @@ cambiar su comportamiento. `player-model.ts` pasa a importarlos desde ahí. Ries
 bajo (mover código, no reescribirlo) — es la base para todo lo demás y conviene
 dejarla aparte para no mezclar "mover" con "escribir cosas nuevas" en el mismo diff.
 
-## Fase B — `MobModel`: builder genérico de cuadrúpedo
+## Fase B — `MobModel`: builder genérico de cuadrúpedo  ✅ HECHO
 Nueva clase (o función factory) `src/mob-model.ts` que arma cabeza + cuerpo + 4
 patas a partir de una tabla de configuración por especie:
 ```ts
