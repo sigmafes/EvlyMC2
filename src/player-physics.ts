@@ -66,6 +66,8 @@ export class PlayerPhysics {
     private readonly isWater?: (x: number, y: number, z: number) => boolean,
     private readonly getWaterFlow?: (x: number, y: number, z: number) => THREE.Vector3,
     private readonly isIce?: (x: number, y: number, z: number) => boolean,
+    /** Arbitrary-range solid-block query (unlike `getBlocks`, which is bounded tight around the player) - used only to scan upward for an escape gap when embedded in terrain. */
+    private readonly isSolidBlockAt?: (x: number, y: number, z: number) => boolean,
   ) {
     this.spawnPosition = new THREE.Vector3(0, 48.25, 0);
   }
@@ -151,6 +153,15 @@ export class PlayerPhysics {
    * Movement already rotated by player yaw.
    */
   updatePhysics(direction: THREE.Vector3, wantJump: boolean, sprinting: boolean, delta: number) {
+    // If the player is embedded in solid terrain (e.g. new terrain generated
+    // around/under them, or they were teleported into a wall), skip the
+    // normal per-axis collision resolver entirely this frame: it nudges
+    // position away from EACH overlapping block independently, and several
+    // overlapping at once can compound into a violent sideways shove that's
+    // still inside the world instead of a clean escape. Go straight up to
+    // the nearest 2-block gap of open air instead.
+    if (this.tryEscapeStuck()) return;
+
     const inWater = this.isInWater();
 
     if (this.flying) {
@@ -365,6 +376,39 @@ export class PlayerPhysics {
     const bottom = this.state.position.y - this.playerEyeHeight;
     const top = this.state.position.y + (hitboxHeight - this.playerEyeHeight);
     return top > block.min.y && bottom < block.max.y;
+  }
+
+  /** True if the current position already overlaps some solid block on both axes - genuinely embedded, not just grazing an edge. */
+  private isEmbedded(): boolean {
+    for (const block of this.getBlocks()) {
+      if (this.overlapsHorizontally(block.collider) && this.overlapsVertically(block.collider)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * If embedded, scans straight up (at the player's current x/z, rounded to
+   * the column) for the first 2-block-tall gap of open air and teleports
+   * the feet there, zeroing velocity - a clean escape instead of letting
+   * resolveHorizontalCollisions() shove through solid terrain. Returns false
+   * (a no-op) when not embedded, or when there's no `isSolidBlockAt` query
+   * to scan with.
+   */
+  private tryEscapeStuck(): boolean {
+    if (!this.isSolidBlockAt || !this.isEmbedded()) return false;
+    const x = Math.round(this.state.position.x);
+    const z = Math.round(this.state.position.z);
+    const startY = Math.floor(this.state.position.y - this.playerEyeHeight);
+    const MAX_SCAN = 256; // world is nowhere near this tall - just a hard stop against a pathological all-solid column
+    for (let y = startY; y < startY + MAX_SCAN; y += 1) {
+      if (!this.isSolidBlockAt(x, y, z) && !this.isSolidBlockAt(x, y + 1, z)) {
+        this.state.position.set(x, y + this.playerEyeHeight, z);
+        this.state.velocity.set(0, 0, 0);
+        this.airPeakY = null;
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

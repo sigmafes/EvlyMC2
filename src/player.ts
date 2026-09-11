@@ -81,7 +81,10 @@ export class PlayerController {
     private readonly getBlock?: (x: number, y: number, z: number) => BlockId,
     private readonly soundManager?: SoundManager,
   ) {
-    this.physics = new PlayerPhysics(getBlocks, worldBounds, isWater, getWaterFlow, isIce);
+    this.physics = new PlayerPhysics(
+      getBlocks, worldBounds, isWater, getWaterFlow, isIce,
+      this.getBlock ? (x, y, z) => isSolidBlock(this.getBlock!(x, y, z)) : undefined,
+    );
     this.baseFov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 0;
     document.addEventListener('keydown', this.onKeyDown);
     document.addEventListener('keyup', this.onKeyUp);
