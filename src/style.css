@@ -1117,6 +1117,66 @@ body {
 #skin-import-error[hidden] { display: none; }
 #player-options-form .mc-button { width: 100%; height: 38px; font-size: 16px; }
 
+/* ===== Access gate (closed-beta key screen, shown before anything else) ===== */
+#access-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 2000; /* above #intro's 1000 - this must block everything */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #202020;
+  background-image: url('../gui/bg.png');
+  background-repeat: repeat;
+  background-size: 64px 64px;
+  background-blend-mode: multiply;
+  image-rendering: pixelated;
+  font-family: 'Tricraft', sans-serif;
+}
+#access-gate[hidden] { display: none; }
+#access-gate-panel {
+  width: min(360px, 88vw);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  text-align: center;
+}
+#access-gate-panel h1 {
+  margin: 0;
+  color: #ffffff;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
+}
+#access-gate-message {
+  margin: 0 0 6px;
+  color: #ffff55; /* yellow: normal prompt */
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
+  font-size: 15px;
+}
+#access-gate-message.access-gate-error {
+  color: #ff5555; /* red: invalid key */
+}
+.access-gate-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  color: #fff;
+  font-size: 13px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+}
+.access-gate-row input {
+  height: 36px;
+  padding: 0 10px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 16px;
+}
+.access-gate-row input:focus { outline: none; border-color: #fff; }
+#access-gate-continue { align-self: center; margin-top: 4px; }
+
 /* ===== Intro (centered Mojang video, running mouse, fade to menu) ===== */
 #intro {
   position: fixed;

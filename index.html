@@ -6,6 +6,21 @@
     <title>Bedrock World</title>
   </head>
   <body style="background:#000000">
+    <section id="access-gate" hidden>
+      <div id="access-gate-panel">
+        <h1>Beta Closed!</h1>
+        <p id="access-gate-message">Enter your access key</p>
+        <label class="access-gate-row" for="access-gate-name">
+          <span>Name</span>
+          <input id="access-gate-name" type="text" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="access-gate-row" for="access-gate-key">
+          <span>Key</span>
+          <input id="access-gate-key" type="text" autocomplete="off" spellcheck="false" />
+        </label>
+        <button id="access-gate-continue" class="mc-button" type="button"><span>Continue</span></button>
+      </div>
+    </section>
     <section id="intro" hidden>
       <div id="intro-bg"></div>
       <video id="intro-video" playsinline></video>

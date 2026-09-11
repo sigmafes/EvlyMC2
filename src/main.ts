@@ -45,6 +45,12 @@ import { MainMenu } from './main-menu';
 import { playIntro } from './intro';
 import { loadSettings } from './settings';
 import { activeWorld } from './worlds';
+import { waitForAccessGate } from './access-gate';
+
+// Closed-beta key screen: blocks here, before anything else (intro included)
+// runs, until a valid name+key pair is submitted (or this browser already
+// unlocked it earlier).
+await waitForAccessGate();
 
 async function startGame() {
 const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas')!;
