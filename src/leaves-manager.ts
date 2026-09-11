@@ -20,8 +20,13 @@ export class LeavesManager {
 
   /** LCE `PRESERVE_RANGE`: max flood-fill distance from a log. */
   private static readonly RANGE = 4;
-  /** Per-tick chance an orphaned leaf actually pops (so a canopy fades out). */
-  private static readonly DECAY_CHANCE = 0.06;
+  /**
+   * Orphaned-leaf decay probability per second (not per call): `update()` used
+   * to roll a flat 0.06 once per game-loop frame, so decay speed scaled with
+   * framerate (~0.28s mean life at 60fps, near-instant) instead of real time.
+   * Tuned so a felled tree's canopy fully clears in roughly 10-20s.
+   */
+  private static readonly DECAY_RATE_PER_SECOND = 0.35;
 
   addLeaf(x: number, y: number, z: number) {
     this.watched.add(key(x, y, z));
@@ -46,8 +51,9 @@ export class LeavesManager {
   }
 
   /** Returns the leaves that should be removed this tick. */
-  update(getBlock: GetBlock): Array<[number, number, number]> {
+  update(getBlock: GetBlock, delta: number): Array<[number, number, number]> {
     const remove: Array<[number, number, number]> = [];
+    const decayChance = LeavesManager.DECAY_RATE_PER_SECOND * delta;
 
     for (const posKey of this.watched) {
       const [x, y, z] = posKey.split(',').map(Number) as [number, number, number];
@@ -63,7 +69,7 @@ export class LeavesManager {
       }
 
       // Orphaned: pop with a chance so the whole canopy doesn't vanish at once.
-      if (Math.random() < LeavesManager.DECAY_CHANCE) {
+      if (Math.random() < decayChance) {
         remove.push([x, y, z]);
         this.watched.delete(posKey);
       }

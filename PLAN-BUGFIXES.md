@@ -78,7 +78,7 @@ independiente, de menor a mayor riesgo.
     llama `chat.openInput()`. Añadir `chat.closeInput()` (público) y que el botón
     alterne según `chat.isOpen`.
 
-## Fase E — Hojas / decay
+## Fase E — Hojas / decay  ✅ HECHO
 11. **Decaen demasiado rápido.** `LeavesManager.DECAY_CHANCE = 0.06` se evalúa en
     `world.updateLeavesDecay()`, llamado una vez por frame del game-loop (no por
     "tick" de Minecraft) — a 60 fps eso es ~0.28s de vida media, casi instantáneo, y

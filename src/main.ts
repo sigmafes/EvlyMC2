@@ -99,7 +99,10 @@ if (!Number.isFinite(worldSeed) || worldSeed === 0) {
 const terrainNoise = new TerrainNoise(worldSeed);
 const soundManager = new SoundManager();
 await soundManager.initialize();
-const world = new World(scene, createBlockMaterials(), terrainNoise, worldSeed, soundManager);
+// droppedItems is constructed later (needs `world`); this indirection lets
+// World's constructor take the drop callback right away, same as soundManager.
+let spawnDrop: ((id: number, count: number, pos: THREE.Vector3) => void) | undefined;
+const world = new World(scene, createBlockMaterials(), terrainNoise, worldSeed, soundManager, (id, count, pos) => spawnDrop?.(id, count, pos));
 await world.loadPersistedEdits(); // apply saved builds before any chunk is generated
 const lightEngine = new LightEngine(world);
 world.attachLightEngine(lightEngine);
@@ -262,6 +265,7 @@ const droppedItems = new DroppedItems(
   (stack) => inventory.addItem(stack),
   () => soundManager.playOne('player/Pop', 0.4),
 );
+spawnDrop = (id, count, pos) => droppedItems.spawn(id, count, pos);
 
 // Smelting: steps every lit/loaded furnace. Contents live in the block-data
 // side table; the phase-5 GUI feeds it items.

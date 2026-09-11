@@ -11,6 +11,7 @@ import type { LightEngine } from './light-engine';
 import type { LavaEngine, WaterEngine } from './water-engine';
 import type { FireEngine } from './fire-engine';
 import type { SoundManager } from './sound-manager';
+import { getDrops } from './drops';
 
 export type WorldBounds = {
   minX: number;
@@ -48,6 +49,8 @@ export class World {
     private readonly terrainNoise: TerrainNoise,
     readonly seed: number,
     private readonly soundManager?: SoundManager,
+    /** Same pattern as `soundManager`: lets leaf decay drop sticks/apples like a mined block. */
+    private readonly onDrop?: (id: number, count: number, pos: THREE.Vector3) => void,
   ) {
     this.chunkManager = new ChunkManager({
       viewRadius: this.viewRadius,
@@ -359,10 +362,16 @@ export class World {
     return reason;
   }
 
-  updateLeavesDecay() {
-    const positionsToRemove = this.leavesManager.update((x, y, z) => this.getBlock(x, y, z));
+  updateLeavesDecay(delta: number) {
+    const positionsToRemove = this.leavesManager.update((x, y, z) => this.getBlock(x, y, z), delta);
     for (const [x, y, z] of positionsToRemove) {
-      this.setBlock(x, y, z, BlockId.AIR);
+      // this.remove() (not the non-persisting this.setBlock()) so a decayed
+      // leaf stays gone after a reload instead of the deterministic tree
+      // generation putting it right back.
+      this.remove(x, y, z);
+      for (const drop of getDrops(BlockId.OAK_LEAVES, true)) {
+        this.onDrop?.(drop.id, drop.count, new THREE.Vector3(x + 0.5, y + 0.5, z + 0.5));
+      }
     }
   }
 

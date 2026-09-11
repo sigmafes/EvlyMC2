@@ -49,7 +49,7 @@ export class GameLoop {
     // World updates
     this.world.updateLoadedChunks(this.player.state.position.x, this.player.state.position.z);
     this.world.loadPendingChunks(3); // build queued chunks, time-budgeted
-    this.world.updateLeavesDecay();
+    this.world.updateLeavesDecay(cappedDelta);
     this.world.updateWaterAnimation(elapsedTime);
     this.world.updateWater(cappedDelta);
     this.world.updateFire(cappedDelta);
