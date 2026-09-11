@@ -61,6 +61,12 @@ export class TouchControls {
     this.sneakButton?.classList.toggle('pressed', on);
   }
 
+  /** Opacity of every on-screen button, 10-100 (Options -> Button Opacity). */
+  setButtonOpacity(percent: number): void {
+    const clamped = Math.min(100, Math.max(10, percent));
+    this.root.style.setProperty('--tc-btn-opacity', String(clamped / 100));
+  }
+
   constructor(private readonly cb: TouchControlsCallbacks) {
     document.body.classList.add('touch');
 

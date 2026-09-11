@@ -503,6 +503,8 @@ body {
   appearance: none;
   cursor: pointer;
 }
+.slider-row input:disabled { cursor: default; opacity: 0.4; filter: grayscale(1); }
+.slider-row:has(input:disabled) span { opacity: 0.5; }
 
 .slider-row input::-webkit-slider-runnable-track {
   height: 100%;
@@ -1468,6 +1470,7 @@ body.touch .touch-btn {
   text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
   -webkit-tap-highlight-color: transparent;
   filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.45));
+  opacity: var(--tc-btn-opacity, 1); /* Options -> Button Opacity */
 }
 body.touch .touch-btn.pressed,
 body.touch .touch-btn:active {

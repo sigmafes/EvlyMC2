@@ -2,6 +2,10 @@
 export type GameSettings = {
   fov: number;
   sensitivity: number;
+  /** Look sensitivity for touch-drag (Android); separate from the desktop mouse's `sensitivity`. */
+  touchSensitivity: number;
+  /** On-screen touch button opacity, 10-100. */
+  buttonOpacity: number;
   renderDistance: number;
   smoothLighting: boolean;
   fog: boolean;
@@ -14,6 +18,8 @@ const KEY = 'evlymc-settings';
 export const DEFAULT_SETTINGS: GameSettings = {
   fov: 70,
   sensitivity: 100,
+  touchSensitivity: 100,
+  buttonOpacity: 100,
   renderDistance: 5,
   smoothLighting: true,
   fog: true,

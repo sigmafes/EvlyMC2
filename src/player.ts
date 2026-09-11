@@ -62,6 +62,9 @@ export class PlayerController {
   /** Rising-edge latch for entering water (splash sound). */
   private wasInWater = false;
   private waterEntered = false;
+  /** Timestamp (ms) of the last jump-button press, for double-tap-to-fly. */
+  private lastJumpPressTime = 0;
+  private static readonly DOUBLE_JUMP_MS = 300;
 
   constructor(
     private readonly camera: THREE.Camera,
@@ -99,7 +102,32 @@ export class PlayerController {
 
   /** On-screen jump button held state. */
   setJumpHeld(held: boolean) {
+    if (held && !this.touchJump) this.registerJumpPress();
     this.touchJump = held;
+  }
+
+  /** /fly permission: without it, double-tapping jump does nothing. */
+  setFlyEnabled(enabled: boolean) {
+    this.physics.setCanFly(enabled);
+  }
+
+  get flyEnabled(): boolean {
+    return this.physics.flyEnabled;
+  }
+
+  get isFlying(): boolean {
+    return this.physics.isFlying;
+  }
+
+  /** Two jump presses within DOUBLE_JUMP_MS toggle flight (needs /fly on first). */
+  private registerJumpPress() {
+    const now = performance.now();
+    if (now - this.lastJumpPressTime < PlayerController.DOUBLE_JUMP_MS) {
+      this.physics.setFlying(!this.physics.isFlying);
+      this.lastJumpPressTime = 0;
+    } else {
+      this.lastJumpPressTime = now;
+    }
   }
 
   /** Fired whenever sneak is forced off/on programmatically (sprint <-> sneak exclusion), so the on-screen sneak button can stay in sync. */
@@ -339,7 +367,10 @@ export class PlayerController {
     if (event.code === 'ShiftLeft') {
       this.setSneak(true);
     }
-    if (event.code === 'Space') event.preventDefault();
+    if (event.code === 'Space') {
+      event.preventDefault();
+      if (!event.repeat && !this.movementLocked) this.registerJumpPress();
+    }
   };
 
   private onKeyUp = (event: KeyboardEvent) => {

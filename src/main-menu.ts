@@ -15,6 +15,7 @@ import track3 from '../gui/bg/mutation.ogg';
 import splashRaw from '../gui/splash.txt?raw';
 import { playClick } from './ui-sound';
 import { WorldSelect } from './world-select';
+import { isTouchDevice } from './is-touch';
 
 const MUSIC = [track0, track1, track2, track3];
 const SPLASHES = splashRaw.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -199,7 +200,15 @@ export class MainMenu {
     };
     slider('menu-fov', 'menu-fov-value', 'fov');
     slider('menu-sensitivity', 'menu-sensitivity-value', 'sensitivity');
+    slider('menu-touch-sensitivity', 'menu-touch-sensitivity-value', 'touchSensitivity');
+    slider('menu-button-opacity', 'menu-button-opacity-value', 'buttonOpacity');
     slider('menu-render-distance', 'menu-render-distance-value', 'renderDistance');
+    // Android-only settings: nothing to tune on desktop (no touch look-drag, no
+    // on-screen buttons), so grey them out there.
+    if (!isTouchDevice()) {
+      document.querySelector<HTMLInputElement>('#menu-touch-sensitivity')!.disabled = true;
+      document.querySelector<HTMLInputElement>('#menu-button-opacity')!.disabled = true;
+    }
 
     const toggle = (id: string, key: 'smoothLighting' | 'fog' | 'alexSkin' | 'viewBob') => {
       const button = document.querySelector<HTMLButtonElement>(`#${id}`)!;

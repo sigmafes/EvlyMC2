@@ -33,6 +33,9 @@ export class PlayerPhysics {
   private readonly ACCELERATION = 35; // blocks/second^2 - how fast velocity ramps up toward target
   private readonly CROUCH_HITBOX = 1.6;
   private readonly NORMAL_HITBOX = 1.9;
+  private readonly FLY_SPEED = 8;
+  private readonly FLY_SPEED_SPRINT = 16;
+  private readonly FLY_VERTICAL_SPEED = 8;
 
   readonly state: PlayerPhysicsState = {
     position: new THREE.Vector3(0, 48.25, 0),
@@ -51,6 +54,9 @@ export class PlayerPhysics {
   private static readonly STROKE_INTERVAL = 0.35;
   private static readonly STROKE_IMPULSE = 2.6;
   private static readonly STROKE_SINK = -0.6;
+  /** /fly permission (like creative flight) - must be granted before setFlying() can turn flight on. */
+  private canFly = false;
+  private flying = false;
 
   constructor(
     private readonly getBlocks: () => Iterable<BlockCollider>,
@@ -73,6 +79,27 @@ export class PlayerPhysics {
   setSneaking(sneaking: boolean) {
     this.state.sneaking = sneaking;
     this.state.eyeHeight = sneaking ? 1.27 : 1.62;
+  }
+
+  /** Grant/revoke the /fly permission; revoking also force-lands the player. */
+  setCanFly(canFly: boolean) {
+    this.canFly = canFly;
+    if (!canFly) this.flying = false;
+  }
+
+  get flyEnabled(): boolean {
+    return this.canFly;
+  }
+
+  get isFlying(): boolean {
+    return this.flying;
+  }
+
+  /** Toggle actual flight (double-tap jump); no-op without the /fly permission. */
+  setFlying(flying: boolean) {
+    if (!this.canFly) { this.flying = false; return; }
+    this.flying = flying;
+    if (flying) { this.airPeakY = null; this.fallImpact = 0; }
   }
 
   isInWater(): boolean {
@@ -109,7 +136,24 @@ export class PlayerPhysics {
   updatePhysics(direction: THREE.Vector3, wantJump: boolean, sprinting: boolean, delta: number) {
     const inWater = this.isInWater();
 
-    if (inWater) {
+    if (this.flying) {
+      // Creative-style flight: no gravity, ascend/descend directly from input.
+      // Horizontal/vertical collision with the world still applies below (the
+      // same resolve*Collisions() calls every other branch goes through), so
+      // flying doesn't clip through blocks - only the ground stops pulling you.
+      const speed = sprinting ? this.FLY_SPEED_SPRINT : this.FLY_SPEED;
+      const targetVelX = direction.x * speed;
+      const targetVelZ = direction.z * speed;
+      const maxStep = this.ACCELERATION * delta;
+      this.state.velocity.x = this.moveTowards(this.state.velocity.x, targetVelX, maxStep);
+      this.state.velocity.z = this.moveTowards(this.state.velocity.z, targetVelZ, maxStep);
+
+      let targetVelY = 0;
+      if (wantJump) targetVelY = this.FLY_VERTICAL_SPEED;
+      else if (this.state.sneaking) targetVelY = -this.FLY_VERTICAL_SPEED;
+      this.state.velocity.y = this.moveTowards(this.state.velocity.y, targetVelY, maxStep);
+      this.state.grounded = false;
+    } else if (inWater) {
       const speed = sprinting ? 3.8 : 2.5;
       const acceleration = direction.lengthSq() > 0 ? 8 : 3;
       const flow = this.getWaterFlow

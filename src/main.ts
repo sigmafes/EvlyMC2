@@ -31,7 +31,8 @@ import { ITEMS, maxStackOf } from './item';
 import { CraftingTableUI } from './crafting-table-ui';
 import { FurnaceUI } from './furnace-ui';
 import { TouchControls } from './touch-controls';
-import { lockPointer } from './is-touch';
+import { lockPointer, isTouchDevice } from './is-touch';
+import { capturePanorama, downloadPanoramaZip } from './panorama';
 import { keepFullscreenOnGesture, linkPwaManifest } from './fullscreen';
 import { makeStack } from './item-stack';
 import { DayNightCycle } from './day-night-cycle';
@@ -137,6 +138,9 @@ player.setSpawn(SPAWN.x, SPAWN.y, SPAWN.z);
 const playerModel = new PlayerModel();
 scene.add(playerModel.getGroup());
 let viewBobOn = true;
+// touchControls is constructed later (needs `player`/`interaction`/etc.); this
+// indirection lets PauseMenu's callback list be wired up right away.
+let applyButtonOpacity: ((percent: number) => void) | undefined;
 const pauseMenu = new PauseMenu(
   camera,
   scene,
@@ -146,6 +150,7 @@ const pauseMenu = new PauseMenu(
   (chunks) => world.setViewRadius(chunks),
   () => { void leaveWorld(); },
   (on) => { viewBobOn = on; player.setViewBobEnabled(on); },
+  (percent) => applyButtonOpacity?.(percent),
 );
 
 // Save everything and return to the main menu (skipping the intro on reload).
@@ -375,6 +380,30 @@ chat.registerCommand('time', (args) => {
 });
 chat.registerCommand('seed', () => `World seed: ${worldSeed}`);
 
+let panoramaInFlight = false;
+chat.registerCommand('panorama', () => {
+  if (isTouchDevice()) return 'The /panorama command is not available on Android.';
+  if (panoramaInFlight) return 'Already capturing a panorama...';
+  panoramaInFlight = true;
+  const capturePos = camera.position.clone();
+  capturePanorama(renderer, scene, capturePos)
+    .then((blob) => {
+      downloadPanoramaZip(blob);
+      chat.system('Panorama saved.');
+    })
+    .catch((err) => chat.system(`Panorama capture failed: ${(err as Error).message}`))
+    .finally(() => { panoramaInFlight = false; });
+  return 'Capturing 360° panorama...';
+});
+
+chat.registerCommand('fly', () => {
+  const enabled = !player.flyEnabled;
+  player.setFlyEnabled(enabled);
+  return enabled
+    ? 'Flight enabled. Double-tap jump to fly, hold jump to ascend, sneak to descend.'
+    : 'Flight disabled.';
+});
+
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 chat.registerCommand('give', (args) => {
   if (args.length === 0) return 'Usage: /give <item|block> [count]';
@@ -433,6 +462,8 @@ const touchControls = TouchControls.isTouchDevice()
     })
   : null;
 player.onSneakChange = (on) => touchControls?.setSneakVisual(on);
+applyButtonOpacity = (percent) => touchControls?.setButtonOpacity(percent);
+touchControls?.setButtonOpacity(menuSettings.buttonOpacity);
 
 const clock = new THREE.Clock();
 

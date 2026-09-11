@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { playClick } from './ui-sound';
-import { lockPointer } from './is-touch';
+import { lockPointer, isTouchDevice } from './is-touch';
 import { loadSettings, saveSettings } from './settings';
 
 export type ModelAdjustments = {
@@ -17,6 +17,8 @@ export class PauseMenu {
   private readonly optionsView: HTMLElement;
   private readonly fovSlider: HTMLInputElement;
   private readonly sensitivitySlider: HTMLInputElement;
+  private readonly touchSensitivitySlider: HTMLInputElement;
+  private readonly buttonOpacitySlider: HTMLInputElement;
   private readonly renderDistanceSlider: HTMLInputElement;
   private readonly fogToggle: HTMLButtonElement;
   private readonly smoothLightingToggle: HTMLButtonElement;
@@ -29,6 +31,8 @@ export class PauseMenu {
   private underwater = false;
   private paused = false;
   mouseSensitivity = 100;
+  /** Look sensitivity for touch-drag (Android only; sliders are disabled on desktop). */
+  touchSensitivity = 100;
 
   modelAdjustments: ModelAdjustments = {
     head: { x: 0, y: 0, z: 0 },
@@ -47,12 +51,15 @@ export class PauseMenu {
     private readonly onRenderDistanceChange: (chunks: number) => void = () => {},
     private readonly onLeaveWorld: () => void = () => {},
     private readonly onViewBobChange: (enabled: boolean) => void = () => {},
+    private readonly onButtonOpacityChange: (percent: number) => void = () => {},
   ) {
     this.root = document.querySelector<HTMLElement>('#pause-menu')!;
     this.pauseView = this.root.querySelector<HTMLElement>('#pause-view')!;
     this.optionsView = this.root.querySelector<HTMLElement>('#options-view')!;
     this.fovSlider = this.root.querySelector<HTMLInputElement>('#fov-slider')!;
     this.sensitivitySlider = this.root.querySelector<HTMLInputElement>('#sensitivity-slider')!;
+    this.touchSensitivitySlider = this.root.querySelector<HTMLInputElement>('#touch-sensitivity-slider')!;
+    this.buttonOpacitySlider = this.root.querySelector<HTMLInputElement>('#button-opacity-slider')!;
     this.renderDistanceSlider = this.root.querySelector<HTMLInputElement>('#render-distance-slider')!;
     this.fogToggle = this.root.querySelector<HTMLButtonElement>('#fog-toggle')!;
     this.smoothLightingToggle = this.root.querySelector<HTMLButtonElement>('#smooth-lighting-toggle')!;
@@ -67,9 +74,16 @@ export class PauseMenu {
     this.alexSkinEnabled = s.alexSkin;
     this.viewBobEnabled = s.viewBob;
     this.mouseSensitivity = s.sensitivity;
+    this.touchSensitivity = s.touchSensitivity;
     this.setSlider(this.fovSlider, '#fov-value', s.fov);
     this.setSlider(this.sensitivitySlider, '#sensitivity-value', s.sensitivity);
+    this.setSlider(this.touchSensitivitySlider, '#touch-sensitivity-value', s.touchSensitivity);
+    this.setSlider(this.buttonOpacitySlider, '#button-opacity-value', s.buttonOpacity);
     this.setSlider(this.renderDistanceSlider, '#render-distance-value', s.renderDistance);
+    // Android-only settings: greyed out and inert on desktop, where there's no
+    // touch look-drag or on-screen buttons to tune in the first place.
+    this.touchSensitivitySlider.disabled = !isTouchDevice();
+    this.buttonOpacitySlider.disabled = !isTouchDevice();
 
     this.fovSlider.addEventListener('input', this.updateFov);
     this.fovSlider.addEventListener('input', () => {
@@ -80,6 +94,17 @@ export class PauseMenu {
       this.mouseSensitivity = Number(this.sensitivitySlider.value);
       this.root.querySelector<HTMLOutputElement>('#sensitivity-value')!.value = this.sensitivitySlider.value;
       saveSettings({ sensitivity: this.mouseSensitivity });
+    });
+    this.touchSensitivitySlider.addEventListener('input', () => {
+      this.touchSensitivity = Number(this.touchSensitivitySlider.value);
+      this.root.querySelector<HTMLOutputElement>('#touch-sensitivity-value')!.value = this.touchSensitivitySlider.value;
+      saveSettings({ touchSensitivity: this.touchSensitivity });
+    });
+    this.buttonOpacitySlider.addEventListener('input', () => {
+      const percent = Number(this.buttonOpacitySlider.value);
+      this.root.querySelector<HTMLOutputElement>('#button-opacity-value')!.value = this.buttonOpacitySlider.value;
+      this.onButtonOpacityChange(percent);
+      saveSettings({ buttonOpacity: percent });
     });
     this.renderDistanceSlider.addEventListener('change', () => {
       this.root.querySelector<HTMLOutputElement>('#render-distance-value')!.value = this.renderDistanceSlider.value;

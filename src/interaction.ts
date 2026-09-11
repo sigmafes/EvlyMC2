@@ -394,7 +394,7 @@ export class BlockInteraction {
 
   /** Drag on the canvas: rotate the view. `dx`/`dy` are pixel deltas. */
   touchLook(dx: number, dy: number) {
-    const sensitivity = (this.pauseMenu?.mouseSensitivity ?? 30) / 100;
+    const sensitivity = (this.pauseMenu?.touchSensitivity ?? 100) / 100;
     this.player.look(dx * sensitivity, dy * sensitivity);
   }
 
