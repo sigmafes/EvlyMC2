@@ -63,7 +63,7 @@ independiente, de menor a mayor riesgo.
    el depth-test por estar justo delante de la superficie real, y las del lado oculto
    quedan tapadas por el propio bloque — que es exactamente el comportamiento pedido.
 
-## Fase D — Chat en Android
+## Fase D — Chat en Android  ✅ HECHO
 9. **Borrar texto no funciona.** Encontré la causa: `Chat.onKeyDown` (listener global
    en `document`, capture-phase) intercepta *todas* las teclas cuando el chat está
    abierto, incluido Backspace, hace `preventDefault()` y recorta `this.buffer`

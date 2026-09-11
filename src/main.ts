@@ -420,7 +420,7 @@ const touchControls = TouchControls.isTouchDevice()
       onBreakEnd: () => interaction.touchBreakEnd(),
       onInventory: () => inventory.toggleInventory(),
       onThirdPerson: () => player.cycleCameraMode(),
-      onChat: () => chat.openInput(),
+      onChat: () => (chat.isOpen ? chat.closeInput() : chat.openInput()),
       onPause: () => pauseMenu.toggle(),
     })
   : null;

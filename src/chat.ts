@@ -63,6 +63,11 @@ export class Chat {
     if (!this.open) this.openChat();
   }
 
+  /** Close the chat input (on-screen chat button, tapped again while open). */
+  closeInput() {
+    if (this.open) this.closeChat(true);
+  }
+
   registerCommand(name: string, handler: ChatCommandHandler) {
     this.commands.set(name.toLowerCase(), handler);
   }
@@ -165,6 +170,13 @@ export class Chat {
       }
       return;
     }
+
+    // The hidden soft-keyboard <input> is focused on touch devices: let the
+    // native input handle every key itself (Backspace included) and rely on
+    // its own 'input'/'keydown' listeners above to stay in sync. Intercepting
+    // here too (e.g. preventDefault on Backspace) desyncs buffer vs. the
+    // input's real .value, since the native edit never actually happens.
+    if (document.activeElement === this.softInput) return;
 
     // Chat open: take over the keyboard.
     event.preventDefault();
