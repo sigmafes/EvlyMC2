@@ -3,7 +3,7 @@ import { BlockId, isInteractive, isOrientable } from './block';
 import { facingTowardPlayer } from './block-data';
 import { isBlock, foodValue } from './item';
 import { getDrops } from './drops';
-import { isShapedBlock, isSlab, isStairs } from './block-shapes';
+import { isShapedBlock, isSlab, isStairs, shapeBoxesFor } from './block-shapes';
 import { Raycast, type RaycastHit } from './raycast';
 import { BlockHighlight } from './block-highlight';
 import { BlockPlacer } from './block-placer';
@@ -142,7 +142,11 @@ export class BlockInteraction {
       const lightPosition = blockPosition.clone().add(normal).round();
       const id = this.world.getBlock(blockPosition.x, blockPosition.y, blockPosition.z);
       this.target = { position: blockPosition, lightPosition, id, normal };
-      this.highlight.updateTarget(blockPosition, id);
+      this.highlight.updateTarget(blockPosition, id, shapeBoxesFor(
+        id, blockPosition.x, blockPosition.y, blockPosition.z,
+        (x, y, z) => this.world.getBlock(x, y, z),
+        (x, y, z) => this.world.getBlockData(x, y, z),
+      ));
     }
 
     this.updateMining(delta);

@@ -27,6 +27,8 @@ export class PlayerPhysics {
   private readonly SPRINT_SPEED = 6.5;
   private readonly CROUCH_SPEED = 1;
   private readonly JUMP_FORCE = 8;
+  /** Tallest ledge you walk straight up without jumping (slab / stair step). */
+  private readonly STEP_HEIGHT = 0.55;
   private readonly FRICTION = 15;
   private readonly ICE_FRICTION = 2; // much lower friction on ice for slipping
   private readonly AIR_FRICTION = 0.5; // much weaker: preserves momentum while airborne (jumps, falls)
@@ -350,6 +352,34 @@ export class PlayerPhysics {
     return top > block.min.y && bottom < block.max.y;
   }
 
+  /**
+   * Auto-step (LCE Entity::maxUpStep): walking into something no taller than
+   * STEP_HEIGHT - a slab, or the low step of a stair - lifts you onto it
+   * instead of stopping you, so you don't have to jump up every stair.
+   * Only from the ground, and only when the stepped-up spot is actually free.
+   */
+  private tryStepUp(block: BlockCollider): boolean {
+    if (!this.state.grounded || this.state.velocity.y > 0) return false;
+    const feet = this.state.position.y - this.playerEyeHeight;
+    const rise = block.collider.max.y - feet;
+    if (rise <= 0.0001 || rise > this.STEP_HEIGHT) return false;
+
+    const steppedFeet = block.collider.max.y;
+    const steppedTop = steppedFeet + this.getHitboxHeight();
+    for (const other of this.getBlocks()) {
+      const c = other.collider;
+      if (steppedTop <= c.min.y || steppedFeet >= c.max.y) continue;
+      if (this.state.position.x + this.playerRadius <= c.min.x
+        || this.state.position.x - this.playerRadius >= c.max.x) continue;
+      if (this.state.position.z + this.playerRadius <= c.min.z
+        || this.state.position.z - this.playerRadius >= c.max.z) continue;
+      return false; // something is in the way up there
+    }
+
+    this.state.position.y = steppedFeet + this.playerEyeHeight;
+    return true;
+  }
+
   private resolveHorizontalCollisions(axis: 'x' | 'z') {
     for (const block of this.getBlocks()) {
       if (!this.overlapsVertically(block.collider)) continue;
@@ -358,6 +388,7 @@ export class PlayerPhysics {
       const overlapsZ = this.state.position.z + this.playerRadius > block.collider.min.z
         && this.state.position.z - this.playerRadius < block.collider.max.z;
       if (!overlapsX || !overlapsZ) continue;
+      if (this.tryStepUp(block)) continue;
 
       if (axis === 'x') {
         this.state.position.x = this.state.velocity.x > 0
