@@ -7,10 +7,10 @@ import { isShapedBlock, shapeBoxesFor } from './block-shapes';
 import type { TerrainNoise } from './terrain-noise';
 
 export const CHUNK_SIZE = 16;
-export const CHUNK_HEIGHT = 96;
+export const CHUNK_HEIGHT = 152; // build height (not a multiple of SUBCHUNK_HEIGHT - the last subchunk per column is just shorter, already tolerated below)
 export const CHUNK_MIN_Y = 0;
-export const CHUNK_MAX_Y = 75;
-export const WATER_LEVEL = 55;
+export const CHUNK_MAX_Y = 128; // terrain generation ceiling - distinct from CHUNK_HEIGHT, same split LCE makes (maxBuildHeight vs genDepth)
+export const WATER_LEVEL = 63;
 
 export type BlockCollider = {
   id: BlockId;
@@ -51,14 +51,16 @@ const CAVE_SCAN_RADIUS = 7;                       // LCE `radius`: scan chunks +
 const CAVE_MAX_DIST = CAVE_SCAN_RADIUS * 16 - 16; // longest a tunnel can run
 const CAVE_LAVA_Y = 10;                           // carved cells below this become lava
 
+// Y ranges scaled ~1.7x (128/75) from the old CHUNK_MAX_Y=75 tuning, keeping each
+// ore's relative depth band the same fraction of the world.
 const ORE_VEINS: { id: BlockId; veinSize: number; tries: number; minY: number; maxY: number }[] = [
-  { id: BlockId.COAL_ORE, veinSize: 16, tries: 20, minY: 5, maxY: 68 },
-  { id: BlockId.IRON_ORE, veinSize: 9, tries: 20, minY: 5, maxY: 45 },
-  { id: BlockId.GOLD_ORE, veinSize: 9, tries: 3, minY: 5, maxY: 28 },
-  { id: BlockId.REDSTONE_ORE, veinSize: 8, tries: 8, minY: 4, maxY: 16 },
-  { id: BlockId.DIAMOND_ORE, veinSize: 8, tries: 1, minY: 4, maxY: 16 },
-  { id: BlockId.LAPIS_ORE, veinSize: 7, tries: 2, minY: 8, maxY: 26 },
-  { id: BlockId.EMERALD_ORE, veinSize: 4, tries: 3, minY: 6, maxY: 36 },
+  { id: BlockId.COAL_ORE, veinSize: 16, tries: 20, minY: 5, maxY: 116 },
+  { id: BlockId.IRON_ORE, veinSize: 9, tries: 20, minY: 5, maxY: 77 },
+  { id: BlockId.GOLD_ORE, veinSize: 9, tries: 3, minY: 5, maxY: 48 },
+  { id: BlockId.REDSTONE_ORE, veinSize: 8, tries: 8, minY: 4, maxY: 27 },
+  { id: BlockId.DIAMOND_ORE, veinSize: 8, tries: 1, minY: 4, maxY: 27 },
+  { id: BlockId.LAPIS_ORE, veinSize: 7, tries: 2, minY: 8, maxY: 44 },
+  { id: BlockId.EMERALD_ORE, veinSize: 4, tries: 3, minY: 6, maxY: 61 },
 ];
 
 export class Chunk {
@@ -162,6 +164,7 @@ export class Chunk {
     this.generateCaves();
     this.generateRavines();
     this.generateOres();
+    this.generateLavaLakes();
     this.generateSurfacePatches();
     this.generateTrees();
   }
@@ -188,7 +191,10 @@ export class Chunk {
 
     for (let c = 0; c < caves; c += 1) {
       const xCave = originX + ri(CHUNK_SIZE);
-      const yCave = 1 + ri(ri(CHUNK_HEIGHT - 16) + 8);
+      // CHUNK_MAX_Y (terrain ceiling), not CHUNK_HEIGHT (build height) - seeding
+      // against the build height would scatter caves above where terrain (and
+      // therefore anything to carve) actually exists once the two diverge.
+      const yCave = 1 + ri(ri(CHUNK_MAX_Y - 16) + 8);
       const zCave = originZ + ri(CHUNK_SIZE);
 
       let tunnels = 1;
@@ -348,7 +354,12 @@ export class Chunk {
     const originX = nChunkX * CHUNK_SIZE - 8;
     const originZ = nChunkZ * CHUNK_SIZE - 8;
     const xCave = originX + ri(CHUNK_SIZE);
-    const yCave = 20 + ri(ri(40) + 8);
+    // Rescaled ~1.7x from the old fixed 20+ri(ri(40)+8) (tuned for the old
+    // 75-tall world) so ravines can now reach into the new surface band
+    // (~48-128) instead of always staying underground - deliberately: a
+    // ravine's carve loop already turns to air whatever it touches, surface
+    // or not, so reaching higher is the whole fix, no new logic needed.
+    const yCave = 34 + ri(ri(68) + 14);
     const zCave = originZ + ri(CHUNK_SIZE);
 
     const yRot = rng() * Math.PI * 2;
@@ -523,6 +534,70 @@ export class Chunk {
               this.setBlockData(bx, by, bz, id);
             }
           }
+        }
+      }
+    }
+  }
+
+  /**
+   * Rare, exposed-to-air lava pool with a stone rim (LCE LakeFeature's
+   * material==lava case, simplified: LCE builds a 16x16x8 grid of 4-7
+   * overlapping ellipsoids and then patches solid blocks back in around the
+   * edge afterward; here a single ellipsoid does the job, and the stone rim
+   * comes from validating the WHOLE padded footprint is solid ground before
+   * writing anything, then carving lava only in its inner core - so the rim
+   * is guaranteed by construction instead of needing a repair pass). Kept
+   * fully inside this chunk (no cross-chunk writes/reads) by aborting if the
+   * padded footprint would cross an edge, rather than picking an inset
+   * centre - keeps the placement genuinely uniform across the chunk.
+   */
+  private generateLavaLakes() {
+    const rng = mulberry32(hashSeed(this.chunkX, this.chunkZ, this.seed ^ 0x1a4e));
+    if (rng() >= 0.015) return; // rare: ~1.5% of chunks
+    const rngInt = (n: number) => Math.floor(rng() * n);
+
+    const cx = this.minX + rngInt(CHUNK_SIZE);
+    const cz = this.minZ + rngInt(CHUNK_SIZE);
+    const surfaceY = Math.min(CHUNK_MAX_Y, Math.max(5, Math.floor(this.getTerrainHeight(cx, cz))));
+    if (surfaceY <= WATER_LEVEL + 2) return; // dry land only - never on a shore/underwater
+
+    // A crater, not a buried ball: the ellipsoid is centred AT the surface
+    // and only its lower half is ever carved (by <= cy) - the upper half
+    // stays whatever it already was (air), so the lake reads as an open
+    // pool at ground level instead of a stone dome sealed shut on top.
+    const rx = 3 + rngInt(2), ry = 2 + rngInt(2), rz = 3 + rngInt(2);
+    const cy = surfaceY;
+
+    const pad = 1;
+    if (cx - rx - pad < this.minX || cx + rx + pad >= this.minX + CHUNK_SIZE) return;
+    if (cz - rz - pad < this.minZ || cz + rz + pad >= this.minZ + CHUNK_SIZE) return;
+    if (cy - ry - pad < 1) return;
+
+    // Validate first: the whole padded footprint (at and below surface level
+    // only) must already be solid ground - abort entirely otherwise (a cave,
+    // another lake, water, ...already there), so the rim guarantee holds.
+    for (let bx = cx - rx - pad; bx <= cx + rx + pad; bx += 1) {
+      for (let by = cy - ry - pad; by <= cy; by += 1) {
+        for (let bz = cz - rz - pad; bz <= cz + rz + pad; bz += 1) {
+          const id = this.blocks[this.index(bx, by, bz)];
+          if (id !== BlockId.STONE && id !== BlockId.DIRT && id !== BlockId.GRASS) return;
+        }
+      }
+    }
+
+    // Carve the lower half only: inner core (d < 0.55) becomes lava, the
+    // outer shell of the same ellipsoid becomes stone - the visible rim,
+    // widest exactly at by=cy (ground level), so looking down shows an open
+    // lava pool ringed by stone.
+    for (let bx = cx - rx; bx <= cx + rx; bx += 1) {
+      const xd = (bx - cx) / rx;
+      for (let by = cy - ry; by <= cy; by += 1) {
+        const yd = (by - cy) / ry;
+        for (let bz = cz - rz; bz <= cz + rz; bz += 1) {
+          const zd = (bz - cz) / rz;
+          const d = xd * xd + yd * yd + zd * zd;
+          if (d >= 1) continue;
+          this.blocks[this.index(bx, by, bz)] = d < 0.55 ? BlockId.LAVA : BlockId.STONE;
         }
       }
     }

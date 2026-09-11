@@ -90,7 +90,7 @@ const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY)
 const ZOMBIE_STEP_DOWN = 3;      // a zombie will drop off a 3-block ledge chasing the player; gravity handles the descent, no jump needed
 const BURN_DAMAGE_INTERVAL = 1;  // seconds between sunlight-burn ticks
 const BURN_DAMAGE = 1;
-const SKY_SCAN_MAX_Y = 100;      // above chunk.ts's CHUNK_HEIGHT (96) - a column open all the way up here really has no roof
+const SKY_SCAN_MAX_Y = 156;      // above chunk.ts's CHUNK_HEIGHT (152) - a column open all the way up here really has no roof
 
 const GRAVITY = 24;
 const JUMP_FORCE = 8; // matches the player's own jump impulse (player-physics.ts)
