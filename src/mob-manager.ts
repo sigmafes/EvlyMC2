@@ -56,27 +56,37 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
 const GRAVITY = 24;
 const JUMP_FORCE = 8; // matches the player's own jump impulse (player-physics.ts)
 const FLEE_DURATION = 3; // seconds, LCE PanicGoal-style
-const WANDER_RADIUS = 12; // "un bloque aleatorio en un radio de 12 bloques"
+const WANDER_RADIUS_MIN = 6; // "de minimo 6 bloques"
+const WANDER_RADIUS_MAX = 12; // "un bloque aleatorio en un radio de 12 bloques"
 const WANDER_INTERVAL_MIN = 8; // "se moverán cada 8-12s"
 const WANDER_INTERVAL_MAX = 12;
-const IDLE_LOOK_INTERVAL = 3; // "podrán girar para mirar cada 3s si están quietos"
-const LOOK_DURATION_MIN = 0.4; // how long one look-around turn takes
-const LOOK_DURATION_MAX = 1.0;
+const IDLE_LOOK_INTERVAL = 4; // "girar para mirar cada 4s si están quietos"
+const LOOK_DURATION_MIN = 1.2; // slower look-around turn than a walking turn
+const LOOK_DURATION_MAX = 2.0;
 const FLEE_RADIUS_MIN = 4; // "correrán hacia un bloque aleatorio en un radio de 8 bloques"
 const FLEE_RADIUS_MAX = 8;
 const FLEE_REPATH_CONE = Math.PI / 2; // random point within +-90 deg of "away from the attacker"
 const WAYPOINT_REACH_DIST = 0.3;
-const TURN_RATE = 10; // yaw-easing rate; higher = snappier turning
+const TURN_RATE = 10; // yaw-easing rate while walking; higher = snappier turning
+const LOOK_TURN_RATE = 2.5; // slower easing rate for an idle look-around turn
 const STEP_INTERVAL = 0.45;
 const IDLE_SOUND_MIN = 4;
 const IDLE_SOUND_MAX = 9;
 const KNOCKBACK_SPEED = 5;
 const KNOCKBACK_UP = 4;
-const KNOCKBACK_DECAY = 8; // per second, exponential
+// Same feel as the player (player-physics.ts): velocity ramps toward the AI's
+// target speed instead of snapping to it, and decays via friction instead of
+// stopping dead - so a mob accelerates, and skids/drifts when it turns or
+// stops, the same way the player does. Knockback is just an impulse added to
+// the same velocity, so it blends into (or gets overridden by) that ramp
+// instead of needing its own separate decay.
+const MOB_ACCELERATION = 35;
+const MOB_FRICTION = 15;
+const MOB_AIR_ACCEL_MULT = 0.15; // much less control while airborne, matches the player
 const WATER_BUOYANCY = 18; // upward accel while submerged, LCE-ish "float up" feel
 const WATER_RISE_SPEED = 2.2; // cap on how fast a mob bobs upward
 const WATER_RECHECK_INTERVAL = 1; // how often a swimming mob looks for shore
-const DEATH_SPIN_DURATION = 0.5; // seconds toppling over its X axis before vanishing
+const DEATH_SPIN_DURATION = 0.5; // seconds toppling over its Z axis before vanishing
 
 // Shared wireframe box geometry/material for the debug hitbox (R key) - one
 // GPU resource, scaled per mob instance, same pattern as DroppedItems' boxes.
@@ -276,7 +286,7 @@ export class MobManager {
     }
   }
 
-  /** Death animation (topples over its X axis, red-tinted), then drops + a smoke burst + removal. */
+  /** Death animation (topples over its Z axis, red-tinted), then drops + a smoke burst + removal. */
   private updateDeath(mob: Mob, delta: number, index: number): void {
     this.updatePhysics(mob, delta); // still falls/lands, just no AI movement
     mob.model.setWalking(false);
@@ -285,7 +295,7 @@ export class MobManager {
     mob.deathTimer -= delta;
     const t = Math.min(1, 1 - Math.max(mob.deathTimer, 0) / DEATH_SPIN_DURATION);
     const group = mob.model.getGroup();
-    group.rotation.x = (Math.PI / 2) * t;
+    group.rotation.z = (Math.PI / 2) * t;
     mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
 
     if (mob.deathTimer <= 0) {
@@ -336,6 +346,7 @@ export class MobManager {
         this.trySwimToShore(mob);
       }
       if (mob.path) this.followPath(mob, mob.walkSpeed, delta);
+      else this.applyGroundFriction(mob, delta);
       return;
     }
 
@@ -344,12 +355,15 @@ export class MobManager {
       return;
     }
 
-    // Idle: two independent timers run while stationary - a periodic
-    // look-around turn every IDLE_LOOK_INTERVAL seconds, and the
-    // WANDER_INTERVAL_MIN..MAX cadence that picks the next place to walk to.
+    // Idle: no path to walk, so friction bleeds off any residual velocity
+    // (knockback, or momentum from having just arrived). Two independent
+    // timers also run while stationary - a periodic look-around turn every
+    // IDLE_LOOK_INTERVAL seconds, and the WANDER_INTERVAL_MIN..MAX cadence
+    // that picks the next place to walk to.
+    this.applyGroundFriction(mob, delta);
     if (mob.lookTimer > 0) {
       mob.lookTimer -= delta;
-      this.easeYawTo(mob, mob.lookTargetYaw, delta);
+      this.easeYawTo(mob, mob.lookTargetYaw, delta, LOOK_TURN_RATE);
     }
     mob.idleLookTimer -= delta;
     if (mob.idleLookTimer <= 0) {
@@ -362,11 +376,11 @@ export class MobManager {
     if (mob.decisionTimer <= 0) this.pickWanderTarget(mob);
   }
 
-  /** Path::A* (mob-pathfinding.ts) to a random reachable point within WANDER_RADIUS blocks. */
+  /** Path::A* (mob-pathfinding.ts) to a random reachable point within WANDER_RADIUS_MIN..MAX blocks. */
   private pickWanderTarget(mob: Mob): void {
     const pos = mob.model.getGroup().position;
     const angle = Math.random() * Math.PI * 2;
-    const radius = 2 + Math.random() * (WANDER_RADIUS - 2);
+    const radius = WANDER_RADIUS_MIN + Math.random() * (WANDER_RADIUS_MAX - WANDER_RADIUS_MIN);
     const path = findPath(this.isSolid, pos, pos.x + Math.sin(angle) * radius, pos.z + Math.cos(angle) * radius);
     if (path) {
       mob.path = path;
@@ -448,70 +462,46 @@ export class MobManager {
   }
 
   /**
-   * Moves `mob` by (dirX,dirZ) (normalised) at `speed`, resolving collisions
-   * per-axis (so it can slide along a wall) using its actual hitbox instead
-   * of a single point. If an axis is blocked at foot height but clear one
-   * block up, hops over it (auto-step) instead of just stopping. Eases its
-   * facing yaw toward the direction of travel instead of snapping.
+   * Ramps `mob.velocity`.x/z toward (dirX,dirZ)*speed - same acceleration
+   * curve as the player (moveTowards, capped by MOB_ACCELERATION*delta, with
+   * reduced air control) instead of snapping straight to it, so a mob picks
+   * up speed and skids/drifts when it changes direction. The actual position
+   * integration, collision and auto-step jumping happen once for all of a
+   * mob's horizontal velocity (AI movement AND any leftover knockback) in
+   * updatePhysics. Also eases the facing yaw toward the direction of travel.
    */
   private moveHorizontal(mob: Mob, dirX: number, dirZ: number, speed: number, delta: number): void {
-    const group = mob.model.getGroup();
-    const step = speed * delta;
-    const y = group.position.y;
-
-    // Only a block that's still solid one step higher counts as "truly
-    // stuck" - a block that's merely solid at foot height but clear above is
-    // jumped instead. While airborne mid-jump (grounded false), a horizontal
-    // block is expected for the frame or two before the arc clears it, so it
-    // must NOT abandon the path - that was the bug where a mob would hop in
-    // place forever: each jump attempt still found itself blocked the very
-    // next frame (still mid-arc) and immediately threw the path away before
-    // it ever got the chance to clear the obstacle and move forward.
-    let stuckGrounded = false;
-    const tryX = group.position.x + dirX * step;
-    if (!this.overlapsSolid(tryX, y, group.position.z, mob.radius, mob.height)) {
-      group.position.x = tryX;
-    } else if (mob.grounded) {
-      if (!this.overlapsSolid(tryX, y + 1, group.position.z, mob.radius, mob.height)) {
-        mob.velocity.y = JUMP_FORCE;
-        mob.grounded = false;
-      } else {
-        stuckGrounded = true;
-      }
-    }
-
-    const tryZ = group.position.z + dirZ * step;
-    if (!this.overlapsSolid(group.position.x, y, tryZ, mob.radius, mob.height)) {
-      group.position.z = tryZ;
-    } else if (mob.grounded) {
-      if (!this.overlapsSolid(group.position.x, y + 1, tryZ, mob.radius, mob.height)) {
-        mob.velocity.y = JUMP_FORCE;
-        mob.grounded = false;
-      } else {
-        stuckGrounded = true;
-      }
-    }
-
-    if (stuckGrounded) {
-      // Genuinely blocked on solid ground with no step to hop - pathfinding
-      // missed it, or the world changed under it. Drop the path and take a
-      // short beat before re-deciding, instead of grinding against the wall.
-      mob.path = null;
-      mob.decisionTimer = 0.3;
-    }
+    const accel = MOB_ACCELERATION * (mob.grounded ? 1 : MOB_AIR_ACCEL_MULT);
+    const maxStep = accel * delta;
+    mob.velocity.x = this.moveTowards(mob.velocity.x, dirX * speed, maxStep);
+    mob.velocity.z = this.moveTowards(mob.velocity.z, dirZ * speed, maxStep);
 
     // Object3D at rotation.y=θ has local -Z (this model's "front" - see
     // mob-model.ts) pointing world (-sinθ,-cosθ), so the target yaw is the
     // negated atan2 - the un-negated form points the model's BACK the way
     // it's walking (a moonwalk).
-    this.easeYawTo(mob, Math.atan2(-dirX, -dirZ), delta);
+    this.easeYawTo(mob, Math.atan2(-dirX, -dirZ), delta, TURN_RATE);
   }
 
-  /** Eases `mob`'s facing yaw toward `targetYaw` by the shortest angular path and applies it to the model. */
-  private easeYawTo(mob: Mob, targetYaw: number, delta: number): void {
+  /** Decays `mob.velocity`.x/z toward 0 (ground friction) - called instead of moveHorizontal whenever the AI has nowhere to walk to right now. */
+  private applyGroundFriction(mob: Mob, delta: number): void {
+    const frictionFactor = Math.max(0, 1 - MOB_FRICTION * delta);
+    mob.velocity.x *= frictionFactor;
+    mob.velocity.z *= frictionFactor;
+  }
+
+  /** Move a value toward a target by at most maxStep - linear, frame-rate independent, never overshoots. */
+  private moveTowards(current: number, target: number, maxStep: number): number {
+    const diff = target - current;
+    if (Math.abs(diff) <= maxStep) return target;
+    return current + Math.sign(diff) * maxStep;
+  }
+
+  /** Eases `mob`'s facing yaw toward `targetYaw` by the shortest angular path at `rate` and applies it to the model. */
+  private easeYawTo(mob: Mob, targetYaw: number, delta: number, rate: number): void {
     let deltaYaw = targetYaw - mob.facingYaw;
     deltaYaw = ((deltaYaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-    mob.facingYaw += deltaYaw * Math.min(1, TURN_RATE * delta);
+    mob.facingYaw += deltaYaw * Math.min(1, rate * delta);
     mob.model.getGroup().rotation.y = mob.facingYaw;
   }
 
@@ -530,27 +520,58 @@ export class MobManager {
     return false;
   }
 
-  /** Gravity/buoyancy + knockback decay + a simple ground snap (sample the block below, land on its top). */
+  /**
+   * Integrates `mob.velocity` for one frame: horizontal (whatever combination
+   * of AI-ramped movement, ground/air friction and knockback moveHorizontal /
+   * applyGroundFriction / damage() left in velocity.x/z) resolved per-axis
+   * against collision with auto-step jumping, then gravity/buoyancy and a
+   * ground snap (sample the block below, land on its top) for velocity.y.
+   */
   private updatePhysics(mob: Mob, delta: number): void {
     const group = mob.model.getGroup();
+    const y = group.position.y;
 
-    // Knockback: an exponentially-decaying horizontal shove, resolved
-    // per-axis against solid blocks (previously applied unconditionally,
-    // which let a hit mob get knocked straight through a wall).
-    if (Math.abs(mob.velocity.x) > 0.01 || Math.abs(mob.velocity.z) > 0.01) {
-      const y = group.position.y;
+    if (Math.abs(mob.velocity.x) > 0.001 || Math.abs(mob.velocity.z) > 0.001) {
+      // Only a block that's still solid one step higher counts as "truly
+      // stuck" - a block that's merely solid at foot height but clear above
+      // is jumped instead. While airborne mid-jump (grounded false), a
+      // horizontal block is expected for the frame or two before the arc
+      // clears it, so it must NOT abandon the path - that was the bug where a
+      // mob would hop in place forever: each jump attempt still found itself
+      // blocked the very next frame (still mid-arc) and immediately threw
+      // the path away before it ever got the chance to clear the obstacle.
+      let stuckGrounded = false;
+
       const tryX = group.position.x + mob.velocity.x * delta;
-      if (!this.overlapsSolid(tryX, y, group.position.z, mob.radius, mob.height)) group.position.x = tryX;
-      else mob.velocity.x = 0;
+      if (!this.overlapsSolid(tryX, y, group.position.z, mob.radius, mob.height)) {
+        group.position.x = tryX;
+      } else if (mob.grounded && !this.overlapsSolid(tryX, y + 1, group.position.z, mob.radius, mob.height)) {
+        mob.velocity.y = JUMP_FORCE;
+        mob.grounded = false;
+      } else {
+        mob.velocity.x = 0;
+        if (mob.grounded) stuckGrounded = true;
+      }
+
       const tryZ = group.position.z + mob.velocity.z * delta;
-      if (!this.overlapsSolid(group.position.x, y, tryZ, mob.radius, mob.height)) group.position.z = tryZ;
-      else mob.velocity.z = 0;
-      const decay = Math.exp(-KNOCKBACK_DECAY * delta);
-      mob.velocity.x *= decay;
-      mob.velocity.z *= decay;
-    } else {
-      mob.velocity.x = 0;
-      mob.velocity.z = 0;
+      if (!this.overlapsSolid(group.position.x, y, tryZ, mob.radius, mob.height)) {
+        group.position.z = tryZ;
+      } else if (mob.grounded && !this.overlapsSolid(group.position.x, y + 1, tryZ, mob.radius, mob.height)) {
+        mob.velocity.y = JUMP_FORCE;
+        mob.grounded = false;
+      } else {
+        mob.velocity.z = 0;
+        if (mob.grounded) stuckGrounded = true;
+      }
+
+      if (stuckGrounded && mob.path) {
+        // Genuinely blocked on solid ground with no step to hop -
+        // pathfinding missed it, or the world changed under it. Drop the
+        // path and take a short beat before re-deciding, instead of
+        // grinding against the wall every frame.
+        mob.path = null;
+        mob.decisionTimer = 0.3;
+      }
     }
 
     const feetX = Math.round(group.position.x);
