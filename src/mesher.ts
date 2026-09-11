@@ -334,7 +334,17 @@ function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number 
   if (id === BlockId.STONE) return MATERIAL_STONE;
   if (id === BlockId.DIRT) return MATERIAL_DIRT;
   if (id === BlockId.GLOWSTONE) return MATERIAL_GLOWSTONE;
-  if (id === BlockId.OAK_LOG) return faceIndex === 2 || faceIndex === 3 ? MATERIAL_OAK_LOG_TOP : MATERIAL_OAK_LOG_SIDE;
+  if (id === BlockId.OAK_LOG) {
+    // Bark-ring end caps sit on whichever pair of faces the log's own axis
+    // points along (LCE RotatedPillarTile / LogTile: axis set from the face
+    // the log was placed against - see interaction.ts's placement code).
+    // faceIndex order here is +X,-X,+Y,-Y,+Z,-Z (see `faces` above).
+    const axis = data?.axis ?? 'y';
+    const endFace = axis === 'x' ? (faceIndex === 0 || faceIndex === 1)
+      : axis === 'z' ? (faceIndex === 4 || faceIndex === 5)
+      : (faceIndex === 2 || faceIndex === 3);
+    return endFace ? MATERIAL_OAK_LOG_TOP : MATERIAL_OAK_LOG_SIDE;
+  }
   if (id === BlockId.OAK_LEAVES) return MATERIAL_OAK_LEAVES;
   if (id === BlockId.SAND) return MATERIAL_SAND;
   if (id === BlockId.GRAVEL) return MATERIAL_GRAVEL;

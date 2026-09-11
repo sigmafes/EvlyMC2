@@ -26,6 +26,9 @@ export function getDrops(id: BlockId, canHarvest: boolean, isDouble = false): Dr
     case BlockId.WOOL:
     case BlockId.OAK_STAIRS:
     case BlockId.COBBLESTONE_STAIRS:
+    case BlockId.OAK_FENCE:
+    case BlockId.OAK_FENCE_GATE:
+    case BlockId.COBBLESTONE_WALL:
       return [{ id, count: 1 }];
 
     // Slabs: a doubled one gives both halves back (LCE fullSize HalfSlabTile).

@@ -63,6 +63,13 @@ export const RECIPES: Recipe[] = [
   { kind: 'shaped', pattern: [[ItemId.FLINT], [S], [ItemId.FEATHER]], out: { id: ItemId.ARROW, count: 4 } },
   // Flint and Steel: iron ingot + flint on the opposite diagonal (vanilla recipe).
   { kind: 'shaped', pattern: [[ItemId.IRON_INGOT, _], [_, ItemId.FLINT]], out: { id: ItemId.FLINT_AND_STEEL, count: 1 } },
+
+  // Fence: planks-stick-planks x2 rows -> 3 (vanilla recipe).
+  { kind: 'shaped', pattern: [[P, S, P], [P, S, P]], out: { id: BlockId.OAK_FENCE, count: 3 } },
+  // Fence gate: stick-planks-stick x2 rows -> 1 (vanilla recipe).
+  { kind: 'shaped', pattern: [[S, P, S], [S, P, S]], out: { id: BlockId.OAK_FENCE_GATE, count: 1 } },
+  // Cobblestone wall: 3x2 of cobblestone -> 6 (vanilla recipe).
+  { kind: 'shaped', pattern: [[C, C, C], [C, C, C]], out: { id: BlockId.COBBLESTONE_WALL, count: 6 } },
 ];
 
 /**

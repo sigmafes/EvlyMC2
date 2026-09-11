@@ -39,6 +39,9 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.COBBLESTONE_STAIRS]: 2,
   [BlockId.COBBLESTONE_SLAB]: 2,
   [BlockId.GRAVEL]: 0.6,
+  [BlockId.OAK_FENCE]: 2,
+  [BlockId.OAK_FENCE_GATE]: 2,
+  [BlockId.COBBLESTONE_WALL]: 2,
 };
 
 type BlockTool = {
@@ -74,6 +77,9 @@ const BLOCK_TOOL: Partial<Record<BlockId, BlockTool>> = {
   [BlockId.OAK_SLAB]: { kind: 'axe', harvest: 0, required: false },
   [BlockId.COBBLESTONE_STAIRS]: { kind: 'pickaxe', harvest: 0, required: true },
   [BlockId.COBBLESTONE_SLAB]: { kind: 'pickaxe', harvest: 0, required: true },
+  [BlockId.OAK_FENCE]: { kind: 'axe', harvest: 0, required: false },
+  [BlockId.OAK_FENCE_GATE]: { kind: 'axe', harvest: 0, required: false },
+  [BlockId.COBBLESTONE_WALL]: { kind: 'pickaxe', harvest: 0, required: true },
 };
 
 export type BreakInfo = {

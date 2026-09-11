@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { BlockId, isInteractive, isOrientable } from './block';
+import { BlockId, isInteractive, isOrientable, isToggleable } from './block';
 import { facingTowardPlayer } from './block-data';
 import { isBlock, foodValue, ItemId } from './item';
 import { getDrops } from './drops';
-import { isShapedBlock, isSlab, isStairs, shapeBoxesFor } from './block-shapes';
+import { isSlab, isStairs, shapeBoxesFor } from './block-shapes';
 import { Raycast, type RaycastHit } from './raycast';
 import { BlockHighlight } from './block-highlight';
 import { BlockPlacer } from './block-placer';
@@ -425,6 +425,18 @@ export class BlockInteraction {
       return;
     }
 
+    // Fence gate: right-click swings it open/closed instead of placing
+    // against it or interacting with a GUI (LCE FenceGateTile::use).
+    if (isToggleable(clicked)) {
+      const b = hit.blockPosition;
+      const data = this.world.getBlockData(b.x, b.y, b.z);
+      this.world.setBlockData(b.x, b.y, b.z, { ...data, open: !data?.open });
+      this.onSwing?.();
+      const sound = getBlockSound(BlockId.OAK_PLANKS, 'dig');
+      if (sound && this.soundManager) this.soundManager.playSound(sound, 0.8);
+      return;
+    }
+
     // Flint and Steel: ignite the air cell in front of the clicked face
     // instead of placing a block - LCE FlintAndSteelItem::useOn.
     if (this.selectedItemId === ItemId.FLINT_AND_STEEL) {
@@ -489,7 +501,7 @@ export class BlockInteraction {
         const p = placedAt as THREE.Vector3;
         this.world.setBlockData(p.x, p.y, p.z, { facing: facingTowardPlayer(this.player.state.yaw) });
       }
-      if (placedAt && placedBlockId != null && isShapedBlock(placedBlockId)) {
+      if (placedAt && placedBlockId != null && (isStairs(placedBlockId) || isSlab(placedBlockId))) {
         const p = placedAt as THREE.Vector3;
         const half = this.placedHalfIsTop(hit);
         if (isStairs(placedBlockId)) {
@@ -500,6 +512,16 @@ export class BlockInteraction {
         } else {
           this.world.setBlockData(p.x, p.y, p.z, { half });
         }
+      }
+      if (placedAt && placedBlockId === BlockId.OAK_LOG) {
+        // LCE RotatedPillarTile::setPlacedOnFaceDataValue - a log's bark
+        // rings run along whichever axis the clicked face points on, so a
+        // log placed against a side face lies on its side instead of always
+        // standing up.
+        const p = placedAt as THREE.Vector3;
+        const n = hit.intersection.face.normal;
+        const axis = Math.abs(n.x) > 0.5 ? 'x' : Math.abs(n.z) > 0.5 ? 'z' : 'y';
+        this.world.setBlockData(p.x, p.y, p.z, { axis });
       }
       if (placedAt && placedBlockId === BlockId.TORCH) {
         // Side face -> wall torch leaning along the face normal; top face -> floor torch.

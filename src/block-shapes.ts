@@ -20,6 +20,9 @@ export type StairShape = 'straight' | 'outer_ccw' | 'outer_cw' | 'inner_ccw' | '
 
 export const STAIR_BLOCKS = new Set<BlockId>([BlockId.OAK_STAIRS, BlockId.COBBLESTONE_STAIRS]);
 export const SLAB_BLOCKS = new Set<BlockId>([BlockId.OAK_SLAB, BlockId.COBBLESTONE_SLAB]);
+export const FENCE_BLOCKS = new Set<BlockId>([BlockId.OAK_FENCE]);
+export const WALL_BLOCKS = new Set<BlockId>([BlockId.COBBLESTONE_WALL]);
+export const FENCE_GATE_BLOCKS = new Set<BlockId>([BlockId.OAK_FENCE_GATE]);
 
 export function isStairs(id: BlockId): boolean {
   return STAIR_BLOCKS.has(id);
@@ -27,17 +30,29 @@ export function isStairs(id: BlockId): boolean {
 export function isSlab(id: BlockId): boolean {
   return SLAB_BLOCKS.has(id);
 }
+export function isFence(id: BlockId): boolean {
+  return FENCE_BLOCKS.has(id);
+}
+export function isWall(id: BlockId): boolean {
+  return WALL_BLOCKS.has(id);
+}
+export function isFenceGate(id: BlockId): boolean {
+  return FENCE_GATE_BLOCKS.has(id);
+}
 /** True for any block whose shape isn't the full cell. */
 export function isShapedBlock(id: BlockId): boolean {
-  return STAIR_BLOCKS.has(id) || SLAB_BLOCKS.has(id);
+  return STAIR_BLOCKS.has(id) || SLAB_BLOCKS.has(id) || FENCE_BLOCKS.has(id) || WALL_BLOCKS.has(id) || FENCE_GATE_BLOCKS.has(id);
 }
 
-/** The block a stair/slab is cut from - it borrows its texture, sound, hardness and drops. */
+/** The block a stair/slab/fence/wall/gate is cut from - it borrows its texture, sound, hardness and drops. */
 export const SHAPE_PARENT: Partial<Record<BlockId, BlockId>> = {
   [BlockId.OAK_STAIRS]: BlockId.OAK_PLANKS,
   [BlockId.OAK_SLAB]: BlockId.OAK_PLANKS,
   [BlockId.COBBLESTONE_STAIRS]: BlockId.COBBLESTONE,
   [BlockId.COBBLESTONE_SLAB]: BlockId.COBBLESTONE,
+  [BlockId.OAK_FENCE]: BlockId.OAK_PLANKS,
+  [BlockId.OAK_FENCE_GATE]: BlockId.OAK_PLANKS,
+  [BlockId.COBBLESTONE_WALL]: BlockId.COBBLESTONE,
 };
 
 /** The slab you get by cutting a given parent block, for the double-slab merge. */
@@ -112,6 +127,44 @@ export function stairBoxes(facing: number, top: boolean, shape: StairShape): Sha
 export type BlockReader = (x: number, y: number, z: number) => BlockId;
 export type DataReader = (x: number, y: number, z: number) => BlockData | undefined;
 
+/**
+ * Fence/wall post + connections, ported from LCE FenceTile/WallTile's
+ * getAABB/updateShape: a single box whose horizontal bounds default to a
+ * narrow post (`inset`..`1-inset`) on every side, and extend all the way to
+ * the cell edge (0 or 1) on any side that connects to a neighbour. Modelled
+ * as one combined box (matching LCE's own collision AABB exactly) rather
+ * than a separate post + per-side rail meshes - simpler, and still reads
+ * correctly as "a beam running to each connected neighbour".
+ */
+function postConnectsTo(selfId: BlockId, neighborId: BlockId): boolean {
+  if (neighborId === selfId) return true;
+  if (FENCE_GATE_BLOCKS.has(neighborId)) return true; // both fences and walls connect through an open or closed gate
+  return coversWholeFace(neighborId);
+}
+
+export function postBoxes(selfId: BlockId, x: number, y: number, z: number, inset: number, height: number, readBlock: BlockReader): ShapeBox[] {
+  const n = postConnectsTo(selfId, readBlock(x, y, z - 1));
+  const s = postConnectsTo(selfId, readBlock(x, y, z + 1));
+  const w = postConnectsTo(selfId, readBlock(x - 1, y, z));
+  const e = postConnectsTo(selfId, readBlock(x + 1, y, z));
+  return [{
+    x0: w ? 0 : inset, x1: e ? 1 : 1 - inset,
+    y0: 0, y1: height,
+    z0: n ? 0 : inset, z1: s ? 1 : 1 - inset,
+  }];
+}
+
+const FENCE_INSET = 6 / 16; // LCE FenceTile: 4px-thick post (6..10/16)
+const WALL_INSET = 0.25;    // LCE WallTile: 8px-thick post (4..12/16)
+const FENCE_WALL_HEIGHT = 1.5; // LCE: both fences and walls collide 1.5 blocks tall
+
+/** A closed gate is a single box across the cell, narrow along the axis it swings through (LCE FenceGateTile). */
+export function fenceGateBoxes(facing: number): ShapeBox[] {
+  return axisOf(facing) === 0
+    ? [{ x0: 0, y0: 0, z0: FENCE_INSET, x1: 1, y1: FENCE_WALL_HEIGHT, z1: 1 - FENCE_INSET }]
+    : [{ x0: FENCE_INSET, y0: 0, z0: 0, x1: 1 - FENCE_INSET, y1: FENCE_WALL_HEIGHT, z1: 1 }];
+}
+
 const FACING_OFFSET: Record<number, [number, number]> = { 0: [0, 1], 1: [1, 0], 2: [0, -1], 3: [-1, 0] };
 
 function stairAt(x: number, y: number, z: number, f: number, readBlock: BlockReader, readData: DataReader) {
@@ -161,6 +214,13 @@ export function shapeBoxesFor(
     const top = data?.half === 'top';
     return stairBoxes(facing, top, stairShapeAt(x, y, z, facing, top, readBlock, readData));
   }
+  if (isFence(id)) return postBoxes(id, x, y, z, FENCE_INSET, FENCE_WALL_HEIGHT, readBlock);
+  if (isWall(id)) return postBoxes(id, x, y, z, WALL_INSET, FENCE_WALL_HEIGHT, readBlock);
+  if (isFenceGate(id)) {
+    const data = readData(x, y, z);
+    if (data?.open) return []; // swung open - no collision, drawn out of the way
+    return fenceGateBoxes(data?.facing ?? 0);
+  }
   return null;
 }
 
@@ -173,6 +233,12 @@ export function shapeBoxesFor(
 export function itemShapeBoxes(id: BlockId): ShapeBox[] | null {
   if (isSlab(id)) return slabBoxes(false);
   if (isStairs(id)) return stairBoxes(2, false, 'straight');
+  // Fence/wall icons show a lone post (no neighbours to connect to), capped
+  // at 1 block tall rather than the in-world 1.5 so it doesn't overflow an
+  // inventory slot's preview.
+  if (isFence(id)) return [{ x0: FENCE_INSET, y0: 0, z0: FENCE_INSET, x1: 1 - FENCE_INSET, y1: 1, z1: 1 - FENCE_INSET }];
+  if (isWall(id)) return [{ x0: WALL_INSET, y0: 0, z0: WALL_INSET, x1: 1 - WALL_INSET, y1: 1, z1: 1 - WALL_INSET }];
+  if (isFenceGate(id)) return fenceGateBoxes(0);
   return null;
 }
 

@@ -34,6 +34,9 @@ export enum BlockId {
   OAK_SLAB = 30,
   COBBLESTONE_SLAB = 31,
   GRAVEL = 32,
+  OAK_FENCE = 33,
+  OAK_FENCE_GATE = 34,
+  COBBLESTONE_WALL = 35,
 }
 
 export type VoxelBlock = {
@@ -108,6 +111,14 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.OAK_SLAB]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
   [BlockId.COBBLESTONE_SLAB]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
   [BlockId.GRAVEL]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  // Fence/gate/wall don't fill their cell - opacity 1 (not 15) for the same
+  // reason stairs/slabs use 1: light shouldn't get pinned to 0 by something
+  // that's mostly open air (see the OAK_STAIRS comment above), and cull:
+  // false keeps a full block behind them drawing its own face instead of
+  // being hidden by a partial neighbour.
+  [BlockId.OAK_FENCE]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
+  [BlockId.OAK_FENCE_GATE]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
+  [BlockId.COBBLESTONE_WALL]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -128,14 +139,21 @@ export function isSolidBlock(id: BlockId): boolean {
 /** Blocks that respond to right-click (open a GUI) instead of being placed against. */
 export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE, BlockId.FURNACE]);
 
-/** Blocks that carry side-table state (facing / lit / half) the mesher must read. */
+/** Blocks that carry side-table state (facing / lit / half / axis / open) the mesher must read. */
 export const STATEFUL_BLOCKS = new Set<BlockId>([
   BlockId.FURNACE, BlockId.TORCH,
   BlockId.OAK_STAIRS, BlockId.COBBLESTONE_STAIRS, BlockId.OAK_SLAB, BlockId.COBBLESTONE_SLAB,
+  BlockId.OAK_LOG, BlockId.OAK_FENCE_GATE,
 ]);
 
 /** Blocks whose `facing` is set from the player's yaw when placed. */
-export const ORIENTABLE_BLOCKS = new Set<BlockId>([BlockId.FURNACE]);
+export const ORIENTABLE_BLOCKS = new Set<BlockId>([BlockId.FURNACE, BlockId.OAK_FENCE_GATE]);
+
+/** Blocks that toggle open/closed on right-click instead of placing/opening a GUI. */
+export const TOGGLEABLE_BLOCKS = new Set<BlockId>([BlockId.OAK_FENCE_GATE]);
+export function isToggleable(id: BlockId): boolean {
+  return TOGGLEABLE_BLOCKS.has(id);
+}
 
 /** Block light a furnace gives off while it is lit (LCE: like a torch, 14-15). */
 export const FURNACE_LIT_LIGHT = 15;
@@ -332,6 +350,10 @@ export function createBlockMaterials(): BlockMaterials {
     [BlockId.OAK_SLAB]: new THREE.MeshBasicMaterial({ map: oakPlanks, vertexColors: true }),
     [BlockId.COBBLESTONE_STAIRS]: new THREE.MeshBasicMaterial({ map: cobblestone, vertexColors: true }),
     [BlockId.COBBLESTONE_SLAB]: new THREE.MeshBasicMaterial({ map: cobblestone, vertexColors: true }),
+    // Fence/gate/wall are cut from their parent block too (same as stairs/slabs above).
+    [BlockId.OAK_FENCE]: new THREE.MeshBasicMaterial({ map: oakPlanks, vertexColors: true }),
+    [BlockId.OAK_FENCE_GATE]: new THREE.MeshBasicMaterial({ map: oakPlanks, vertexColors: true }),
+    [BlockId.COBBLESTONE_WALL]: new THREE.MeshBasicMaterial({ map: cobblestone, vertexColors: true }),
   };
 
   materials.updateWaterAnimation = (time: number) => {

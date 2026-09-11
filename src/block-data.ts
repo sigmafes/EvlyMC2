@@ -28,6 +28,10 @@ export type BlockData = {
   half?: 'bottom' | 'top';
   /** A slab that was doubled back into a full block (LCE's fullSize HalfSlabTile). */
   double?: boolean;
+  /** Which axis a log's bark rings run along (default 'y' when unset - a log placed on a vertical face). */
+  axis?: 'x' | 'y' | 'z';
+  /** A fence gate swung open (LCE FenceGateTile's OPEN_BIT) - passable and drawn out of the way. */
+  open?: boolean;
 };
 
 export function emptyFurnace(): FurnaceState {

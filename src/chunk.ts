@@ -596,7 +596,17 @@ export class Chunk {
         if (this.cellHash(cellX, cellZ, 3) < spawnChance) {
           const surfaceY = Math.min(CHUNK_MAX_Y - 8, Math.max(5, Math.floor(this.getTerrainHeight(treeX, treeZ))));
           if (surfaceY > WATER_LEVEL + 2 && surfaceY < CHUNK_MAX_Y - 7) {
-            this.generateTree(treeX, surfaceY, treeZ);
+            // Two visually distinct oak shapes (LCE reference: the blocky
+            // hand-shaped one below vs a genuine port of TreeFeature::place's
+            // organic top-down taper) alternate per tree, deterministically
+            // from the same per-cell hash everything else here uses - so a
+            // forest doesn't read as one shape copy-pasted everywhere.
+            if (this.cellHash(cellX, cellZ, 4) < 0.5) {
+              this.generateTreeClassic(treeX, surfaceY, treeZ);
+            } else {
+              const rng = mulberry32(hashSeed(cellX, cellZ, this.seed ^ 0x7ee5c0de));
+              this.generateTreeOrganic(treeX, surfaceY, treeZ, rng);
+            }
           }
         }
       }
@@ -619,7 +629,8 @@ export class Chunk {
     }
   }
 
-  private generateTree(centerX: number, baseY: number, centerZ: number) {
+  /** The original hand-shaped oak: fixed 2-log trunk, blocky tapered canopy. */
+  private generateTreeClassic(centerX: number, baseY: number, centerZ: number) {
     const trunkHeight = baseY + 1;
 
     // Capa 1 y 2: Tronco central (X)
@@ -656,6 +667,42 @@ export class Chunk {
     this.placeBlock(centerX - 1, trunkHeight + 5, centerZ, BlockId.OAK_LEAVES);
     this.placeBlock(centerX, trunkHeight + 5, centerZ + 1, BlockId.OAK_LEAVES);
     this.placeBlock(centerX, trunkHeight + 5, centerZ - 1, BlockId.OAK_LEAVES);
+  }
+
+  /**
+   * Ported from LCE TreeFeature::place (the vanilla-style organic oak): a
+   * randomised 4-6 tall trunk with leaves built top-down in shrinking
+   * diamond-ish rings (`offs` shrinks as `yo` goes more negative, integer
+   * division truncating toward zero exactly like the original C++), each
+   * ring's outer corners randomly rounded off except the very top ring
+   * (always rounded). Trunk is placed after leaves so it overwrites any leaf
+   * that landed in its own column, same order as the original and as
+   * placeBlock()'s log-over-leaves rule already assumes. Jungle-specific
+   * vines/cocoa from the original aren't relevant to a plain oak and are
+   * left out.
+   */
+  private generateTreeOrganic(x: number, baseY: number, z: number, rng: () => number) {
+    const rngInt = (n: number) => Math.floor(rng() * n);
+    const y = baseY + 1;
+    const treeHeight = 4 + rngInt(3); // 4-6, LCE's default baseHeight=4
+    const grassHeight = 3;
+
+    for (let yy = y + treeHeight; yy >= y + treeHeight - grassHeight; yy -= 1) {
+      const yo = yy - (y + treeHeight); // 0, -1, -2, -3
+      const offs = 1 - Math.trunc(yo / 2);
+      for (let xx = x - offs; xx <= x + offs; xx += 1) {
+        const xo = xx - x;
+        for (let zz = z - offs; zz <= z + offs; zz += 1) {
+          const zo = zz - z;
+          if (Math.abs(xo) === offs && Math.abs(zo) === offs && (rngInt(2) === 0 || yo === 0)) continue;
+          this.placeBlock(xx, yy, zz, BlockId.OAK_LEAVES);
+        }
+      }
+    }
+
+    for (let hh = 0; hh < treeHeight; hh += 1) {
+      this.placeBlock(x, y + hh, z, BlockId.OAK_LOG);
+    }
   }
 
   getLight(channel: 'skyLight' | 'blockLight', x: number, y: number, z: number) {
