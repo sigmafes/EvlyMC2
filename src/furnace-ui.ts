@@ -1,4 +1,4 @@
-import { lockPointer } from './is-touch';
+import { lockPointer, unlockPointerForGui } from './is-touch';
 import { createEmptySlot, renderSlot, type Inventory, type InventorySlot } from './inventory';
 import { makeStack } from './item-stack';
 import { emptyFurnace, type FurnaceState, type SlotRef } from './block-data';
@@ -72,7 +72,7 @@ export class FurnaceUI {
     this.inventory.refreshAll();
     this.refresh();
     this.inventory.setExternalUiOpen(true, () => this.close());
-    document.exitPointerLock();
+    unlockPointerForGui();
     this.onToggle(true);
   }
 

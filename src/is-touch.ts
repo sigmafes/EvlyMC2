@@ -1,3 +1,5 @@
+import { customCursor } from './custom-cursor';
+
 /**
  * Touch-device detection, shared so the pointer-lock calls scattered across the
  * UI can all opt out on phones. Pointer Lock on mobile browsers either does
@@ -19,6 +21,16 @@ export function isTouchDevice(): boolean {
 
 /** requestPointerLock() that is a no-op on touch devices. */
 export function lockPointer(el: Element | null | undefined): void {
+  customCursor.hide();
   if (!el || isTouchDevice()) return;
   (el as HTMLElement).requestPointerLock?.();
+}
+
+/** exitPointerLock() for a mouse-driven GUI (inventory/crafting table/furnace):
+ *  also snaps the custom cursor to screen centre, since the real OS cursor
+ *  reappears wherever it physically was when the lock started, not the middle
+ *  of the screen. No-op on touch (those screens are tap-driven, no cursor). */
+export function unlockPointerForGui(): void {
+  document.exitPointerLock();
+  if (!isTouchDevice()) customCursor.show();
 }

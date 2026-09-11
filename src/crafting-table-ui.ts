@@ -1,5 +1,5 @@
 import { CraftingGrid } from './crafting-grid';
-import { lockPointer } from './is-touch';
+import { lockPointer, unlockPointerForGui } from './is-touch';
 import type { Inventory } from './inventory';
 
 /**
@@ -46,7 +46,7 @@ export class CraftingTableUI {
     this.root.hidden = false;
     this.inventory.refreshAll();
     this.inventory.setExternalUiOpen(true, () => this.close());
-    document.exitPointerLock();
+    unlockPointerForGui();
     this.onToggle(true);
   }
 

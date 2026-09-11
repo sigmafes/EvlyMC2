@@ -185,6 +185,12 @@ export class World {
     return this.blockStore.getBlock(x, y, z, this.isInsideWorld(x, z));
   }
 
+  /** Whether the chunk under (x,z) has actually been generated yet (chunk loading is
+   *  budgeted across frames, so this can be false right after startup/a jump). */
+  isChunkLoaded(x: number, z: number): boolean {
+    return this.blockStore.isChunkLoaded(x, z);
+  }
+
   getLight(channel: 'skyLight' | 'blockLight', x: number, y: number, z: number) {
     return this.blockStore.getLight(channel, x, y, z, 0, CHUNK_HEIGHT);
   }

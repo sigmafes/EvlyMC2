@@ -66,6 +66,12 @@ export class BlockStore {
     this.chunks.get(this.key(chunkX, chunkZ))?.markLightDirty(x, y, z);
   }
 
+  isChunkLoaded(x: number, z: number): boolean {
+    const chunkX = this.getChunkCoordinate(x);
+    const chunkZ = this.getChunkCoordinate(z);
+    return this.chunks.has(this.key(chunkX, chunkZ));
+  }
+
   getChunkCoordinate(value: number): number {
     return Math.floor((value + 8) / CHUNK_SIZE);
   }

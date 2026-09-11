@@ -260,13 +260,18 @@ body {
   image-rendering: pixelated;
   clip-path: inset(100% 0 0 0);   /* JS sets the top inset from litTime/litDuration */
 }
-/* Progress arrow: fills left->right as the cook timer advances (tex 79,34 / 24x16). */
+/* Progress arrow: fills left->right as the cook timer advances. The guide
+   drawn into furnace_gui.png is actually 22x15 native at (80,35), not the
+   24x16 the old comment/box assumed (measured directly off the pixels -
+   Burn_progress.png itself is a full-bleed 24x16 sprite with no transparent
+   margin, so the 2px/1px gap was making the overlay bleed past its slot and
+   look offset from the arrow guide underneath it). */
 #furnace-arrow {
   position: absolute;
-  left: 156px;
-  top: 74px;
-  width: 48px;
-  height: 32px;
+  left: 160px;  /* tex (80,35) x2 */
+  top: 70px;
+  width: 44px;  /* tex 22x15 x2 */
+  height: 30px;
   background: url('../gui/Burn_progress.png') left center / 100% 100% no-repeat;
   image-rendering: pixelated;
   clip-path: inset(0 100% 0 0);   /* JS sets the right inset from cookTime */
@@ -1007,6 +1012,7 @@ body {
   filter: none;
 }
 .mc-button:active:not(:disabled) { filter: brightness(0.9); }
+.mc-button:disabled { filter: grayscale(1) brightness(0.65); cursor: default; color: #b0b0b0; }
 
 /* ===== Standalone options (from main menu) ===== */
 #menu-options {
@@ -1322,6 +1328,26 @@ body {
   background: var(--heart-fill, none) center / 100% 100% no-repeat;
   image-rendering: pixelated;
 }
+/* Fully JS-driven cursor (see custom-cursor.ts) shown while a mouse-driven GUI
+   (inventory/crafting table/furnace) is open, so it can be snapped to screen
+   centre - the real OS cursor can't be warped by JS at all. */
+#custom-cursor {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform: translate(-2px, -2px);
+  z-index: 100;
+  pointer-events: none;
+  border-style: solid;
+  border-width: 13px 9px 0 0;
+  border-color: #fff transparent transparent transparent;
+  filter: drop-shadow(1px 1px 0 #000) drop-shadow(-1px 0 0 #000) drop-shadow(0 -1px 0 #000);
+}
+#custom-cursor[hidden] { display: none; }
+body.custom-cursor-active,
+body.custom-cursor-active * { cursor: none !important; }
 #hud-xp {
   position: relative;
   width: 468px; /* same as the hotbar: 9 slots x 52px */

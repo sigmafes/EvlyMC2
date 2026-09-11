@@ -32,6 +32,10 @@ type Entity = {
   count: number;
   age: number;
   grounded: boolean;
+  /** Restored from a save whose chunk hasn't finished loading yet: physics is
+   *  skipped (frozen in place) until it has, so it doesn't free-fall through
+   *  not-yet-generated terrain and end up buried once the real ground appears. */
+  pendingChunk: boolean;
 };
 
 export class DroppedItems {
@@ -49,6 +53,7 @@ export class DroppedItems {
     private readonly collect: (slot: InventorySlot) => number,
     private readonly onPickup?: () => void,
     seed?: number,
+    private readonly isChunkLoaded?: (x: number, z: number) => boolean,
   ) {
     if (seed != null) {
       this.store = new DroppedItemsStore(seed);
@@ -66,7 +71,7 @@ export class DroppedItems {
     if (!this.store) return;
     const records = await this.store.load();
     for (const rec of records) {
-      this.spawnEntity(rec.id, rec.count, new THREE.Vector3(rec.x, rec.y, rec.z), new THREE.Vector3(0, 0, 0), rec.age);
+      this.spawnEntity(rec.id, rec.count, new THREE.Vector3(rec.x, rec.y, rec.z), new THREE.Vector3(0, 0, 0), rec.age, true);
     }
   }
 
@@ -92,10 +97,12 @@ export class DroppedItems {
       vel.y += d.y * 3 + 1;
     }
 
-    this.spawnEntity(id, count, pos, vel, 0);
+    this.spawnEntity(id, count, pos, vel, 0, false);
   }
 
-  private spawnEntity(id: number, count: number, pos: THREE.Vector3, vel: THREE.Vector3, age: number): void {
+  private spawnEntity(
+    id: number, count: number, pos: THREE.Vector3, vel: THREE.Vector3, age: number, pendingChunk: boolean,
+  ): void {
     if (this.entities.length >= MAX_ENTITIES) this.removeAt(0);
 
     const slot = makeStack(id, count);
@@ -110,7 +117,7 @@ export class DroppedItems {
     box.position.copy(pos);
     this.scene.add(box);
 
-    this.entities.push({ group, box, vel, restY: pos.y, id, count, age, grounded: false });
+    this.entities.push({ group, box, vel, restY: pos.y, id, count, age, grounded: false, pendingChunk });
   }
 
   /**
@@ -125,6 +132,14 @@ export class DroppedItems {
 
     for (let i = this.entities.length - 1; i >= 0; i--) {
       const e = this.entities[i];
+
+      if (e.pendingChunk) {
+        if (!this.isChunkLoaded || !this.isChunkLoaded(Math.round(e.group.position.x), Math.round(e.group.position.z))) {
+          continue; // stay frozen (no gravity/age) until its terrain actually exists
+        }
+        e.pendingChunk = false;
+      }
+
       e.age += delta;
       if (e.age >= DESPAWN) { this.removeAt(i); continue; }
 

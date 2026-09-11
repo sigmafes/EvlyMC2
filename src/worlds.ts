@@ -3,7 +3,7 @@ import { BlockDataStore } from './block-data';
 import { DroppedItemsStore } from './dropped-items-store';
 import { deletePlayerSave } from './player-store';
 
-export const EVLYMC_VERSION = '0.1.0';
+export const EVLYMC_VERSION = 'A0.b';
 
 export type GameMode = 'Survival' | 'Creative';
 

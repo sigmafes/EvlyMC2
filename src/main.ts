@@ -266,6 +266,7 @@ const droppedItems = new DroppedItems(
   (stack) => inventory.addItem(stack),
   () => soundManager.playOne('player/Pop', 0.4),
   worldSeed,
+  (x, z) => world.isChunkLoaded(x, z),
 );
 spawnDrop = (id, count, pos) => droppedItems.spawn(id, count, pos);
 await droppedItems.loadPersisted();

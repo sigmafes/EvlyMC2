@@ -2,7 +2,7 @@ import { renderBlockPreview, renderItemIcon } from './block-preview';
 import { isBlock, maxStackOf } from './item';
 import { showTooltip, hideTooltip } from './tooltip';
 import { CraftingGrid } from './crafting-grid';
-import { lockPointer } from './is-touch';
+import { lockPointer, unlockPointerForGui } from './is-touch';
 
 export type InventorySlot = {
   /** BlockId value (1..23) for blocks, ItemId value (100+) for items, null when empty. */
@@ -146,6 +146,9 @@ export class Inventory {
     document.addEventListener('pointermove', this.onPaintMove);
     document.addEventListener('pointerup', this.onPaintUp);
     document.addEventListener('pointercancel', this.onPaintUp);
+    // Right-click-drag paint (see onPaintDown) can end over a gap between slots,
+    // which has no per-slot contextmenu listener to swallow the browser's menu.
+    document.addEventListener('contextmenu', (event) => { if (this.paint.down) event.preventDefault(); });
     this.select(0);
   }
 
@@ -166,6 +169,7 @@ export class Inventory {
       el.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (this.consumeClickSuppression()) return;
         this.onSlotRightClick({ kind: 'craft', grid, index: i });
       });
     });
@@ -185,6 +189,7 @@ export class Inventory {
       el.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (this.consumeClickSuppression()) return;
         this.onSlotRightClick({ kind: 'stored', index });
       });
       (this.elementsByIndex[index] ??= []).push(el as HTMLButtonElement);
@@ -259,6 +264,7 @@ export class Inventory {
       element.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (this.consumeClickSuppression()) return;
         this.onSlotRightClick({ kind: 'stored', index });
       });
     }
@@ -513,10 +519,12 @@ export class Inventory {
     return true;
   }
 
-  // --- Swipe-to-deposit (mobile) --------------------------------------------
-  // With a stack on the cursor, dragging a finger across several slots drops one
-  // item in each - fast filling of a crafting pattern. Touch only; the mouse
-  // keeps click = place-stack, right-click = place-one.
+  // --- Swipe/drag-to-deposit -------------------------------------------------
+  // With a stack on the cursor, dragging across several slots drops one item in
+  // each - fast filling of a crafting pattern. Touch: any drag. Mouse: holding
+  // the RIGHT button and dragging (left-click stays place-stack, a plain
+  // right-click without moving stays place-one via the per-slot contextmenu
+  // handlers - see the consumeClickSuppression() calls there).
 
   private slotElAt(x: number, y: number): HTMLElement | null {
     const el = document.elementFromPoint(x, y) as HTMLElement | null;
@@ -525,7 +533,8 @@ export class Inventory {
   }
 
   private onPaintDown = (event: PointerEvent) => {
-    if (event.pointerType === 'mouse' || !this.heldItem) return;
+    if (event.pointerType === 'mouse' && event.button !== 2) return;
+    if (!this.heldItem) return;
     const slotEl = this.slotElAt(event.clientX, event.clientY);
     if (!slotEl) return;
     this.paint = { down: true, committed: false, startEl: slotEl, seen: new Set() };
@@ -629,7 +638,7 @@ export class Inventory {
       hideTooltip();
     }
     const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
-    if (this.backpackOpen) document.exitPointerLock();
+    if (this.backpackOpen) unlockPointerForGui();
     else lockPointer(canvas);
     this.onToggle?.(this.backpackOpen);
   }
@@ -646,6 +655,7 @@ export class Inventory {
     el.addEventListener('contextmenu', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if (this.consumeClickSuppression()) return;
       if (ext.takeOnly) { this.takeFromExternal(ext); return; }
       this.onSlotRightClick({ kind: 'ext', ext });
     });
