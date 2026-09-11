@@ -99,7 +99,7 @@ independiente, de menor a mayor riesgo.
     `updateLeavesDecay()` llamar `getDrops(BlockId.OAK_LEAVES, true)` por cada hoja
     antes de removerla, igual que al minar a mano.
 
-## Fase F — Física del jugador
+## Fase F — Física del jugador  ✅ HECHO
 14. **La cámara en 3ª persona atraviesa bloques.** `PlayerController.updateCamera()`
     coloca la cámara en un offset fijo sin ningún chequeo contra el mundo. Fix: un
     sondeo por pasos (voxel stepping, sin necesitar el raycaster de Three.js) desde el

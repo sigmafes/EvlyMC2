@@ -428,6 +428,7 @@ const touchControls = TouchControls.isTouchDevice()
       onPause: () => pauseMenu.toggle(),
     })
   : null;
+player.onSneakChange = (on) => touchControls?.setSneakVisual(on);
 
 const clock = new THREE.Clock();
 

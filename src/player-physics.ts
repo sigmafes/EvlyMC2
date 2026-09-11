@@ -46,6 +46,11 @@ export class PlayerPhysics {
   private airPeakY: number | null = null;
   /** Fall distance (blocks) on the frame the player just landed; 0 otherwise. */
   fallImpact = 0;
+  /** Seconds until the next upward "stroke" impulse while holding Space in water; <=0 means due now. */
+  private strokeTimer = 0;
+  private static readonly STROKE_INTERVAL = 0.35;
+  private static readonly STROKE_IMPULSE = 2.6;
+  private static readonly STROKE_SINK = -0.6;
 
   constructor(
     private readonly getBlocks: () => Iterable<BlockCollider>,
@@ -117,8 +122,19 @@ export class PlayerPhysics {
       this.state.velocity.z = THREE.MathUtils.damp(this.state.velocity.z, targetVelZ, acceleration, delta);
 
       if (wantJump) {
-        this.state.velocity.y = THREE.MathUtils.damp(this.state.velocity.y, 3.2, 8, delta);
+        // "Stroke" swimming instead of a smooth continuous rise: a discrete
+        // upward kick every STROKE_INTERVAL, with a slight sink in between -
+        // holding Space no longer floats you up for free, you have to keep
+        // stroking and still settle back down a bit between kicks.
+        this.strokeTimer -= delta;
+        if (this.strokeTimer <= 0) {
+          this.state.velocity.y = PlayerPhysics.STROKE_IMPULSE;
+          this.strokeTimer = PlayerPhysics.STROKE_INTERVAL;
+        } else {
+          this.state.velocity.y = THREE.MathUtils.damp(this.state.velocity.y, PlayerPhysics.STROKE_SINK, 4, delta);
+        }
       } else {
+        this.strokeTimer = 0;
         const fallSpeed = flow.y < 0 ? -3.5 : -1.8;
         this.state.velocity.y = THREE.MathUtils.damp(this.state.velocity.y, fallSpeed, 5, delta);
       }

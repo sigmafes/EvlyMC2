@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BlockId } from './block';
+import { BlockId, isSolidBlock } from './block';
 import { PlayerPhysics } from './player-physics';
 import { ViewBob } from './view-bob';
 import { getBlockSound } from './block-sounds';
@@ -102,8 +102,12 @@ export class PlayerController {
     this.touchJump = held;
   }
 
+  /** Fired whenever sneak is forced off/on programmatically (sprint <-> sneak exclusion), so the on-screen sneak button can stay in sync. */
+  onSneakChange?: (on: boolean) => void;
+
   /** On-screen sneak toggle. */
   setSneak(on: boolean) {
+    if (on) this.setSprint(false);
     this.physics.setSneaking(on);
   }
 
@@ -115,6 +119,13 @@ export class PlayerController {
   /** Double-tap-forward sprint (auto-clears when movement stops, like MCPE). */
   setSprint(on: boolean) {
     this.sprinting = on;
+    // Sprint and sneak are mutually exclusive (can't run while crouched, or
+    // vice versa): activating one cancels the other, and the on-screen
+    // sneak button is told so its pressed-visual doesn't get out of sync.
+    if (on && this.state.sneaking) {
+      this.physics.setSneaking(false);
+      this.onSneakChange?.(false);
+    }
   }
 
   get sneaking() {
@@ -186,10 +197,13 @@ export class PlayerController {
       // Front view (mode 2) swings the boom to the opposite side; the camera
       // still looks back at the player (LCE F5 third-person-front).
       const front = this.cameraMode === 2;
-      this.camera.position.copy(this.thirdPersonOffset)
+      const desiredOffset = this.thirdPersonOffset.clone()
         .applyAxisAngle(new THREE.Vector3(1, 0, 0), (front ? 1 : -1) * -this.state.pitch)
-        .applyAxisAngle(new THREE.Vector3(0, 1, 0), this.state.yaw + (front ? Math.PI : 0))
-        .add(eye);
+        .applyAxisAngle(new THREE.Vector3(0, 1, 0), this.state.yaw + (front ? Math.PI : 0));
+      const maxDist = desiredOffset.length();
+      const dir = desiredOffset.clone().normalize();
+      const dist = this.cameraCollisionDistance(eye, dir, maxDist);
+      this.camera.position.copy(dir).multiplyScalar(dist).add(eye);
       this.camera.lookAt(eye);
     } else {
       this.camera.position.copy(eye);
@@ -201,6 +215,22 @@ export class PlayerController {
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 8, 0.016);
       this.camera.updateProjectionMatrix();
     }
+  }
+
+  /**
+   * Voxel-stepping camera boom collision: walks from the player's eye toward
+   * the desired third-person camera position and stops just before the first
+   * solid block, so the boom no longer clips through walls/terrain.
+   */
+  private cameraCollisionDistance(eye: THREE.Vector3, dir: THREE.Vector3, maxDist: number): number {
+    if (!this.getBlock) return maxDist;
+    const step = 0.1;
+    for (let dist = step; dist <= maxDist; dist += step) {
+      const p = eye.x + dir.x * dist, py = eye.y + dir.y * dist, pz = eye.z + dir.z * dist;
+      const id = this.getBlock(Math.floor(p), Math.floor(py), Math.floor(pz));
+      if (isSolidBlock(id)) return Math.max(dist - step, 0.2);
+    }
+    return maxDist;
   }
 
   private applyViewBob() {
@@ -303,11 +333,11 @@ export class PlayerController {
   private onKeyDown = (event: KeyboardEvent) => {
     this.keys.add(event.code);
     if (event.code === 'ControlLeft' && !event.repeat && this.isMovementKeyPressed()) {
-      this.sprinting = true;
+      this.setSprint(true);
     }
     if (event.code === 'KeyI' && !event.repeat) this.cameraMode = (this.cameraMode + 1) % 3;
     if (event.code === 'ShiftLeft') {
-      this.physics.setSneaking(true);
+      this.setSneak(true);
     }
     if (event.code === 'Space') event.preventDefault();
   };
@@ -316,6 +346,7 @@ export class PlayerController {
     this.keys.delete(event.code);
     if (event.code === 'ShiftLeft') {
       this.physics.setSneaking(false);
+      this.onSneakChange?.(false);
     }
   };
 

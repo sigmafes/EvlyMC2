@@ -42,6 +42,7 @@ export class TouchControls {
   private readonly lookLayer: HTMLElement;
   private readonly dirs = new Set<string>();
   private sneakOn = false;
+  private sneakButton: HTMLButtonElement | null = null;
 
   // World gesture state (one finger at a time on the look layer).
   private lookPointer: number | null = null;
@@ -53,6 +54,12 @@ export class TouchControls {
   private holdTimer = 0;
   private breaking = false;
   private lastForwardPress = 0;
+
+  /** Sync the on-screen sneak button's pressed-visual without re-firing onSneak (used when sprint cancels sneak programmatically). */
+  setSneakVisual(on: boolean) {
+    this.sneakOn = on;
+    this.sneakButton?.classList.toggle('pressed', on);
+  }
 
   constructor(private readonly cb: TouchControlsCallbacks) {
     document.body.classList.add('touch');
@@ -188,6 +195,7 @@ export class TouchControls {
     jump.addEventListener('pointerleave', jumpUp);
 
     const sneak = this.root.querySelector<HTMLButtonElement>('.tc-sneak')!;
+    this.sneakButton = sneak;
     sneak.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
