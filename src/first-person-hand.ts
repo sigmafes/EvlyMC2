@@ -21,7 +21,15 @@ export type HandBobContext = {
 
 // Resting poses (Phase A). Animations layer on top of these each frame.
 const ARM_BASE_POS = new THREE.Vector3(0.58, -0.62, -0.72);
-const ARM_BASE_ROT = new THREE.Euler(-78 * DEG, -22 * DEG, 12 * DEG);
+// buildArmGeometry's box has the shoulder end at local +Y and the fist/wrist
+// end at local -Y (SKIN_UV.armRight py/ny - same convention the correctly-
+// oriented third-person arm uses). The X component here rotates that length
+// axis toward the camera: at -78 deg it swung the SHOULDER end to -Z (toward
+// the camera, i.e. in front) and the fist to +Z (away/hidden) - backwards, so
+// the viewmodel showed its shoulder instead of its fist. Flipping the sign
+// (+78 deg) sends the fist to -Z (front, visible) and the shoulder to +Z
+// (behind), matching a real first-person view of your own forearm.
+const ARM_BASE_ROT = new THREE.Euler(78 * DEG, -22 * DEG, 12 * DEG);
 const HELD_BASE_POS = new THREE.Vector3(0.62, -0.52, -0.78);
 const HELD_BASE_YAW = 45 * DEG;
 

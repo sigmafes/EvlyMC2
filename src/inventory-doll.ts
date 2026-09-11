@@ -40,7 +40,6 @@ export class InventoryDoll {
     group.position.y = 0.5; // lift feet into frame; model origin is at the eyes
     this.tiltGroup.add(group);
     this.scene.add(this.tiltGroup);
-    this.model.setLightLevel(1);
     this.model.setVisible(true);
 
     // Camera on -Z so it faces the model's front (model forward is -Z).
@@ -93,6 +92,14 @@ export class InventoryDoll {
 
     this.model.setInventoryPose(this.bodyYaw, this.headYaw, this.headPitch);
     this.tiltGroup.rotation.x = this.tilt;
+    // The skin atlas material is a shared singleton across every PlayerModel
+    // instance (see getAtlasMaterial() in player-model.ts) - the in-world
+    // player model retints it to the world's light level every frame, which
+    // was leaking into the doll too since it only set its own tint once, at
+    // construction. Force it back to full brightness right before every
+    // render so the doll always reads unlit regardless of what the world
+    // model did to the shared material in between.
+    this.model.setLightLevel(1);
     this.renderer.render(this.scene, this.camera);
   };
 }
