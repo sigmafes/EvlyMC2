@@ -136,12 +136,13 @@ export class MainMenu {
         this.openWorldSelect(handlers);
       } else if (button.dataset.action === 'options') {
         this.optionsRoot.hidden = false;
+      } else if (button.id === 'open-player-options') {
+        this.openPlayerOptions();
       }
     });
     this.optionsRoot.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLElement>('.mc-button');
       if (button?.dataset.action === 'options-back') this.optionsRoot.hidden = true;
-      else if (button?.id === 'open-player-options') this.openPlayerOptions();
     });
     this.playerOptionsRoot.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLElement>('.mc-button');
@@ -152,7 +153,6 @@ export class MainMenu {
   }
 
   private openPlayerOptions(): void {
-    this.optionsRoot.hidden = true;
     this.playerOptionsRoot.hidden = false;
     this.playerOptionsDoll.setSlim(loadSettings().alexSkin);
     this.playerOptionsDoll.setActive(true);
@@ -160,7 +160,6 @@ export class MainMenu {
 
   private closePlayerOptions(): void {
     this.playerOptionsRoot.hidden = true;
-    this.optionsRoot.hidden = false;
     this.playerOptionsDoll.setActive(false);
   }
 
