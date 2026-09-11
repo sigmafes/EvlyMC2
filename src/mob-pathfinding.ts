@@ -1,10 +1,13 @@
 /**
  * Minimal A* over a local (x,z) grid, loosely modelled on LCE's own ground
  * path navigator: nodes are walkable footprint cells (solid block below, two
- * clear blocks above), steps are limited to +-1 block of ground height (no
- * falling off cliffs or hopping ledges), and diagonal moves require both
- * orthogonal neighbours to also be walkable so a path can't cut through the
- * corner of a wall. Bounded by `maxNodes` so a call from the main thread
+ * clear blocks above), diagonal moves require both orthogonal neighbours to
+ * also be walkable so a path can't cut through the corner of a wall, and
+ * step size is asymmetric - `maxStepUp` (default 1) matches what a mob can
+ * actually clear with a single jump impulse (see mob-manager.ts's
+ * JUMP_FORCE/GRAVITY - about 1.3 blocks), while `maxStepDown` (default 2, a
+ * zombie passes more) is generous since dropping off a ledge just needs
+ * gravity, not a jump. Bounded by `maxNodes` so a call from the main thread
  * during a single AI decision (never per-frame) stays cheap.
  */
 
@@ -19,14 +22,18 @@ const DIRS: [number, number][] = [
 
 /**
  * Ground block index near `refGroundBlock` at (x,z), or null if there's no
- * walkable column within the search window (a solid floor with 2 clear
- * blocks of headroom above). Search radius follows `maxStepDelta` (+1 above,
- * since a step up is checked the same way as a step down) so a wider step
- * budget (zombies) can actually find ledges that far away, not just accept
- * ones within the default +1/-2 animal window.
+ * walkable column within [refGroundBlock - maxStepDown, refGroundBlock +
+ * maxStepUp] (a solid floor with 2 clear blocks of headroom above).
  */
-function findGroundBlock(isSolid: (x: number, y: number, z: number) => boolean, x: number, z: number, refGroundBlock: number, maxStepDelta = 1): number | null {
-  for (let dy = 1; dy >= -(maxStepDelta + 1); dy--) {
+function findGroundBlock(
+  isSolid: (x: number, y: number, z: number) => boolean,
+  x: number,
+  z: number,
+  refGroundBlock: number,
+  maxStepUp: number,
+  maxStepDown: number,
+): number | null {
+  for (let dy = maxStepUp; dy >= -maxStepDown; dy--) {
     const groundBlock = refGroundBlock + dy;
     if (isSolid(x, groundBlock, z) && !isSolid(x, groundBlock + 1, z) && !isSolid(x, groundBlock + 2, z)) {
       return groundBlock;
@@ -48,8 +55,8 @@ export function findPath(
   goalX: number,
   goalZ: number,
   maxNodes = 150,
-  /** Largest ground-height change a single step may take (1 for animals; a zombie passes 3 to also climb/drop ledges up to 3 blocks). */
-  maxStepDelta = 1,
+  maxStepUp = 1,
+  maxStepDown = 2,
 ): PathPoint[] | null {
   const startX = Math.round(startFeet.x);
   const startZ = Math.round(startFeet.z);
@@ -86,13 +93,13 @@ export function findPath(
       const nk = key(nx, nz);
       if (closed.has(nk)) continue;
 
-      const groundBlock = findGroundBlock(isSolid, nx, nz, current.groundBlock, maxStepDelta);
-      if (groundBlock === null || Math.abs(groundBlock - current.groundBlock) > maxStepDelta) continue;
+      const groundBlock = findGroundBlock(isSolid, nx, nz, current.groundBlock, maxStepUp, maxStepDown);
+      if (groundBlock === null) continue;
 
       if (dx !== 0 && dz !== 0) {
         // No corner-cutting: both orthogonal neighbours must be walkable too.
-        if (findGroundBlock(isSolid, current.x + dx, current.z, current.groundBlock, maxStepDelta) === null) continue;
-        if (findGroundBlock(isSolid, current.x, current.z + dz, current.groundBlock, maxStepDelta) === null) continue;
+        if (findGroundBlock(isSolid, current.x + dx, current.z, current.groundBlock, maxStepUp, maxStepDown) === null) continue;
+        if (findGroundBlock(isSolid, current.x, current.z + dz, current.groundBlock, maxStepUp, maxStepDown) === null) continue;
       }
 
       const stepCost = dx !== 0 && dz !== 0 ? Math.SQRT2 : 1;

@@ -86,7 +86,8 @@ const CHASE_REPATH_INTERVAL = 1; // seconds between chase path re-plans
 const ATTACK_RANGE = 1.2;        // blocks, centre-to-centre
 const ATTACK_INTERVAL = 1;       // seconds between hits while in range
 const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
-const ZOMBIE_STEP_DELTA = 3;     // max up/down step a zombie's path can take (vs 1 for animals)
+const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY), same as animals - widening this would plan climbs it can't execute
+const ZOMBIE_STEP_DOWN = 3;      // a zombie will drop off a 3-block ledge chasing the player; gravity handles the descent, no jump needed
 const BURN_DAMAGE_INTERVAL = 1;  // seconds between sunlight-burn ticks
 const BURN_DAMAGE = 1;
 
@@ -193,8 +194,8 @@ export class MobManager {
     private readonly soundManager?: SoundManager,
     private readonly isWater?: (x: number, y: number, z: number) => boolean,
     private readonly onDeath?: (pos: THREE.Vector3) => void,
-    /** Hostile mobs (zombie) attack the player when in range - damage flows back through this. */
-    private readonly onAttackPlayer?: (damage: number) => void,
+    /** Hostile mobs (zombie) attack the player when in range - damage + the attacker's position (for knockback direction) flow back through this. */
+    private readonly onAttackPlayer?: (damage: number, fromPos: THREE.Vector3) => void,
     /** Player position, for hostile mobs to detect/chase - undefined disables chasing entirely. */
     private readonly getPlayerPos?: () => THREE.Vector3,
   ) {}
@@ -514,22 +515,38 @@ export class MobManager {
   private updateHostileAI(mob: Mob, delta: number): boolean {
     const playerPos = this.getPlayerPos?.();
     const pos = mob.model.getGroup().position;
-    if (!playerPos || pos.distanceTo(playerPos) > CHASE_RADIUS) {
+    if (!playerPos) {
+      mob.chasing = false;
+      mob.attackTimer = 0;
+      return false;
+    }
+
+    // Horizontal distance only: playerPos is the player's EYE position (see
+    // main.ts spawn/attack wiring), roughly 1.6 blocks above their feet, so a
+    // 3D distanceTo() here made a zombie standing right next to the player
+    // read as ~1.6+ blocks away and never enter ATTACK_RANGE - the bug behind
+    // "the zombie doesn't attack". Horizontal distance is what actually
+    // matters for melee reach; a generous vertical gate below just keeps a
+    // zombie on a completely different floor from "reaching through" it.
+    const dx = playerPos.x - pos.x;
+    const dz = playerPos.z - pos.z;
+    const dy = playerPos.y - pos.y;
+    const dist = Math.hypot(dx, dz);
+    if (dist > CHASE_RADIUS || Math.abs(dy) > CHASE_RADIUS) {
       mob.chasing = false;
       mob.attackTimer = 0;
       return false;
     }
     mob.chasing = true;
-    const dist = pos.distanceTo(playerPos);
 
-    if (dist <= ATTACK_RANGE) {
+    if (dist <= ATTACK_RANGE && Math.abs(dy) <= mob.height + 1) {
       mob.path = null;
       this.applyGroundFriction(mob, delta);
-      this.easeYawTo(mob, Math.atan2(-(playerPos.x - pos.x), -(playerPos.z - pos.z)), delta, TURN_RATE);
+      this.easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
       mob.attackTimer -= delta;
       if (mob.attackTimer <= 0) {
         mob.attackTimer = ATTACK_INTERVAL;
-        this.onAttackPlayer?.(ZOMBIE_ATTACK_DAMAGE);
+        this.onAttackPlayer?.(ZOMBIE_ATTACK_DAMAGE, pos.clone());
       }
       return true;
     }
@@ -538,26 +555,50 @@ export class MobManager {
     mob.chaseRepathTimer -= delta;
     if (!mob.path || mob.pathIndex >= mob.path.length || mob.chaseRepathTimer <= 0) {
       mob.chaseRepathTimer = CHASE_REPATH_INTERVAL;
-      const path = findPath(this.isSolid, pos, playerPos.x, playerPos.z, 150, ZOMBIE_STEP_DELTA);
-      if (path) { mob.path = path; mob.pathIndex = 1; }
+      const path = findPath(this.isSolid, pos, playerPos.x, playerPos.z, 150, ZOMBIE_STEP_UP, ZOMBIE_STEP_DOWN);
+      if (path) {
+        mob.path = path;
+        mob.pathIndex = 1;
+      } else {
+        // No graph path (e.g. the zombie itself fell into a pit deeper than
+        // ZOMBIE_STEP_UP/DOWN can bridge) - walk straight at the player anyway.
+        // updatePhysics's collision + auto-step jump still runs on this raw
+        // movement, so it can climb out through any ledge/step A* missed,
+        // the same "boxed in" fallback pickFleeTarget already uses.
+        mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: playerPos.x, y: pos.y, z: playerPos.z }];
+        mob.pathIndex = 1;
+      }
     }
     if (mob.path) this.followPath(mob, mob.walkSpeed, delta);
     else this.applyGroundFriction(mob, delta);
     return true;
   }
 
-  /** Path::A* (mob-pathfinding.ts) to a random reachable point within WANDER_RADIUS_MIN..MAX blocks. */
+  /**
+   * Path::A* (mob-pathfinding.ts) to a random reachable point within
+   * WANDER_RADIUS_MIN..MAX blocks. When A* finds nothing at all - most
+   * commonly a mob that fell into a hole deeper than a single jump can
+   * bridge in the graph search - walk straight toward that random point
+   * anyway instead of standing still forever. That raw movement still goes
+   * through updatePhysics's collision + auto-step jump, so it keeps
+   * bumping/hopping against whatever's blocking it each time this gets
+   * re-picked, which is enough to climb out of a shallow (~1 block) pit or
+   * over a step the graph search missed, even though it can't guarantee an
+   * escape from a hole deeper than a mob can physically jump.
+   */
   private pickWanderTarget(mob: Mob): void {
     const pos = mob.model.getGroup().position;
     const angle = Math.random() * Math.PI * 2;
     const radius = WANDER_RADIUS_MIN + Math.random() * (WANDER_RADIUS_MAX - WANDER_RADIUS_MIN);
-    const path = findPath(this.isSolid, pos, pos.x + Math.sin(angle) * radius, pos.z + Math.cos(angle) * radius);
+    const goalX = pos.x + Math.sin(angle) * radius;
+    const goalZ = pos.z + Math.cos(angle) * radius;
+    const path = findPath(this.isSolid, pos, goalX, goalZ);
     if (path) {
       mob.path = path;
       mob.pathIndex = 1; // path[0] is the mob's own current cell
     } else {
-      mob.path = null;
-      mob.decisionTimer = 1; // nowhere reachable - try again shortly
+      mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: goalX, y: pos.y, z: goalZ }];
+      mob.pathIndex = 1;
     }
   }
 

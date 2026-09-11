@@ -307,6 +307,12 @@ await droppedItems.loadPersisted();
 // side table; the phase-5 GUI feeds it items.
 const furnaceManager = new FurnaceManager(world);
 
+// Knockback dealt TO the player by a mob attack (zombie) - same magnitude
+// as the knockback MobManager already applies to a mob the player hits
+// (KNOCKBACK_SPEED/KNOCKBACK_UP in mob-manager.ts).
+const PLAYER_KNOCKBACK_SPEED = 5;
+const PLAYER_KNOCKBACK_UP = 4;
+
 // Mobs (PLAN-MOBS.md): models + wander/flee AI, health and drops - see
 // mob-manager.ts. Spawned in via /summon for now, nothing places them on its own.
 const mobManager = new MobManager(
@@ -320,7 +326,21 @@ const mobManager = new MobManager(
     mobSpawnBlockTimer = MOB_SPAWN_DEATH_COOLDOWN; // no new ambient spawns for a while after a death/despawn
     hostileSpawnBlockTimer = HOSTILE_SPAWN_DEATH_COOLDOWN;
   },
-  (damage) => playerHealth.damage(damage, { cause: 'generic' }),
+  (damage, fromPos) => {
+    playerHealth.damage(damage, { cause: 'generic' });
+    // Every other damage source (fall/fire/lava, see the game loop below)
+    // syncs the HUD heart bar right after calling playerHealth.damage() -
+    // it isn't automatic, so skipping this made a zombie hit invisible on
+    // the HUD even though the health value itself was being reduced fine.
+    hud.setHealth(playerHealth.current);
+    // Knockback (same shove-away-from-the-attacker feel MobManager already
+    // gives a hit mob, KNOCKBACK_SPEED/KNOCKBACK_UP in mob-manager.ts) - a
+    // zombie hit landing was otherwise silent, no push, unlike every other
+    // source of player damage having some physical feedback.
+    const dx = player.state.position.x - fromPos.x;
+    const dz = player.state.position.z - fromPos.z;
+    player.applyKnockback(dx, dz, PLAYER_KNOCKBACK_SPEED, PLAYER_KNOCKBACK_UP);
+  },
   () => player.state.position,
 );
 hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);

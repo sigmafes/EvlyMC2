@@ -47,10 +47,14 @@ const HEAD_PIVOT_Y = SHOULDER_Y + HEAD_SIZE[1] / 2;
 const LEG_INSET_X = LEG_SIZE[0] / 2;                  // legs flush together under the body's centre line
 const ARM_INSET_X = BODY_SIZE[0] / 2 + ARM_SIZE[0] / 2; // arms just outside the body
 
-// Arms held up overhead (zombie's signature pose) instead of hanging down
-// like the legs - the mesh itself still hangs from its pivot (same
-// leg-style offset), so a ~180 deg pitch flips it to point up.
-const ARM_PITCH = Math.PI * 0.92;
+// Arms held out straight ahead (zombie's signature reaching pose) instead
+// of hanging down like the legs. The mesh hangs from its pivot along local
+// -Y at rotation.x=0 (same as a leg); the model's forward is local -Z (see
+// atlas-box.ts/player-model.ts: "the model faces -Z"), and rotating a
+// -Y-hanging point by +90 deg about X swings it to -Z - i.e. forward, not
+// up. (A first attempt used ~166 deg here, which pointed the arms mostly
+// back up overhead instead - this is the "hacia adelante" fix.)
+const ARM_PITCH = Math.PI / 2;
 
 export const ZOMBIE_SPEC: BipedSpec = {
   texturePath: TEXTURE_PATH,

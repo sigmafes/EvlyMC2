@@ -297,6 +297,13 @@ export class PlayerController {
     this.hurtDir = Math.random() < 0.5 ? -1 : 1;
   }
 
+  /** Knockback from a mob attack: a horizontal shove (dirX,dirZ need not be normalised) at `speed`, plus a small hop. */
+  applyKnockback(dirX: number, dirZ: number, speed: number, upSpeed: number) {
+    const len = Math.hypot(dirX, dirZ) || 1;
+    this.physics.applyKnockback((dirX / len) * speed, (dirZ / len) * speed, upSpeed);
+    this.state.velocity.copy(this.physics.state.velocity);
+  }
+
   look(deltaX: number, deltaY: number) {
     // While the free camera owns the view, the player must not rotate.
     if (!this.cameraControlEnabled) return;

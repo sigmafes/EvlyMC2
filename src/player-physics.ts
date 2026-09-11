@@ -78,6 +78,21 @@ export class PlayerPhysics {
     this.fallImpact = 0;
   }
 
+  /**
+   * Instant velocity impulse from a mob attack - same shape as MobManager's
+   * own hit knockback (a horizontal shove + a small hop). Overwrites rather
+   * than adds, so repeated hits don't stack into runaway speed; grounded is
+   * cleared so the next updatePhysics() tick doesn't immediately re-snap Y
+   * back to the floor before the hop has a chance to lift the player.
+   */
+  applyKnockback(velX: number, velZ: number, velY: number) {
+    this.state.velocity.x = velX;
+    this.state.velocity.z = velZ;
+    this.state.velocity.y = velY;
+    this.state.grounded = false;
+    this.airPeakY = null;
+  }
+
   setSneaking(sneaking: boolean) {
     this.state.sneaking = sneaking;
     this.state.eyeHeight = sneaking ? 1.27 : 1.62;
