@@ -32,6 +32,7 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.CRAFTING_TABLE]: 2.5,
   [BlockId.GLASS]: 0.3,
   [BlockId.FURNACE]: 3.5,
+  [BlockId.TORCH]: 0,
 };
 
 type BlockTool = {

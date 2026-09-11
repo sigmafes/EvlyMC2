@@ -81,6 +81,7 @@ export class Subchunk {
       this.materials[BlockId.CRAFTING_TABLE],
       this.materials[BlockId.GLASS],
       this.materials[BlockId.FURNACE],
+      this.materials[BlockId.TORCH],
     ].flatMap((material) => Array.isArray(material) ? material : [material]);
     previousGeometry.dispose();
   }

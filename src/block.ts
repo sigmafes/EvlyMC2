@@ -27,6 +27,7 @@ export enum BlockId {
   CRAFTING_TABLE = 23,
   GLASS = 24,
   FURNACE = 25,
+  TORCH = 26,
 }
 
 export type VoxelBlock = {
@@ -80,6 +81,7 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.CRAFTING_TABLE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: { catchOdds: 5, burnOdds: 20 } },
   [BlockId.GLASS]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
   [BlockId.FURNACE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.TORCH]: { opacity: 0, emission: 15, liquid: false, cull: false, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -91,7 +93,7 @@ export function isFlammable(id: BlockId): boolean {
 export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE, BlockId.FURNACE]);
 
 /** Blocks that carry side-table state (facing / lit) the mesher must read. */
-export const STATEFUL_BLOCKS = new Set<BlockId>([BlockId.FURNACE]);
+export const STATEFUL_BLOCKS = new Set<BlockId>([BlockId.FURNACE, BlockId.TORCH]);
 
 /** Blocks whose `facing` is set from the player's yaw when placed. */
 export const ORIENTABLE_BLOCKS = new Set<BlockId>([BlockId.FURNACE]);
@@ -148,8 +150,9 @@ export function createBlockMaterials(): BlockMaterials {
   const furnaceOff = loader.load(new URL('../textures/blocks/furnace_off.png', import.meta.url).href);
   const furnaceOn = loader.load(new URL('../textures/blocks/furnace_on.png', import.meta.url).href);
   const furnaceTop = loader.load(new URL('../textures/blocks/furnace_top.png', import.meta.url).href);
+  const torch = loader.load(new URL('../textures/blocks/torch.png', import.meta.url).href);
 
-  for (const texture of [bedrock, oakPlanks, stone, dirt, grassTop, grassSide, glowstone, oakLog, oakLogTop, oakLeaves, sand, fireAtlas, cobblestone, obsidian, ice, coalOre, ironOre, goldOre, diamondOre, emeraldOre, lapisOre, redstoneOre, craftingTableSide1, craftingTableSide2, craftingTableTop, glass, furnaceSide, furnaceOff, furnaceOn, furnaceTop]) {
+  for (const texture of [bedrock, oakPlanks, stone, dirt, grassTop, grassSide, glowstone, oakLog, oakLogTop, oakLeaves, sand, fireAtlas, cobblestone, obsidian, ice, coalOre, ironOre, goldOre, diamondOre, emeraldOre, lapisOre, redstoneOre, craftingTableSide1, craftingTableSide2, craftingTableTop, glass, furnaceSide, furnaceOff, furnaceOn, furnaceTop, torch]) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.magFilter = THREE.NearestFilter;
     texture.minFilter = THREE.NearestFilter;
@@ -273,6 +276,14 @@ export function createBlockMaterials(): BlockMaterials {
       new THREE.MeshBasicMaterial({ map: furnaceOn, vertexColors: true }),
       new THREE.MeshBasicMaterial({ map: furnaceTop, vertexColors: true }),
     ],
+    [BlockId.TORCH]: new THREE.MeshBasicMaterial({
+      map: torch,
+      transparent: true,
+      alphaTest: 0.1,
+      depthWrite: true,
+      side: THREE.DoubleSide,
+      vertexColors: true,
+    }),
   };
 
   materials.updateWaterAnimation = (time: number) => {

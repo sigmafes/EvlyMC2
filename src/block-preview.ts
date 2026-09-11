@@ -254,27 +254,29 @@ export function buildBlockMesh(slot: InventorySlot, onTextureLoad: () => void = 
   const isLava = slot.id === BlockId.LAVA;
   const isLiquid = isWater || isLava;
   const isFire = slot.id === BlockId.FIRE;
+  const isTorch = slot.id === BlockId.TORCH;
 
   // Fire isn't a solid cube in-game - it's a flat animated sprite (a "cross" of
   // planes). Boxing it with the flipbook texture looked wrong; show it as a
   // single flat quad instead, like a proper icon.
-  if (isFire && slot.sideTexture) {
-    const fireTexture = loadTexture(slot.sideTexture, onTextureLoad);
-    fireTexture.colorSpace = THREE.SRGBColorSpace;
-    fireTexture.magFilter = THREE.NearestFilter;
-    fireTexture.minFilter = THREE.NearestFilter;
-    fireTexture.wrapS = THREE.ClampToEdgeWrapping;
-    fireTexture.wrapT = THREE.RepeatWrapping;
-    fireTexture.repeat.set(1, 1 / 32);
-    fireTexture.offset.set(0, 31 / 32);
-
-    const fireMaterial = new THREE.MeshBasicMaterial({
-      map: fireTexture,
+  if ((isFire || isTorch) && slot.sideTexture) {
+    const tex = loadTexture(slot.sideTexture, onTextureLoad);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    if (isFire) {
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(1, 1 / 32);
+      tex.offset.set(0, 31 / 32);
+    }
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
       transparent: true,
       alphaTest: 0.05,
       side: THREE.DoubleSide,
     });
-    group.add(new THREE.Mesh(new THREE.PlaneGeometry(1.9, 1.9), fireMaterial));
+    group.add(new THREE.Mesh(new THREE.PlaneGeometry(1.9, 1.9), mat));
     return group;
   }
 

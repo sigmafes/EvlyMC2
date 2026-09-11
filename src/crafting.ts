@@ -9,6 +9,7 @@ export type Recipe = ShapelessRecipe | ShapedRecipe;
 
 const P = BlockId.OAK_PLANKS;
 const S = ItemId.STICK;
+const C = BlockId.COBBLESTONE;
 const _ = null;
 
 /** Pickaxe / axe (both mirrors) / shovel from a single material `m`. */
@@ -25,6 +26,12 @@ export const RECIPES: Recipe[] = [
   { kind: 'shapeless', input: [BlockId.OAK_LOG], out: { id: BlockId.OAK_PLANKS, count: 4 } },
   { kind: 'shaped', pattern: [[P, P], [P, P]], out: { id: BlockId.CRAFTING_TABLE, count: 1 } },
   { kind: 'shaped', pattern: [[P], [P]], out: { id: ItemId.STICK, count: 4 } },
+
+  // Furnace: a ring of 8 cobblestone (3x3 only, like the tool recipes).
+  { kind: 'shaped', pattern: [[C, C, C], [C, _, C], [C, C, C]], out: { id: BlockId.FURNACE, count: 1 } },
+  // Torch: coal (or charcoal) over a stick.
+  { kind: 'shaped', pattern: [[ItemId.COAL], [S]], out: { id: BlockId.TORCH, count: 4 } },
+  { kind: 'shaped', pattern: [[ItemId.CHARCOAL], [S]], out: { id: BlockId.TORCH, count: 4 } },
 
   ...toolSet(P, ItemId.WOODEN_PICKAXE, ItemId.WOODEN_AXE, ItemId.WOODEN_SHOVEL),
   ...toolSet(BlockId.COBBLESTONE, ItemId.STONE_PICKAXE, ItemId.STONE_AXE, ItemId.STONE_SHOVEL),

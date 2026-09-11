@@ -344,6 +344,9 @@ export class BlockInteraction {
       return;
     }
 
+    // Torches can't hang from a ceiling.
+    if (this.selectedBlock === BlockId.TORCH && hit.intersection.face.normal.y < -0.5) return;
+
     let placedAt: THREE.Vector3 | null = null;
     const placed = this.placer.placeBlock(
       hit.blockPosition,
@@ -364,6 +367,15 @@ export class BlockInteraction {
         // Orientable block (furnace): its front (off) face looks at the player.
         const p = placedAt as THREE.Vector3;
         this.world.setBlockData(p.x, p.y, p.z, { facing: facingTowardPlayer(this.player.state.yaw) });
+      }
+      if (placedAt && this.selectedBlock === BlockId.TORCH) {
+        // Side face -> wall torch leaning along the face normal; top face -> floor torch.
+        const p = placedAt as THREE.Vector3;
+        const n = hit.intersection.face.normal;
+        if (Math.abs(n.y) < 0.5) {
+          const facing = n.x > 0.5 ? 1 : n.x < -0.5 ? 3 : n.z > 0.5 ? 0 : 2;
+          this.world.setBlockData(p.x, p.y, p.z, { facing });
+        }
       }
       if (this.selectedBlock) {
         const sound = getBlockSound(this.selectedBlock, 'place') ?? getBlockSound(this.selectedBlock, 'dig');

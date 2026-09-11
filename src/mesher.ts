@@ -47,7 +47,8 @@ export const MATERIAL_FURNACE_SIDE = 31;
 export const MATERIAL_FURNACE_FRONT_OFF = 32;
 export const MATERIAL_FURNACE_FRONT_ON = 33;
 export const MATERIAL_FURNACE_TOP = 34;
-const MATERIAL_COUNT = 35;
+export const MATERIAL_TORCH = 35;
+const MATERIAL_COUNT = 36;
 
 export type BlockReader = (x: number, y: number, z: number) => BlockId;
 export type LightReader = (x: number, y: number, z: number) => number;
@@ -197,6 +198,49 @@ function addFireCeiling(
       vertices.push(x, vy, z);
       colors.push(1, 1, 1);
     }
+    uvs.push(0, 0, 0, 1, 1, 1, 1, 0);
+    indices.push(
+      base, base + 1, base + 2, base, base + 2, base + 3,
+      base, base + 2, base + 1, base, base + 3, base + 2,
+    );
+  }
+}
+
+/**
+ * A torch: two crossed vertical quads showing torch.png (alpha-cut). A floor
+ * torch (facing undefined) stands centred; a wall torch (facing 0..3 = the
+ * direction it leans) has its base against the wall and its head tilted out.
+ */
+function addTorch(
+  vertices: number[], uvs: number[], colors: number[], indices: number[],
+  wx: number, y: number, wz: number, facing: number | undefined,
+) {
+  const hw = 0.34;          // half quad width
+  const H = 0.7;            // torch height
+  let bx = 0, bz = 0, tx = 0, tz = 0;
+  let by = y - 0.5, ty = y - 0.5 + H;
+  if (facing !== undefined) {
+    const dx = facing === 1 ? 1 : facing === 3 ? -1 : 0;
+    const dz = facing === 0 ? 1 : facing === 2 ? -1 : 0;
+    bx = -dx * 0.30; bz = -dz * 0.30; by = y - 0.30;
+    tx = dx * 0.12; tz = dz * 0.12; ty = y - 0.30 + H;
+  }
+  for (const along of ['x', 'z'] as const) {
+    const base = vertices.length / 3;
+    const corners = along === 'x'
+      ? [
+          [wx + bx - hw, by, wz + bz],
+          [wx + tx - hw, ty, wz + tz],
+          [wx + tx + hw, ty, wz + tz],
+          [wx + bx + hw, by, wz + bz],
+        ]
+      : [
+          [wx + bx, by, wz + bz - hw],
+          [wx + tx, ty, wz + tz - hw],
+          [wx + tx, ty, wz + tz + hw],
+          [wx + bx, by, wz + bz + hw],
+        ];
+    for (const [X, Y, Z] of corners) { vertices.push(X, Y, Z); colors.push(1, 1, 1); }
     uvs.push(0, 0, 0, 1, 1, 1, 1, 0);
     indices.push(
       base, base + 1, base + 2, base, base + 2, base + 3,
@@ -355,6 +399,16 @@ export function buildSubchunkGeometry(
             if (isFlammable(readBlock(worldX, y + 1, worldZ))) addFireCeiling(...fireArgs);
             exposedFaces += 2;
           }
+          continue;
+        }
+
+        if (id === BlockId.TORCH) {
+          const facing = readBlockData(worldX, y, worldZ)?.facing;
+          addTorch(
+            vertices[MATERIAL_TORCH], uvs[MATERIAL_TORCH], colors[MATERIAL_TORCH], indices[MATERIAL_TORCH],
+            worldX, y, worldZ, facing,
+          );
+          exposedFaces += 2;
           continue;
         }
 
