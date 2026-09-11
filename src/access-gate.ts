@@ -1,12 +1,20 @@
 import { savePlayerName } from './player-skin';
 
-const UNLOCK_KEY = 'evlymc-account-unlocked';
+// sessionStorage, not localStorage: a login should only stick for the current
+// tab/session, not forever. The old localStorage flag (a previous version of
+// this gate) let anyone who had EVER logged in bypass the gate permanently,
+// even after being removed from the server-side whitelist, since it was
+// never re-checked - a fresh key name here throws away every such stale
+// flag on this deploy, and sessionStorage stops new ones from outliving the
+// tab. A closed/reopened browser (or a new tab) always re-logs-in, so a
+// whitelist removal actually takes effect.
+const UNLOCK_KEY = 'evlymc-account-session';
 const ACCOUNT_NAME_KEY = 'evlymc-account-name';
 const API_BASE = 'https://evlymc-access.mrfierrocarrilgames.workers.dev';
 
 function isUnlocked(): boolean {
   try {
-    return localStorage.getItem(UNLOCK_KEY) === '1';
+    return sessionStorage.getItem(UNLOCK_KEY) === '1';
   } catch {
     return false;
   }
@@ -14,8 +22,8 @@ function isUnlocked(): boolean {
 
 function markUnlocked(username: string): void {
   try {
-    localStorage.setItem(UNLOCK_KEY, '1');
-    localStorage.setItem(ACCOUNT_NAME_KEY, username);
+    sessionStorage.setItem(UNLOCK_KEY, '1');
+    localStorage.setItem(ACCOUNT_NAME_KEY, username); // remembered only to prefill the name field
   } catch {
     /* private mode / storage disabled: the gate will just reappear next visit */
   }
@@ -66,6 +74,10 @@ export function waitForAccessGate(): Promise<void> {
   const registerPasswordConfirm = document.querySelector<HTMLInputElement>('#register-password-confirm')!;
 
   root.hidden = false;
+  try {
+    const rememberedName = localStorage.getItem(ACCOUNT_NAME_KEY);
+    if (rememberedName) loginUsername.value = rememberedName;
+  } catch { /* private mode */ }
 
   return new Promise<void>((resolve) => {
     const setMessage = (text: string, error: boolean) => {
