@@ -79,18 +79,18 @@ export async function buildAtlas(
 // edge texel instead - not from filtering (everything's NearestFilter, no
 // mipmaps), but from ordinary perspective-correct interpolation across a
 // face plus the renderer's own antialiasing landing a hair past the edge.
-// Insetting the sampled rect by half a texel keeps every sample a full texel
-// away from the next tile - imperceptible on a 16px tile, and it fixes the
-// seam without needing to repack the atlas with padding between tiles.
-const HALF_TEXEL_INSET = 0.5;
+// Insetting the sampled rect by a quarter texel keeps every sample just far
+// enough from the next tile to fix the seam, without needing to repack the
+// atlas with padding between tiles.
+const TEXEL_INSET = 0.25;
 
-/** A rect's U/V bounds within the atlas (top-left pixel origin -> bottom-left-origin UV space), inset half a texel to avoid bleeding into the next tile. */
+/** A rect's U/V bounds within the atlas (top-left pixel origin -> bottom-left-origin UV space), inset a quarter texel to avoid bleeding into the next tile. */
 export function atlasUV(rect: PixelRect, atlasWidth: number, atlasHeight: number) {
   const [x0, y0, x1, y1] = rect;
   return {
-    uMin: (x0 + HALF_TEXEL_INSET) / atlasWidth,
-    uMax: (x1 + 1 - HALF_TEXEL_INSET) / atlasWidth,
-    vMin: 1 - (y1 + 1 - HALF_TEXEL_INSET) / atlasHeight,
-    vMax: 1 - (y0 + HALF_TEXEL_INSET) / atlasHeight,
+    uMin: (x0 + TEXEL_INSET) / atlasWidth,
+    uMax: (x1 + 1 - TEXEL_INSET) / atlasWidth,
+    vMin: 1 - (y1 + 1 - TEXEL_INSET) / atlasHeight,
+    vMax: 1 - (y0 + TEXEL_INSET) / atlasHeight,
   };
 }

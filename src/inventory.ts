@@ -567,6 +567,17 @@ export class Inventory {
   // the RIGHT button and dragging (left-click stays place-stack, a plain
   // right-click without moving stays place-one via the per-slot contextmenu
   // handlers - see the consumeClickSuppression() calls there).
+  //
+  // Touch gets one extra trick mouse doesn't: pressing on a full slot with
+  // NOTHING held yet also arms this gesture (mouse still requires a stack
+  // already picked up, unchanged - a bare right-drag on a full slot stays a
+  // no-op, matching its existing half-stack-via-contextmenu behaviour). If
+  // that first press turns into a drag, onPaintMove grabs the whole stack
+  // right then so the ghost starts following the finger immediately, instead
+  // of the pickup only happening once the finger lifts (a synthesized click
+  // firing after the drag already moved the finger away from the slot reads
+  // as the icon "teleporting" to wherever it lifted, instead of a natural
+  // press-and-drag-out-of-the-slot gesture).
 
   private slotElAt(x: number, y: number): HTMLElement | null {
     const el = document.elementFromPoint(x, y) as HTMLElement | null;
@@ -576,23 +587,32 @@ export class Inventory {
 
   private onPaintDown = (event: PointerEvent) => {
     if (event.pointerType === 'mouse' && event.button !== 2) return;
-    if (!this.heldItem) return;
     const slotEl = this.slotElAt(event.clientX, event.clientY);
     if (!slotEl) return;
+    if (!this.heldItem) {
+      if (event.pointerType === 'mouse') return; // mouse: unchanged, needs a stack already held
+      const src = this.slotSourceByEl.get(slotEl)!;
+      if (this.readSlot(src).id === null) return; // touch, but nothing here to grab
+    }
     this.paint = { down: true, committed: false, startEl: slotEl, seen: new Set() };
   };
 
   private onPaintMove = (event: PointerEvent) => {
-    if (!this.paint.down || !this.heldItem) return;
+    if (!this.paint.down) return;
     const slotEl = this.slotElAt(event.clientX, event.clientY);
     if (!slotEl) return;
 
-    // First move onto a different slot commits the gesture: the start slot also
-    // gets one, and every click that would follow this drag is swallowed.
+    // First move onto a different slot commits the gesture: the start slot
+    // either gets one deposited back (already had a stack held) or gets
+    // eagerly picked up whole (touch grab-and-drag straight out of it, see
+    // above) - either way every click that would follow this drag is swallowed.
     if (!this.paint.committed && slotEl !== this.paint.startEl) {
       this.paint.committed = true;
       const startSrc = this.paint.startEl && this.slotSourceByEl.get(this.paint.startEl);
-      if (startSrc && this.depositOne(startSrc)) this.paint.seen.add(this.paint.startEl!);
+      if (startSrc) {
+        if (!this.heldItem) this.pickUpFrom(startSrc);
+        else if (this.depositOne(startSrc)) this.paint.seen.add(this.paint.startEl!);
+      }
     }
     if (!this.paint.committed || this.paint.seen.has(slotEl) || !this.heldItem) return;
     const src = this.slotSourceByEl.get(slotEl);
