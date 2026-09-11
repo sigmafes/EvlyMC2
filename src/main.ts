@@ -384,6 +384,17 @@ if (playerSave) {
   const savedAlive = typeof playerSave.health !== 'number' || playerSave.health > 0;
   // Saved dead (or at 0) -> come back at spawn with full health, not where you died.
   player.restore(savedAlive ? playerSave : { ...SPAWN, yaw: playerSave.yaw, pitch: playerSave.pitch });
+  // Migrate the old flat "wool" item (id 135, retired when wool became a
+  // real placeable block) out of saves made before that change, so it
+  // doesn't sit there as a broken/unknown slot.
+  const OLD_WOOL_ITEM_ID = 135;
+  for (const slot of playerSave.slots) {
+    if (slot && slot.id === OLD_WOOL_ITEM_ID) {
+      slot.id = BlockId.WOOL;
+      slot.name = 'Wool';
+      slot.sideTexture = 'blocks/wool.png';
+    }
+  }
   inventory.load({ slots: playerSave.slots, selectedIndex: playerSave.selectedIndex });
   if (savedAlive && typeof playerSave.health === 'number') {
     playerHealth.current = Math.min(20, playerSave.health);
@@ -520,7 +531,12 @@ const clock = new THREE.Clock();
 
 function animate() {
   requestAnimationFrame(animate);
-  const delta = clock.getDelta();
+  // Clamp: a minimized/backgrounded tab starves requestAnimationFrame, so the
+  // first frame after it regains focus can report a multi-second delta -
+  // enough to fling mobs (and, less dramatically, the player) through walls
+  // in one physics step. Capping it keeps a stall from ever being worse than
+  // a single slow frame.
+  const delta = Math.min(clock.getDelta(), 0.1);
 
   worldMusic.setPaused(pauseMenu.isPaused || playerHealth.isDead);
 

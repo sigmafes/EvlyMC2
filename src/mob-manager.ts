@@ -56,10 +56,11 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
 const GRAVITY = 24;
 const JUMP_FORCE = 8; // matches the player's own jump impulse (player-physics.ts)
 const FLEE_DURATION = 3; // seconds, LCE PanicGoal-style
-const WANDER_RADIUS = 5; // "un bloque aleatorio en un radio de 5 bloques"
+const WANDER_RADIUS = 12; // "un bloque aleatorio en un radio de 12 bloques"
 const WANDER_INTERVAL_MIN = 8; // "se moverán cada 8-12s"
 const WANDER_INTERVAL_MAX = 12;
-const LOOK_DURATION_MIN = 0.4; // brief look-around turn before setting off to wander
+const IDLE_LOOK_INTERVAL = 3; // "podrán girar para mirar cada 3s si están quietos"
+const LOOK_DURATION_MIN = 0.4; // how long one look-around turn takes
 const LOOK_DURATION_MAX = 1.0;
 const FLEE_RADIUS_MIN = 4; // "correrán hacia un bloque aleatorio en un radio de 8 bloques"
 const FLEE_RADIUS_MAX = 8;
@@ -75,7 +76,7 @@ const KNOCKBACK_DECAY = 8; // per second, exponential
 const WATER_BUOYANCY = 18; // upward accel while submerged, LCE-ish "float up" feel
 const WATER_RISE_SPEED = 2.2; // cap on how fast a mob bobs upward
 const WATER_RECHECK_INTERVAL = 1; // how often a swimming mob looks for shore
-const DEATH_SPIN_DURATION = 0.45; // seconds to turn 90 deg left before vanishing
+const DEATH_SPIN_DURATION = 0.5; // seconds toppling over its X axis before vanishing
 
 // Shared wireframe box geometry/material for the debug hitbox (R key) - one
 // GPU resource, scaled per mob instance, same pattern as DroppedItems' boxes.
@@ -101,14 +102,14 @@ type Mob = {
   path: PathPoint[] | null;
   pathIndex: number;
   decisionTimer: number; // seconds until the next wander decision (8-12s cadence)
-  lookTimer: number; // >0 while turning to a random heading before setting off
+  idleLookTimer: number; // seconds until the next look-around turn while stationary (3s cadence)
+  lookTimer: number; // >0 while easing toward lookTargetYaw
   lookTargetYaw: number;
   inWater: boolean;
   waterCheckTimer: number;
   // Death
   dying: boolean;
   deathTimer: number;
-  deathStartYaw: number;
   // Sound
   stepTimer: number;
   idleSoundTimer: number;
@@ -171,13 +172,13 @@ export class MobManager {
       path: null,
       pathIndex: 0,
       decisionTimer: ri(0, 120) / 10, // stagger initial wander so a group doesn't move in lockstep
+      idleLookTimer: ri(0, 30) / 10,
       lookTimer: 0,
       lookTargetYaw: yaw,
       inWater: false,
       waterCheckTimer: 0,
       dying: false,
       deathTimer: 0,
-      deathStartYaw: yaw,
       stepTimer: 0,
       idleSoundTimer: ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10,
       box,
@@ -217,7 +218,6 @@ export class MobManager {
       if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'death', 0.8);
       mob.dying = true;
       mob.deathTimer = DEATH_SPIN_DURATION;
-      mob.deathStartYaw = mob.facingYaw;
       mob.path = null;
       mob.velocity.x = 0;
       mob.velocity.z = 0;
@@ -276,7 +276,7 @@ export class MobManager {
     }
   }
 
-  /** Death spin (turn 90 deg left while red-tinted), then drops + a smoke burst + removal. */
+  /** Death animation (topples over its X axis, red-tinted), then drops + a smoke burst + removal. */
   private updateDeath(mob: Mob, delta: number, index: number): void {
     this.updatePhysics(mob, delta); // still falls/lands, just no AI movement
     mob.model.setWalking(false);
@@ -285,7 +285,7 @@ export class MobManager {
     mob.deathTimer -= delta;
     const t = Math.min(1, 1 - Math.max(mob.deathTimer, 0) / DEATH_SPIN_DURATION);
     const group = mob.model.getGroup();
-    group.rotation.y = mob.deathStartYaw + (Math.PI / 2) * t;
+    group.rotation.x = (Math.PI / 2) * t;
     mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
 
     if (mob.deathTimer <= 0) {
@@ -344,20 +344,22 @@ export class MobManager {
       return;
     }
 
+    // Idle: two independent timers run while stationary - a periodic
+    // look-around turn every IDLE_LOOK_INTERVAL seconds, and the
+    // WANDER_INTERVAL_MIN..MAX cadence that picks the next place to walk to.
     if (mob.lookTimer > 0) {
       mob.lookTimer -= delta;
       this.easeYawTo(mob, mob.lookTargetYaw, delta);
-      if (mob.lookTimer <= 0) this.pickWanderTarget(mob);
-      return;
     }
-
-    mob.decisionTimer -= delta;
-    if (mob.decisionTimer <= 0) {
-      // Look toward a random heading first, then (once that finishes) path
-      // off toward the wander target - see the lookTimer branch above.
+    mob.idleLookTimer -= delta;
+    if (mob.idleLookTimer <= 0) {
+      mob.idleLookTimer = IDLE_LOOK_INTERVAL;
       mob.lookTimer = LOOK_DURATION_MIN + Math.random() * (LOOK_DURATION_MAX - LOOK_DURATION_MIN);
       mob.lookTargetYaw = Math.random() * Math.PI * 2 - Math.PI;
     }
+
+    mob.decisionTimer -= delta;
+    if (mob.decisionTimer <= 0) this.pickWanderTarget(mob);
   }
 
   /** Path::A* (mob-pathfinding.ts) to a random reachable point within WANDER_RADIUS blocks. */
@@ -457,31 +459,43 @@ export class MobManager {
     const step = speed * delta;
     const y = group.position.y;
 
-    let blocked = false;
+    // Only a block that's still solid one step higher counts as "truly
+    // stuck" - a block that's merely solid at foot height but clear above is
+    // jumped instead. While airborne mid-jump (grounded false), a horizontal
+    // block is expected for the frame or two before the arc clears it, so it
+    // must NOT abandon the path - that was the bug where a mob would hop in
+    // place forever: each jump attempt still found itself blocked the very
+    // next frame (still mid-arc) and immediately threw the path away before
+    // it ever got the chance to clear the obstacle and move forward.
+    let stuckGrounded = false;
     const tryX = group.position.x + dirX * step;
     if (!this.overlapsSolid(tryX, y, group.position.z, mob.radius, mob.height)) {
       group.position.x = tryX;
-    } else if (mob.grounded && !this.overlapsSolid(tryX, y + 1, group.position.z, mob.radius, mob.height)) {
-      mob.velocity.y = JUMP_FORCE;
-      mob.grounded = false;
-    } else {
-      blocked = true;
+    } else if (mob.grounded) {
+      if (!this.overlapsSolid(tryX, y + 1, group.position.z, mob.radius, mob.height)) {
+        mob.velocity.y = JUMP_FORCE;
+        mob.grounded = false;
+      } else {
+        stuckGrounded = true;
+      }
     }
 
     const tryZ = group.position.z + dirZ * step;
     if (!this.overlapsSolid(group.position.x, y, tryZ, mob.radius, mob.height)) {
       group.position.z = tryZ;
-    } else if (mob.grounded && !this.overlapsSolid(group.position.x, y + 1, tryZ, mob.radius, mob.height)) {
-      mob.velocity.y = JUMP_FORCE;
-      mob.grounded = false;
-    } else {
-      blocked = true;
+    } else if (mob.grounded) {
+      if (!this.overlapsSolid(group.position.x, y + 1, tryZ, mob.radius, mob.height)) {
+        mob.velocity.y = JUMP_FORCE;
+        mob.grounded = false;
+      } else {
+        stuckGrounded = true;
+      }
     }
 
-    if (blocked) {
-      // Unexpected obstruction mid-path (pathfinding missed it, or the world
-      // changed under it) - drop the path and take a short beat before
-      // re-deciding, instead of grinding against the wall every frame.
+    if (stuckGrounded) {
+      // Genuinely blocked on solid ground with no step to hop - pathfinding
+      // missed it, or the world changed under it. Drop the path and take a
+      // short beat before re-deciding, instead of grinding against the wall.
       mob.path = null;
       mob.decisionTimer = 0.3;
     }
