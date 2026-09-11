@@ -64,7 +64,10 @@ export const COW_SPEC: QuadrupedSpec = {
   textureW: TEXTURE_W,
   textureH: TEXTURE_H,
   head: { size: HEAD_SIZE, pivot: [0, HEAD_PIVOT_Y, HEAD_PIVOT_Z], uv: HEAD_UV },
-  body: { size: BODY_SIZE, pivot: [0, BODY_PIVOT_Y, 0], uv: BODY_UV },
+  // The bottom face's art (udder) is drawn facing the wrong way for how it
+  // lands on the mesh - spin it 180° (both axes) so the udder points toward
+  // the rear like the rest of the body's front/back already do.
+  body: { size: BODY_SIZE, pivot: [0, BODY_PIVOT_Y, 0], uv: BODY_UV, flips: { ny: { u: true, v: true } } },
   leg: { size: LEG_SIZE, uv: LEG_UV },
   legPivots: [
     [-LEG_INSET_X, LEG_TOP_Y, -LEG_Z], // front-left

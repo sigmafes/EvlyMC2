@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { applyAtlasUVs, applyFaceShading, type FaceRects } from './atlas-box';
+import { applyAtlasUVs, applyFaceShading, type FaceRects, type FaceFlips } from './atlas-box';
 
 const DEG = Math.PI / 180;
 
@@ -13,6 +13,8 @@ export type QuadrupedBoxSpec = {
   size: [number, number, number];
   pivot: [number, number, number];
   uv: FaceRects;
+  /** Per-face U/V mirroring - e.g. to spin a texture crop 180° (flip both) when the art's own orientation doesn't match the face it lands on. */
+  flips?: FaceFlips;
 };
 
 /** A small extra box (pig snout, etc.), positioned relative to the head or the body. */
@@ -63,7 +65,7 @@ function getMobTexture(texturePath: string): THREE.Texture {
 
 function buildBox(spec: QuadrupedBoxSpec, textureW: number, textureH: number, material: THREE.Material): THREE.Mesh {
   const geo = new THREE.BoxGeometry(...spec.size);
-  applyAtlasUVs(geo, spec.uv, textureW, textureH);
+  applyAtlasUVs(geo, spec.uv, textureW, textureH, spec.flips);
   applyFaceShading(geo);
   const mesh = new THREE.Mesh(geo, material);
   mesh.position.set(...spec.pivot);
