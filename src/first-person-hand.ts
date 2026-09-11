@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { buildArmGeometry, getSkinAtlasMaterial } from './player-model';
 import { buildBlockMesh, buildItemMesh, disposeBlockMesh } from './block-preview';
 import { BLOCK_CATALOG } from './creative-palette';
+import { BlockId } from './block';
 import { ITEMS, isBlock } from './item';
 import type { InventorySlot } from './inventory';
 
@@ -95,7 +96,13 @@ export class FirstPersonHand {
       this.held = null;
     }
     this.heldIsBlock = false;
-    if (id != null && isBlock(id)) {
+    if (id === BlockId.TORCH) {
+      // Not a cube in the world (two thin crossed quads) - hold it like a tool/
+      // item (pixel-extruded from its texture) instead of the heavy block pose.
+      this.held = buildItemMesh('blocks/torch.png');
+      this.held.scale.setScalar(0.85);
+      this.root.add(this.held);
+    } else if (id != null && isBlock(id)) {
       const slot: InventorySlot | undefined = BLOCK_CATALOG.find((b) => b.id === id);
       if (slot) {
         this.held = buildBlockMesh(slot);

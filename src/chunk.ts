@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BlockId, BlockMaterials } from './block';
+import { BlockId, BlockMaterials, isSolidBlock } from './block';
 import { ChunkLightData } from './chunk-light-data';
 import { SUBCHUNK_HEIGHT, Subchunk } from './subchunk';
 import type { LightReader, WaterDistanceReader, WaterFlowReader, BlockDataReader } from './mesher';
@@ -554,7 +554,7 @@ export class Chunk {
       for (let z = Math.floor(minZ); z <= Math.ceil(maxZ); z += 1) {
         for (let x = Math.floor(minX); x <= Math.ceil(maxX); x += 1) {
           const id = this.getBlock(x, y, z);
-          if (id === BlockId.AIR || id === BlockId.WATER || id === BlockId.LAVA || id === BlockId.FIRE) continue;
+          if (!isSolidBlock(id)) continue;
           colliders.push({ id, x, y, z, collider: new THREE.Box3(new THREE.Vector3(x - 0.5, y - 0.5, z - 0.5), new THREE.Vector3(x + 0.5, y + 0.5, z + 0.5)) });
         }
       }

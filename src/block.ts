@@ -89,6 +89,16 @@ export function isFlammable(id: BlockId): boolean {
   return blockLightProperties[id].flammable !== null;
 }
 
+/**
+ * Blocks with no physical collision box: nothing to stand on / bump into.
+ * Shared by the physics collider list and anything else that needs to know
+ * "can a player/camera pass through this" (e.g. the 3rd-person camera boom).
+ */
+const NON_SOLID_BLOCKS = new Set<BlockId>([BlockId.AIR, BlockId.WATER, BlockId.LAVA, BlockId.FIRE, BlockId.TORCH]);
+export function isSolidBlock(id: BlockId): boolean {
+  return !NON_SOLID_BLOCKS.has(id);
+}
+
 /** Blocks that respond to right-click (open a GUI) instead of being placed against. */
 export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE, BlockId.FURNACE]);
 

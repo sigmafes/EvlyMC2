@@ -27,17 +27,25 @@ independiente, de menor a mayor riesgo.
    con `/give furnace 1` o al craftear solo 1. Fix: capturar `this.selectedBlock` en
    una variable local *antes* de llamar `onPlace()`, y usar esa copia después.
 
-## Fase B — Antorcha: pulido
-4. **No debe ser sólida + no debe mostrar el delineado.** `chunk.ts
-   getCollidersInBounds()` solo excluye AIR/WATER/LAVA/FIRE del collider físico —
-   `TORCH` le falta. Voy a extraer un `isSolidBlock(id)` compartido (usado también por
-   la Fase F, cámara 3ª persona) y añadir un caso en `block-highlight.ts` para no
-   dibujar el wireframe sobre la antorcha.
-5. **Antorcha de pared floja/flotando.** En `mesher.ts addTorch()` el offset hacia el
-   muro es `0.30`, pero la cara del bloque de soporte está a `0.5` del centro de la
-   celda — le faltan 0.2 bloques, por eso flota. Subir a ~0.44.
-6. **Antorcha más grande.** Mismo `addTorch()`: `hw` (medio-ancho) y `H` (alto) del
-   quad — subir de `0.34/0.7` a algo como `0.45/0.9`.
+## Fase B — Antorcha: pulido  ✅ HECHO
+4. **No debe ser sólida + no debe mostrar el delineado.** Nuevo `isSolidBlock(id)`
+   compartido en `block.ts` (excluye AIR/WATER/LAVA/FIRE/TORCH), usado en
+   `chunk.ts getCollidersInBounds()` (colisión física) — reutilizable en la Fase F
+   para la cámara 3ª persona. `block-highlight.ts` ahora oculta el wireframe por
+   completo cuando el bloque mirado es una antorcha (no es un cubo, un box 1×1×1
+   flotando encima no tenía sentido visualmente).
+5. **Antorcha de pared floja/flotando.** Confirmado: en `mesher.ts addTorch()` el
+   offset hacia el muro era `0.30`, pero la cara del bloque de soporte está a `0.5`
+   del centro de la celda — le faltaban 0.2 bloques. Subido a `0.44`.
+6. **Antorcha más grande.** Mismo `addTorch()`: `hw`/`H` subidos de `0.34/0.7` a
+   `0.45/0.9`.
+7. **Debe renderizarse como item en la mano.** `isBlock(TORCH)` es `true`, así que
+   `first-person-hand.ts`/`player-model.ts` la metían por la rama de bloque (pose de
+   cubo pesado) aunque la geometría ya era plana. Ambas ahora tratan `TORCH` como caso
+   especial *antes* del chequeo `isBlock`, usando `buildItemMesh('blocks/torch.png')`
+   (la extrusión de píxeles de herramientas/items) con la pose de item — en el modelo
+   de 3ª persona, sin el flip vertical que usan las herramientas (esa serviría para
+   apuntar el filo hacia abajo; en la antorcha invertiría la llama).
 7. **Debe renderizarse como item en la mano, no como bloque.** `isBlock(TORCH)` es
    `true`, así que `first-person-hand.ts`/`player-model.ts` la meten por la rama de
    bloque (pose/escala de cubo pesado), aunque `buildBlockMesh` ya la dibuja como quad

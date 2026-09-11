@@ -25,8 +25,15 @@ export class BlockHighlight {
   /**
    * Update highlight position and shape based on target block.
    * Fire blocks get a thin horizontal outline, others get full box.
+   * Torch isn't a full-cube block (a couple of thin crossed quads) - a 1x1x1
+   * wireframe around it just floats in the air looking wrong, so it gets no
+   * outline at all, same as looking at nothing.
    */
   updateTarget(blockPosition: THREE.Vector3, blockId: BlockId) {
+    if (blockId === BlockId.TORCH) {
+      this.hideTarget();
+      return;
+    }
     if (blockId === BlockId.FIRE) {
       this.highlight.position.set(blockPosition.x, blockPosition.y - 0.45, blockPosition.z);
       this.highlight.scale.set(1.01, 0.1, 1.01);

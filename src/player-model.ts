@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight } from './block-preview';
 import { BLOCK_CATALOG } from './creative-palette';
+import { BlockId } from './block';
 import { ITEMS, isBlock } from './item';
 
 export type ModelAdjustments = {
@@ -827,7 +828,15 @@ export class PlayerModel {
     }
     if (id == null) return;
 
-    if (isBlock(id)) {
+    if (id === BlockId.TORCH) {
+      // Not a cube in the world - hold it like an item (pixel-extruded), but
+      // upright (no tool-style Y-flip/roll: the flame has to stay pointing up).
+      const mesh = buildItemMesh('blocks/torch.png');
+      mesh.scale.setScalar(0.8);
+      mesh.position.set(0, 0.05, -0.12);
+      mesh.rotation.set(-10 * (Math.PI / 180), Math.PI / 2, 0);
+      this.heldMesh = mesh;
+    } else if (isBlock(id)) {
       const slot = BLOCK_CATALOG.find((b) => b.id === id);
       if (!slot) return;
       const mesh = buildBlockMesh(slot);

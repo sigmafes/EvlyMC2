@@ -215,14 +215,16 @@ function addTorch(
   vertices: number[], uvs: number[], colors: number[], indices: number[],
   wx: number, y: number, wz: number, facing: number | undefined,
 ) {
-  const hw = 0.34;          // half quad width
-  const H = 0.7;            // torch height
+  const hw = 0.45;          // half quad width
+  const H = 0.9;            // torch height
   let bx = 0, bz = 0, tx = 0, tz = 0;
   let by = y - 0.5, ty = y - 0.5 + H;
   if (facing !== undefined) {
     const dx = facing === 1 ? 1 : facing === 3 ? -1 : 0;
     const dz = facing === 0 ? 1 : facing === 2 ? -1 : 0;
-    bx = -dx * 0.30; bz = -dz * 0.30; by = y - 0.30;
+    // The wall's near face sits at -dx*0.5 (adjacent cell, half a block away);
+    // 0.44 keeps the base flush against it with a hair of margin against z-fighting.
+    bx = -dx * 0.44; bz = -dz * 0.44; by = y - 0.30;
     tx = dx * 0.12; tz = dz * 0.12; ty = y - 0.30 + H;
   }
   for (const along of ['x', 'z'] as const) {
