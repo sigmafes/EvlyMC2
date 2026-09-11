@@ -242,6 +242,9 @@ const interaction = new BlockInteraction(
   (x, y, z) => lightEngine.getRawBrightness(x, y, z),
   (origin, dir, maxDist) => hitTestMob?.(origin, dir, maxDist) ?? null,
   (mobId) => attackMobFn?.(mobId),
+  (amount) => {
+    if (inventory.damageSelected(amount)) soundManager.playOne('player/break', 0.8);
+  },
 );
 interaction.attachHighlight(scene);
 

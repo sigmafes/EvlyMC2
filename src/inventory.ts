@@ -1,5 +1,6 @@
 import { renderBlockPreview, renderItemIcon } from './block-preview';
 import { isBlock, maxStackOf } from './item';
+import { maxDurability } from './tools';
 import { showTooltip, hideTooltip } from './tooltip';
 import { CraftingGrid } from './crafting-grid';
 import { lockPointer, unlockPointerForGui } from './is-touch';
@@ -14,6 +15,8 @@ export type InventorySlot = {
   previewColor?: number;
   /** Stack size (1..maxStack). Absent on catalog entries; 0 on empty slots. */
   count?: number;
+  /** Uses spent on a tool (MC's "damage value"): 0 is pristine, tier.uses breaks it. */
+  damage?: number;
 };
 
 /** 9 hotbar slots + 27 backpack slots, like Minecraft's survival/creative inventory. */
@@ -51,6 +54,21 @@ export function renderSlot(element: HTMLElement, slot: InventorySlot) {
     badge.className = 'slot-count';
     badge.textContent = String(count);
     element.appendChild(badge);
+  }
+
+  // Durability bar, only once a tool has actually been used.
+  const uses = maxDurability(slot.id);
+  const damage = slot.damage ?? 0;
+  if (uses > 0 && damage > 0) {
+    const left = Math.max(0, 1 - damage / uses);
+    const bar = document.createElement('span');
+    bar.className = 'slot-durability';
+    const fill = document.createElement('span');
+    fill.style.width = `${left * 100}%`;
+    // Green -> red as it wears out, same read as Minecraft's bar.
+    fill.style.background = `hsl(${Math.round(left * 120)}, 90%, 45%)`;
+    bar.appendChild(fill);
+    element.appendChild(bar);
   }
 }
 
@@ -322,6 +340,24 @@ export class Inventory {
     if (slot.id === null) return;
     const next = (slot.count ?? 1) - 1;
     this.setSlot(this.selectedIndex, next > 0 ? { ...slot, count: next } : null);
+  }
+
+  /**
+   * Spend `amount` uses on the held tool. Returns true if that broke it (the
+   * slot is emptied), so the caller can play the snap. No-op for anything
+   * that isn't a tool.
+   */
+  damageSelected(amount = 1): boolean {
+    const slot = slots[this.selectedIndex];
+    const uses = maxDurability(slot.id);
+    if (uses <= 0) return false;
+    const damage = (slot.damage ?? 0) + amount;
+    if (damage >= uses) {
+      this.setSlot(this.selectedIndex, null);
+      return true;
+    }
+    this.setSlot(this.selectedIndex, { ...slot, damage });
+    return false;
   }
 
   /**

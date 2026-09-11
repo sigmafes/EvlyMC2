@@ -9,6 +9,7 @@ import { BlockHighlight } from './block-highlight';
 import { BlockPlacer } from './block-placer';
 import { BreakOverlay } from './break-overlay';
 import { breakTime } from './block-hardness';
+import { isTool } from './tools';
 import { getBlockSound } from './block-sounds';
 import { lockPointer } from './is-touch';
 import type { ParticleSystem } from './particles';
@@ -95,6 +96,8 @@ export class BlockInteraction {
     /** Nearest mob within reach along a ray, if any - checked ahead of block mining on left-click. */
     private readonly hitTestMob?: (origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) => { mobId: number; distance: number } | null,
     private readonly attackMob?: (mobId: number) => void,
+    /** Spend uses on the held tool; the callback reports back whether it broke. */
+    private readonly onToolUse?: (amount: number) => void,
   ) {
     this.raycast = new Raycast(4);
     this.highlight = new BlockHighlight();
@@ -281,6 +284,8 @@ export class BlockInteraction {
       if (blockDist < mobHit.distance) return false;
     }
     this.attackMob?.(mobHit.mobId);
+    // LCE DiggerItem::hurtEnemy - hitting something costs two uses, not one.
+    if (isTool(this.selectedItemId)) this.onToolUse?.(2);
     this.attackCooldown = BlockInteraction.ATTACK_COOLDOWN;
     return true;
   }
@@ -331,6 +336,8 @@ export class BlockInteraction {
     for (const drop of getDrops(id, canHarvest, wasDouble)) this.onDrop?.(drop.id, drop.count, pos.clone());
     const sound = getBlockSound(id, 'dig');
     if (sound) this.soundManager?.playSound(sound);
+    // LCE DiggerItem::mineBlock - one use per block actually broken.
+    if (isTool(this.selectedItemId)) this.onToolUse?.(1);
     this.mining = null;
     this.breakOverlay.hide();
   }
