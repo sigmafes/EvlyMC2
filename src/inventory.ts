@@ -687,6 +687,12 @@ export class Inventory {
     // Don't hijack scrolling while the backpack/creative panel is open - let
     // the creative block list scroll normally instead.
     if (this.backpackOpen) return;
+    // Only swap hotbar slots while actually playing. This listener is on
+    // `document` with passive:false, so preventing every wheel event also ate
+    // the scroll of any menu layered over the game (the pause menu's Options
+    // list, which is taller than the screen), leaving its lower rows
+    // unreachable. Gameplay always holds the pointer lock, so that's the test.
+    if (!document.pointerLockElement) return;
     event.preventDefault();
     const direction = event.deltaY > 0 ? 1 : -1;
     const next = (this.selectedIndex + direction + HOTBAR_SIZE) % HOTBAR_SIZE;

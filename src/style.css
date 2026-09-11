@@ -386,6 +386,10 @@ body {
   justify-content: center;
   align-items: flex-start;
   padding-top: clamp(48px, 12vh, 128px);
+  /* The Options view is taller than a short viewport; without this its last
+     rows simply had no way to be reached on desktop (touch had it already). */
+  padding-bottom: 24px;
+  overflow-y: auto;
   background-image: url('../gui/bg.png');
   background-repeat: repeat;
   color: #ffffff;
