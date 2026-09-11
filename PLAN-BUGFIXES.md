@@ -119,7 +119,7 @@ independiente, de menor a mayor riesgo.
     activar sneak apaga sprint y viceversa. Incluye sincronizar el botón táctil de
     sneak si el sprint lo cancela programáticamente.
 
-## Fase G — Simulación de agua (la más delicada)
+## Fase G — Simulación de agua (la más delicada)  ✅ HECHO
 17. **Romper un bloque bajo el mar no hace bajar el agua; queda "flotando".** Causa
     raíz: el océano generado proceduralmente **nunca se registra en `WaterEngine`** —
     solo el agua colocada por el jugador (o recargada desde edits) se vuelve una

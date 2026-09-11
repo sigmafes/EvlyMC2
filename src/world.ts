@@ -346,10 +346,34 @@ export class World {
         this.leavesManager.onLogRemoved(x, y, z, (bx, by, bz) => this.getBlock(bx, by, bz));
       }
       this.blockDataStore.delete(x, y, z); // drop any facing / lit state
-      this.editStore.record(x, y, z, BlockId.AIR);
+      if (oldBlock !== BlockId.WATER && this.hasWaterNeighbor(x, y, z)) {
+        // Surgical fix for mining inside procedurally-generated ocean water:
+        // ocean cells are never registered with WaterEngine (only player-placed
+        // / reloaded-from-edits water becomes a simulated source), so the sim
+        // has no idea a hole just opened up in it. Rather than simulating the
+        // whole ocean, immediately fill this one cell with water (and persist
+        // that as the edit instead of AIR) whenever it borders existing water -
+        // covers the reported case without touching the simulation engine.
+        this.blockStore.addBlockRaw(x, y, z, BlockId.WATER);
+        this.waterEngine?.onBlockPlaced(x, y, z, BlockId.WATER);
+        this.editStore.record(x, y, z, BlockId.WATER);
+      } else {
+        this.editStore.record(x, y, z, BlockId.AIR);
+      }
     }
     if (changed) this.markBlockDirty(x, y, z);
     return changed;
+  }
+
+  private hasWaterNeighbor(x: number, y: number, z: number): boolean {
+    return (
+      this.getBlock(x + 1, y, z) === BlockId.WATER ||
+      this.getBlock(x - 1, y, z) === BlockId.WATER ||
+      this.getBlock(x, y + 1, z) === BlockId.WATER ||
+      this.getBlock(x, y - 1, z) === BlockId.WATER ||
+      this.getBlock(x, y, z + 1) === BlockId.WATER ||
+      this.getBlock(x, y, z - 1) === BlockId.WATER
+    );
   }
 
   processLightUpdates(budget = 4096) {
