@@ -30,7 +30,7 @@ const HEAD_UV: FaceRects = {
 // same shape as the py/ny faces below, dx*dz matches nz/pz). Row1's second
 // block carries a little tail-curl icon, so it's the rear cap -> pz.
 const BODY_UV: FaceRects = {
-  py: [36, 16, 45, 31], ny: [54, 16, 63, 31],
+  py: [54, 16, 63, 31], ny: [36, 16, 45, 31],
   nx: [28, 16, 35, 31], nz: [36, 8, 45, 15], px: [46, 16, 53, 31], pz: [46, 8, 55, 15],
 };
 

@@ -28,7 +28,7 @@ const HEAD_UV: FaceRects = {
 // body's length (dx*dz - front chest/rear), and "row 2" front/back (dx*dy)
 // are what end up as world top/bottom once standing.
 const BODY_UV: FaceRects = {
-  py: [28, 14, 39, 31], ny: [50, 14, 61, 31],
+  py: [50, 14, 61, 31], ny: [28, 14, 39, 31],
   nx: [18, 14, 27, 31], nz: [28, 4, 39, 13], px: [40, 14, 49, 31], pz: [40, 4, 51, 13],
 };
 

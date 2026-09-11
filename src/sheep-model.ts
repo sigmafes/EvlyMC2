@@ -38,7 +38,7 @@ const HEAD_UV: FaceRects = {
 // are what end up as world top/bottom once standing - which for the sheep
 // is exactly where the wool pattern needs to be.
 const BODY_UV: FaceRects = {
-  py: [34, 14, 41, 29], ny: [48, 14, 55, 29],
+  py: [48, 14, 55, 29], ny: [34, 14, 41, 29],
   nx: [28, 14, 33, 29], nz: [34, 8, 41, 13], px: [42, 14, 47, 29], pz: [42, 8, 49, 13],
 };
 
