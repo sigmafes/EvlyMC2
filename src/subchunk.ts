@@ -83,6 +83,7 @@ export class Subchunk {
       this.materials[BlockId.FURNACE],
       this.materials[BlockId.TORCH],
       this.materials[BlockId.WOOL],
+      this.materials[BlockId.GRAVEL],
     ].flatMap((material) => Array.isArray(material) ? material : [material]);
     previousGeometry.dispose();
   }

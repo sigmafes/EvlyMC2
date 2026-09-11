@@ -128,14 +128,15 @@ export class Chunk {
 
         // Subsurface layers (dirt or sand/gravel)
         if (isWaterBody) {
-          // Under water: the top layer touching the water stays sand (shore
-          // continuity); the layer below that is gravel instead of a 2nd
-          // sand layer, then dirt underneath.
+          // Under water: always gravel (both layers touching the water),
+          // then dirt underneath - sand is reserved for the shore, never
+          // generated underwater any more.
           for (let y = surfaceY - 4; y < surfaceY - 1; y += 1) {
             if (y > 0) this.setBlockData(x, y, z, BlockId.DIRT);
           }
-          if (surfaceY - 1 > 0) this.setBlockData(x, surfaceY - 1, z, BlockId.GRAVEL);
-          this.setBlockData(x, surfaceY, z, BlockId.SAND);
+          for (let y = Math.max(1, surfaceY - 1); y <= surfaceY; y += 1) {
+            this.setBlockData(x, y, z, BlockId.GRAVEL);
+          }
           // Water column from surfaceY + 1 up to WATER_LEVEL
           for (let y = surfaceY + 1; y <= WATER_LEVEL; y += 1) {
             this.setBlockData(x, y, z, BlockId.WATER);

@@ -50,7 +50,8 @@ export const MATERIAL_FURNACE_FRONT_ON = 33;
 export const MATERIAL_FURNACE_TOP = 34;
 export const MATERIAL_TORCH = 35;
 export const MATERIAL_WOOL = 36;
-const MATERIAL_COUNT = 37;
+export const MATERIAL_GRAVEL = 37;
+const MATERIAL_COUNT = 38;
 
 export type BlockReader = (x: number, y: number, z: number) => BlockId;
 export type LightReader = (x: number, y: number, z: number) => number;
@@ -336,6 +337,7 @@ function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number 
   if (id === BlockId.OAK_LOG) return faceIndex === 2 || faceIndex === 3 ? MATERIAL_OAK_LOG_TOP : MATERIAL_OAK_LOG_SIDE;
   if (id === BlockId.OAK_LEAVES) return MATERIAL_OAK_LEAVES;
   if (id === BlockId.SAND) return MATERIAL_SAND;
+  if (id === BlockId.GRAVEL) return MATERIAL_GRAVEL;
   if (id === BlockId.FIRE) return MATERIAL_FIRE;
   if (id === BlockId.WATER) return liquidDistance === 0 ? MATERIAL_WATER_STILL : MATERIAL_WATER_FLOW;
   if (id === BlockId.LAVA) return liquidDistance === 0 ? MATERIAL_LAVA_STILL : MATERIAL_LAVA_FLOW;

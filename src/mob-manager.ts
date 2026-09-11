@@ -83,13 +83,14 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
 
 const CHASE_RADIUS = 16;         // blocks - zombie notices/keeps chasing the player within this range
 const CHASE_REPATH_INTERVAL = 1; // seconds between chase path re-plans
-const ATTACK_RANGE = 1.2;        // blocks, centre-to-centre
+const ATTACK_RANGE = 2.2;        // blocks, centre-to-centre (a bit past melee-adjacent so it doesn't need to be pixel-perfect on top of the player)
 const ATTACK_INTERVAL = 1;       // seconds between hits while in range
 const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
 const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY), same as animals - widening this would plan climbs it can't execute
 const ZOMBIE_STEP_DOWN = 3;      // a zombie will drop off a 3-block ledge chasing the player; gravity handles the descent, no jump needed
 const BURN_DAMAGE_INTERVAL = 1;  // seconds between sunlight-burn ticks
 const BURN_DAMAGE = 1;
+const SKY_SCAN_MAX_Y = 100;      // above chunk.ts's CHUNK_HEIGHT (96) - a column open all the way up here really has no roof
 
 const GRAVITY = 24;
 const JUMP_FORCE = 8; // matches the player's own jump impulse (player-physics.ts)
@@ -388,18 +389,41 @@ export class MobManager {
    * BURN_LIGHT_THRESHOLD (dawn - see main.ts's getSkyExposure), ticking
    * BURN_DAMAGE every BURN_DAMAGE_INTERVAL until it dies or steps back into
    * shade/underground. Independent of combat - reuses the same damage() path
-   * so hurt sound/flash/knockback-free death all just work.
+   * so hurt sound/flash/knockback-free death all just work. Water douses it
+   * immediately (mob.inWater, already tracked by updatePhysics), and any
+   * solid block directly overhead blocks the sun outright regardless of how
+   * exposed the sky is laterally - checked last since it's the only one of
+   * the three gates that isn't a cheap flag/lookup already in hand.
    */
   private updateBurn(mob: Mob, delta: number, getSkyExposure: (x: number, y: number, z: number) => number): void {
     const p = mob.model.getGroup().position;
     const exposure = getSkyExposure(Math.round(p.x), Math.round(p.y + mob.height), Math.round(p.z));
-    mob.burning = exposure >= 12;
+    mob.burning = exposure >= 12 && !mob.inWater && !this.hasSolidCoverAbove(mob);
     if (!mob.burning) { mob.burnTimer = 0; return; }
     mob.burnTimer -= delta;
     if (mob.burnTimer <= 0) {
       mob.burnTimer = BURN_DAMAGE_INTERVAL;
       this.damage(mob.id, BURN_DAMAGE, p);
     }
+  }
+
+  /**
+   * True if any solid block sits directly above this mob's own column, all
+   * the way up to the top of the world - a literal roof, not just "the
+   * lateral skylight happens to be a bit lower here" (which getSkyExposure
+   * alone can't tell apart from actual shade, since light still leaks in
+   * sideways around a small overhang). Only called once exposure already
+   * cleared the burn threshold, so this bounded scan runs for at most a
+   * handful of already-sunlit zombies per frame, not every zombie.
+   */
+  private hasSolidCoverAbove(mob: Mob): boolean {
+    const p = mob.model.getGroup().position;
+    const x = Math.round(p.x);
+    const z = Math.round(p.z);
+    for (let y = Math.round(p.y + mob.height) + 1; y < SKY_SCAN_MAX_Y; y += 1) {
+      if (this.isSolid(x, y, z)) return true;
+    }
+    return false;
   }
 
   /** True if `pos` is within MOB_SOUND_RADIUS of `mob` (horizontal + vertical distance). No listener position given -> always audible (e.g. no player reference available). */
