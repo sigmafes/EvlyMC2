@@ -10,37 +10,39 @@ const CHIP_UV_SIZE = 0.25; // fraction of the source texture a chip samples, lik
 const FADE_TAIL = 0.15; // seconds of fade-out before a particle dies
 
 /**
- * Textured-chip particle pool (one small billboard-ish plane mesh per slot,
- * ring-buffer recycled). Each particle samples a small random square out of
- * the actual block/item texture it came from (vanilla MC's own technique),
- * rather than a flat approximated colour - used for the bits that fly off a
- * block while it's mined, when it breaks, and while eating.
+ * Textured-chip particle pool: each active slot is its own small quad mesh
+ * (own BufferGeometry), so both its UV crop and its light-level tint can be
+ * baked into that geometry (UV coords / a per-vertex colour attribute)
+ * without ever touching a *shared* texture or material - mutating a shared
+ * texture's offset/repeat, or a shared material's colour, for one particle
+ * used to bleed into every other particle (and every chunk of the world)
+ * still rendering with that same texture/material object, which is what
+ * made these render solid black. Materials are cached and shared per
+ * block/item id (their map is never touched after creation); each particle
+ * billboards to face the camera every frame instead of tumbling. Used for
+ * the bits that fly off a block while it's mined, when it breaks, and while
+ * eating.
  */
 export class ParticleSystem {
   private readonly group = new THREE.Group();
   private readonly meshes: THREE.Mesh[] = [];
   private readonly vel: THREE.Vector3[] = [];
-  private readonly angVel: THREE.Vector3[] = [];
   private readonly life: number[] = [];
   private cursor = 0;
-  /** Cached per-id texture clones (own offset/repeat, sharing the same GPU image as the world/item texture). */
-  private readonly textureCache = new Map<number, THREE.Texture | null>();
+  private readonly materialCache = new Map<number, THREE.MeshBasicMaterial | null>();
   private readonly itemLoader = new THREE.TextureLoader();
 
   constructor(private readonly blockMaterials: BlockMaterials) {
-    const geo = new THREE.PlaneGeometry(1, 1);
     for (let i = 0; i < MAX; i++) {
-      const material = new THREE.MeshBasicMaterial({
-        transparent: true, alphaTest: 0.05, side: THREE.DoubleSide, depthWrite: false,
-      });
-      const mesh = new THREE.Mesh(geo, material);
+      const geo = new THREE.PlaneGeometry(1, 1);
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(12).fill(1), 3));
+      const mesh = new THREE.Mesh(geo);
       mesh.visible = false;
       mesh.frustumCulled = false;
       mesh.position.y = FAR_AWAY;
       this.group.add(mesh);
       this.meshes.push(mesh);
       this.vel.push(new THREE.Vector3());
-      this.angVel.push(new THREE.Vector3());
       this.life.push(0);
     }
   }
@@ -49,9 +51,9 @@ export class ParticleSystem {
     scene.add(this.group);
   }
 
-  /** The texture to chip particles from for a block or item id, or null if there isn't one (falls back to a plain white quad). */
-  private textureFor(id: number): THREE.Texture | null {
-    if (this.textureCache.has(id)) return this.textureCache.get(id)!;
+  /** The (shared, never mutated) material to render chips of a block or item id with, or null if there's no texture for it. */
+  private materialFor(id: number): THREE.MeshBasicMaterial | null {
+    if (this.materialCache.has(id)) return this.materialCache.get(id)!;
 
     let source: THREE.Texture | null = null;
     if (isBlock(id)) {
@@ -68,16 +70,13 @@ export class ParticleSystem {
       }
     }
 
-    // Clone so this id's random offset/repeat never fights the source's own
-    // (the world mesh's texture is still animated/scrolled for water etc).
-    const texture = source ? source.clone() : null;
-    if (texture) {
-      texture.needsUpdate = true;
-      texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
-      texture.magFilter = THREE.NearestFilter;
-    }
-    this.textureCache.set(id, texture);
-    return texture;
+    const material = source
+      ? new THREE.MeshBasicMaterial({
+        map: source, vertexColors: true, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide, depthWrite: false,
+      })
+      : null;
+    this.materialCache.set(id, material);
+    return material;
   }
 
   private spawnOne(
@@ -88,32 +87,39 @@ export class ParticleSystem {
     const i = this.cursor;
     this.cursor = (this.cursor + 1) % MAX;
     const mesh = this.meshes[i];
-    const material = mesh.material as THREE.MeshBasicMaterial;
 
-    const texture = this.textureFor(id);
-    material.map = texture;
-    if (texture) {
-      const ox = Math.random() * (1 - CHIP_UV_SIZE);
-      const oy = Math.random() * (1 - CHIP_UV_SIZE);
-      texture.offset.set(ox, oy);
-      texture.repeat.set(CHIP_UV_SIZE, CHIP_UV_SIZE);
+    const material = this.materialFor(id);
+    if (!material) {
+      mesh.visible = false;
+      this.life[i] = 0;
+      return;
     }
-    const b = Math.pow(THREE.MathUtils.clamp(light01, 0, 1), 1.25);
-    material.color.setScalar(b);
+    mesh.material = material;
     material.opacity = 1;
-    material.needsUpdate = true;
+
+    const geo = mesh.geometry as THREE.PlaneGeometry;
+    // Random small crop of the source texture (vanilla MC's own "chip" look).
+    const u0 = Math.random() * (1 - CHIP_UV_SIZE);
+    const v0 = Math.random() * (1 - CHIP_UV_SIZE);
+    const u1 = u0 + CHIP_UV_SIZE;
+    const v1 = v0 + CHIP_UV_SIZE;
+    // PlaneGeometry's default UV order: bottom-left, bottom-right, top-left, top-right.
+    (geo.attributes.uv as THREE.BufferAttribute).set([u0, v0, u1, v0, u0, v1, u1, v1]);
+    geo.attributes.uv.needsUpdate = true;
+
+    const b = Math.pow(THREE.MathUtils.clamp(light01, 0, 1), 1.25);
+    (geo.attributes.color as THREE.BufferAttribute).set(new Array(4).fill([b, b, b]).flat());
+    geo.attributes.color.needsUpdate = true;
 
     mesh.position.set(x, y, z);
     mesh.scale.setScalar(scale);
-    mesh.rotation.set(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2);
     mesh.visible = true;
 
     this.vel[i].set(vx, vy, vz);
-    this.angVel[i].set((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
     this.life[i] = ttl;
   }
 
-  /** Burst of bits when a block is destroyed. Bigger and fewer than a mine() chip. `light01` shades them to the world. */
+  /** Burst of bits when a block is destroyed. `light01` shades them to the world. */
   burst(pos: THREE.Vector3, id: number, light01 = 1): void {
     for (let k = 0; k < 16; k++) {
       this.spawnOne(
@@ -125,7 +131,7 @@ export class ParticleSystem {
         (Math.random() - 0.5) * 4.5,
         id,
         0.5 + Math.random() * 0.45,
-        0.28 + Math.random() * 0.12,
+        0.16 + Math.random() * 0.07,
         light01,
       );
     }
@@ -143,13 +149,14 @@ export class ParticleSystem {
         faceNormal.z * 1.2 + (Math.random() - 0.5) * 1.4,
         id,
         0.3 + Math.random() * 0.2,
-        0.22 + Math.random() * 0.08,
+        0.13 + Math.random() * 0.05,
         light01,
       );
     }
   }
 
-  update(dt: number): void {
+  /** Advances physics and fade-out, and billboards every live particle to face `camera`. */
+  update(dt: number, camera: THREE.Camera): void {
     const damp = Math.pow(DRAG, dt);
     for (let i = 0; i < MAX; i++) {
       if (this.life[i] <= 0) continue;
@@ -164,9 +171,7 @@ export class ParticleSystem {
       this.vel[i].y = this.vel[i].y * damp - GRAVITY * dt;
       this.vel[i].z *= damp;
       mesh.position.addScaledVector(this.vel[i], dt);
-      mesh.rotation.x += this.angVel[i].x * dt;
-      mesh.rotation.y += this.angVel[i].y * dt;
-      mesh.rotation.z += this.angVel[i].z * dt;
+      mesh.quaternion.copy(camera.quaternion); // always face the camera - never rotates on its own
 
       if (this.life[i] < FADE_TAIL) {
         (mesh.material as THREE.MeshBasicMaterial).opacity = this.life[i] / FADE_TAIL;

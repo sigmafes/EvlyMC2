@@ -741,7 +741,7 @@ function animate() {
   // UI and debug updates
   debugOverlay.update();
   interaction.update(delta);
-  particles.update(delta);
+  particles.update(delta, camera);
   smokeParticles.update(delta);
   blockInspector.update();
   furnaceUI.update();
