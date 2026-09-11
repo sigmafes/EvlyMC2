@@ -23,7 +23,7 @@ const HEAD_UV: FaceRects = {
   nx: [0, 6, 5, 13], nz: [6, 6, 13, 13], px: [14, 6, 19, 13], pz: [20, 6, 27, 13],
 };
 
-// Body: texOffs(18,4), size 12x18x10 px - modelled lying along Z, stood up via rotateX90.
+// Body: texOffs(18,4), size 12x18x10 px.
 const BODY_UV: FaceRects = {
   py: [28, 4, 39, 13], ny: [40, 4, 51, 13],
   nx: [18, 14, 27, 31], nz: [28, 14, 39, 31], px: [40, 14, 49, 31], pz: [50, 14, 61, 31],
@@ -39,17 +39,19 @@ const LEG_UV: FaceRects = {
 const PX = (n: number) => n / 16;
 
 const HEAD_SIZE: [number, number, number] = [PX(8), PX(8), PX(6)];
-const BODY_SIZE: [number, number, number] = [PX(12), PX(18), PX(10)]; // pre-rotation (dx,dy,dz)
+// Authored as texOffs width(dx)/depth(dz)/length(dy) - built directly in
+// world orientation (x=width, y=height=dz, z=length=dy), no post-hoc
+// rotation: a rotated MESH keeps its UVs on the PRE-rotation local faces, so
+// "top" ends up facing sideways instead of up. Building the geometry with
+// the axes already swapped avoids that entirely.
+const BODY_SIZE: [number, number, number] = [PX(12), PX(10), PX(18)];
 const LEG_SIZE: [number, number, number] = [PX(4), PX(12), PX(4)];
 
-// After rotateX90, the body's authored dy (length) becomes world depth (Z)
-// and its dz (depth) becomes world height (Y).
 const LEG_TOP_Y = LEG_SIZE[1];                     // ground -> top of legs
-const BODY_HEIGHT_STANDING = PX(10);
-const BODY_PIVOT_Y = LEG_TOP_Y + BODY_HEIGHT_STANDING / 2;
-const BODY_HALF_LENGTH = PX(18) / 2;               // world-Z half-extent post-rotation
-const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_HEIGHT_STANDING * 0.55; // slightly above body centre
-const HEAD_PIVOT_Z = -BODY_HALF_LENGTH - HEAD_SIZE[2] / 2;    // snug against the body's front face
+const BODY_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] / 2;
+const BODY_HALF_LENGTH = BODY_SIZE[2] / 2;
+const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 0.55; // slightly above body centre
+const HEAD_PIVOT_Z = -BODY_HALF_LENGTH - HEAD_SIZE[2] / 2; // snug against the body's front face
 
 const LEG_INSET_X = BODY_SIZE[0] / 2 - LEG_SIZE[0] / 2 - PX(1); // tucked in slightly from the body's sides
 const LEG_Z = BODY_HALF_LENGTH * 0.6;
@@ -59,7 +61,7 @@ export const COW_SPEC: QuadrupedSpec = {
   textureW: TEXTURE_W,
   textureH: TEXTURE_H,
   head: { size: HEAD_SIZE, pivot: [0, HEAD_PIVOT_Y, HEAD_PIVOT_Z], uv: HEAD_UV },
-  body: { size: BODY_SIZE, pivot: [0, BODY_PIVOT_Y, 0], uv: BODY_UV, rotateX90: true },
+  body: { size: BODY_SIZE, pivot: [0, BODY_PIVOT_Y, 0], uv: BODY_UV },
   leg: { size: LEG_SIZE, uv: LEG_UV },
   legPivots: [
     [-LEG_INSET_X, LEG_TOP_Y, -LEG_Z], // front-left

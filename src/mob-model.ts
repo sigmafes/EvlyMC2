@@ -13,9 +13,10 @@ export type QuadrupedBoxSpec = {
   size: [number, number, number];
   pivot: [number, number, number];
   uv: FaceRects;
-  /** Some vanilla mob bodies are modelled lying along Z then rotated 90° about X to stand up. */
-  rotateX90?: boolean;
 };
+
+/** A small extra box (pig snout, etc.), positioned relative to the head or the body. */
+export type QuadrupedExtraSpec = QuadrupedBoxSpec & { parent?: 'head' | 'body' };
 
 export type QuadrupedLegSpec = {
   size: [number, number, number];
@@ -38,6 +39,8 @@ export type QuadrupedSpec = {
   legPivots: [number, number, number][];
   /** Second inflated layer with alpha cutouts (sheep wool, etc.) - omit if the species has none. */
   overlay?: QuadrupedOverlaySpec;
+  /** Small extra boxes attached to the head or body (a pig's snout, etc.). */
+  extras?: QuadrupedExtraSpec[];
 };
 
 // --- Per-texture-path shared resources: the Texture (GPU-expensive, one per
@@ -64,7 +67,6 @@ function buildBox(spec: QuadrupedBoxSpec, textureW: number, textureH: number, ma
   applyFaceShading(geo);
   const mesh = new THREE.Mesh(geo, material);
   mesh.position.set(...spec.pivot);
-  if (spec.rotateX90) mesh.rotation.x = Math.PI / 2;
   return mesh;
 }
 
@@ -127,6 +129,12 @@ export class MobModel {
         spec.textureW, spec.textureH, this.overlayMaterial,
       );
       this.group.add(overlayMesh);
+    }
+
+    for (const extra of spec.extras ?? []) {
+      const mesh = buildBox(extra, spec.textureW, spec.textureH, this.material);
+      if (extra.parent === 'head') this.headGroup.add(mesh);
+      else this.group.add(mesh);
     }
   }
 
