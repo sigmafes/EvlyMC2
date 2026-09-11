@@ -93,11 +93,16 @@ con un render de prueba para confirmar visualmente — así no repito trabajo si
 no encaja, y cada fase queda con su propia verificación en vez de una tanda
 "medí las 3 de una" con menos rigor en las últimas dos.
 
-## Fase D — Pig
-`PIG_SPEC` con las dimensiones vainilla (cabeza 4×3×3, cuerpo 10×8×6 rotado 90° para
-quedar horizontal, patas 4×6×4, más pivots) traducidas a las unidades de bloque del
-juego (mismo factor que usa `PlayerModel`, 16 px = 1 bloque). `new MobModel(PIG_SPEC)`
-+ escala/altura total ≈ 0.9 bloques como referencia.
+## Fase D — Pig  ✅ HECHO
+`src/pig-model.ts`: `PIG_SPEC` con los rects reales medidos en la Fase C (cabeza
+8×8×8 px, cuerpo 10×16×8 px rotado 90° para pararse, pata 4×6×4 px compartida por
+las 4), convertidos a bloques a 16px/bloque (sin la inflación +10% que usa
+`PlayerModel` - no hace falta acá). Pivots derivados de esas mismas medidas (alto
+de pata = base del cuerpo, centro del cuerpo ajustado por la rotación, cabeza
+pegada a la cara frontal del cuerpo) en vez de inventados - son una aproximación
+razonada, no números vainilla exactos, así que van a necesitar un ajuste fino
+visual una vez que exista la Fase H para verlo puesto en el mundo.
+Compila y buildea limpio; no instanciado en ningún lado todavía (eso es H).
 
 ## Fase E — Cow
 Igual que el pig pero con las dimensiones de la vaca (más alta y más grande, cabeza
