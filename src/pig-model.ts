@@ -67,10 +67,10 @@ const SNOUT_SIZE: [number, number, number] = [PX(4), PX(3), PX(1)];
 const LEG_TOP_Y = LEG_SIZE[1];                     // ground -> top of legs
 const BODY_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] / 2;
 const BODY_HALF_LENGTH = BODY_SIZE[2] / 2;
-const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 0.55; // slightly above body centre
+const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 0.65; // raised slightly - was 0.55
 const HEAD_PIVOT_Z = -BODY_HALF_LENGTH - HEAD_SIZE[2] / 2; // snug against the body's front face
 
-const LEG_INSET_X = BODY_SIZE[0] / 2 - LEG_SIZE[0] / 2 - PX(1); // tucked in slightly from the body's sides
+const LEG_INSET_X = BODY_SIZE[0] / 2 - LEG_SIZE[0] / 2 - PX(0.3); // wider stance - was PX(1) (too tucked-in)
 const LEG_Z = BODY_HALF_LENGTH * 0.6;
 
 export const PIG_SPEC: QuadrupedSpec = {

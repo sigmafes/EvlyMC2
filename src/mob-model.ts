@@ -3,6 +3,22 @@ import { applyAtlasUVs, applyFaceShading, type FaceRects, type FaceFlips } from 
 
 const DEG = Math.PI / 180;
 
+/** A flat solid-colour texture (e.g. for a small extra box whose art isn't worth guessing at from an unverified texture region - sheep wool, cow horns). */
+export function createSolidColorTexture(color: string, size = 16): THREE.Texture {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, size, size);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 /**
  * One box of a quadruped model. `pivot` is the box's centre, in blocks,
  * relative to the model's own origin - which sits at ground level, centred
@@ -17,8 +33,15 @@ export type QuadrupedBoxSpec = {
   flips?: FaceFlips;
 };
 
-/** A small extra box (pig snout, etc.), positioned relative to the head or the body. */
-export type QuadrupedExtraSpec = QuadrupedBoxSpec & { parent?: 'head' | 'body' };
+/** A small extra box (pig snout, cow horns, etc.), positioned relative to the head or the body. */
+export type QuadrupedExtraSpec = QuadrupedBoxSpec & {
+  parent?: 'head' | 'body';
+  /** Use a separate texture instead of sharing the body's material - e.g. horns as a flat solid colour. Omit to share the body's texture/atlas as before. */
+  texturePath?: string;
+  texture?: THREE.Texture;
+  textureW?: number;
+  textureH?: number;
+};
 
 export type QuadrupedLegSpec = {
   size: [number, number, number];
@@ -28,8 +51,10 @@ export type QuadrupedLegSpec = {
 export type QuadrupedOverlaySpec = QuadrupedBoxSpec & {
   /** Extra inflation per side, in blocks (MCPE-style shell over the base box, e.g. sheep wool). */
   inflate: number;
-  /** Use a separate texture (its own atlas dims) instead of the body's - e.g. sheep wool tiling blocks/wool.png rather than sampling the skin sheet. Omit to share the body's texture/atlas as before. */
+  /** Use a separate texture (its own atlas dims) instead of the body's - e.g. sheep wool. Omit to share the body's texture/atlas as before. */
   texturePath?: string;
+  /** A ready-made texture (e.g. a solid-colour CanvasTexture) - takes priority over texturePath. */
+  texture?: THREE.Texture;
   textureW?: number;
   textureH?: number;
 };
@@ -94,6 +119,8 @@ export class MobModel {
   private readonly legGroups: THREE.Group[] = [];
   private readonly material: THREE.MeshBasicMaterial;
   private readonly overlayMaterial: THREE.MeshBasicMaterial | null = null;
+  /** Extras with their own texture (e.g. cow horns) get their own material so setLightLevel()/hurt() still needs to tint it explicitly - see update(). */
+  private readonly extraMaterials: THREE.MeshBasicMaterial[] = [];
 
   private walking = false;
   private legPhase = 0;      // 0..1, advances only while walking
@@ -131,7 +158,7 @@ export class MobModel {
     }
 
     if (spec.overlay) {
-      const overlayTexture = spec.overlay.texturePath ? getMobTexture(spec.overlay.texturePath) : texture;
+      const overlayTexture = spec.overlay.texture ?? (spec.overlay.texturePath ? getMobTexture(spec.overlay.texturePath) : texture);
       this.overlayMaterial = new THREE.MeshBasicMaterial({
         map: overlayTexture, vertexColors: true, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
       });
@@ -145,7 +172,13 @@ export class MobModel {
     }
 
     for (const extra of spec.extras ?? []) {
-      const mesh = buildBox(extra, spec.textureW, spec.textureH, this.material);
+      let material: THREE.MeshBasicMaterial = this.material;
+      if (extra.texture || extra.texturePath) {
+        const extraTexture = extra.texture ?? getMobTexture(extra.texturePath!);
+        material = new THREE.MeshBasicMaterial({ map: extraTexture, vertexColors: true });
+        this.extraMaterials.push(material);
+      }
+      const mesh = buildBox(extra, extra.textureW ?? spec.textureW, extra.textureH ?? spec.textureH, material);
       if (extra.parent === 'head') this.headGroup.add(mesh);
       else this.group.add(mesh);
     }
@@ -187,9 +220,11 @@ export class MobModel {
       const tinted = new THREE.Color().setScalar(b).lerp(MobModel.HURT_RED, MobModel.HURT_TINT_STRENGTH);
       this.material.color.copy(tinted);
       if (this.overlayMaterial) this.overlayMaterial.color.copy(tinted);
+      for (const m of this.extraMaterials) m.color.copy(tinted);
     } else {
       this.material.color.setScalar(b);
       if (this.overlayMaterial) this.overlayMaterial.color.setScalar(b);
+      for (const m of this.extraMaterials) m.color.setScalar(b);
     }
 
     const target = this.walking ? 1 : 0;

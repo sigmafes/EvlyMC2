@@ -1,4 +1,4 @@
-import type { QuadrupedSpec } from './mob-model';
+import { createSolidColorTexture, type QuadrupedSpec } from './mob-model';
 import type { FaceRects } from './atlas-box';
 
 const TEXTURE_PATH = new URL('../textures/mobs/sheep.png', import.meta.url).href;
@@ -7,13 +7,14 @@ const TEXTURE_H = 32;
 
 // Wool overlay: sheep.png's body region turned out to be a plain (unshorn-
 // looking) hide, not the fluffy pattern PLAN-MOBS.md's Fase F comment below
-// assumed - the sheep read as bald. Rather than repaint sheep.png, layer the
-// same blocks/wool.png the wool block itself uses (a plain tileable pattern,
-// not a UV-mapped skin sheet) over the body as a second inflated shell, the
-// same MCPE-style overlay mechanism mob-model.ts already has for exactly
-// this (just never fed a texture of its own before now).
-const WOOL_TEXTURE_PATH = new URL('../textures/blocks/wool.png', import.meta.url).href;
+// assumed - the sheep read as bald. Rather than repaint sheep.png, layer a
+// second inflated shell over the body (the same MCPE-style overlay
+// mechanism mob-model.ts already has for exactly this) using a flat,
+// near-white solid colour instead of the wool block's own patterned
+// texture - a plain "just-sheared-fluff" look rather than a literal wool
+// block skin.
 const WOOL_TEXTURE_SIZE = 16;
+const WOOL_COLOR_TEXTURE = createSolidColorTexture('#f2f2ef', WOOL_TEXTURE_SIZE); // very light, almost-white grey
 const WOOL_FULL_RECT: [number, number, number, number] = [0, 0, WOOL_TEXTURE_SIZE, WOOL_TEXTURE_SIZE];
 const WOOL_UV: FaceRects = {
   py: WOOL_FULL_RECT, ny: WOOL_FULL_RECT,
@@ -76,11 +77,11 @@ const LEG_SIZE: [number, number, number] = [PX(4), PX(12), PX(4)];
 const LEG_TOP_Y = LEG_SIZE[1];                     // ground -> top of legs
 const BODY_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] / 2;
 const BODY_HALF_LENGTH = BODY_SIZE[2] / 2;
-const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 0.55; // slightly above body centre
+const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 0.85; // raised - was 0.55 (barely above body centre), read as low/hunched
 const HEAD_PIVOT_Z = -BODY_HALF_LENGTH - HEAD_SIZE[2] / 2; // snug against the body's front face
 
-const LEG_INSET_X = BODY_SIZE[0] / 2 - LEG_SIZE[0] / 2 - PX(1); // tucked in slightly from the body's sides
-const LEG_Z = BODY_HALF_LENGTH * 0.6;
+const LEG_INSET_X = BODY_SIZE[0] / 2 - LEG_SIZE[0] / 2 - PX(0.3); // wider stance - was PX(1) (too tucked-in)
+const LEG_Z = BODY_HALF_LENGTH * 0.78; // more front/back separation - was 0.6
 
 export const SHEEP_SPEC: QuadrupedSpec = {
   texturePath: TEXTURE_PATH,
@@ -96,7 +97,7 @@ export const SHEEP_SPEC: QuadrupedSpec = {
     [LEG_INSET_X, LEG_TOP_Y, LEG_Z],   // back-right
   ],
   overlay: {
-    texturePath: WOOL_TEXTURE_PATH,
+    texture: WOOL_COLOR_TEXTURE,
     textureW: WOOL_TEXTURE_SIZE,
     textureH: WOOL_TEXTURE_SIZE,
     size: BODY_SIZE,

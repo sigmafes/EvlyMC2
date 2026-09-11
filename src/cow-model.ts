@@ -1,5 +1,17 @@
-import type { QuadrupedSpec } from './mob-model';
+import { createSolidColorTexture, type QuadrupedSpec } from './mob-model';
 import type { FaceRects } from './atlas-box';
+
+// Horns: cow.png has no verified UV region for them (the one unmapped patch
+// noted below doesn't cleanly fit a two-horn box-unwrap), so rather than
+// guess at pixel coordinates that might land on the wrong art, they're built
+// as small solid-coloured boxes (same trick as the sheep's wool overlay).
+const HORN_TEXTURE_SIZE = 4;
+const HORN_COLOR_TEXTURE = createSolidColorTexture('#e8dfc4', HORN_TEXTURE_SIZE); // pale horn/bone colour
+const HORN_FULL_RECT: [number, number, number, number] = [0, 0, HORN_TEXTURE_SIZE, HORN_TEXTURE_SIZE];
+const HORN_UV: FaceRects = {
+  py: HORN_FULL_RECT, ny: HORN_FULL_RECT,
+  nx: HORN_FULL_RECT, nz: HORN_FULL_RECT, px: HORN_FULL_RECT, pz: HORN_FULL_RECT,
+};
 
 const TEXTURE_PATH = new URL('../textures/mobs/cow.png', import.meta.url).href;
 const TEXTURE_W = 64;
@@ -53,11 +65,16 @@ const LEG_SIZE: [number, number, number] = [PX(4), PX(12), PX(4)];
 const LEG_TOP_Y = LEG_SIZE[1];                     // ground -> top of legs
 const BODY_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] / 2;
 const BODY_HALF_LENGTH = BODY_SIZE[2] / 2;
-const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 0.55; // slightly above body centre
+const HEAD_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] * 0.85; // raised - was 0.55 (barely above body centre)
 const HEAD_PIVOT_Z = -BODY_HALF_LENGTH - HEAD_SIZE[2] / 2; // snug against the body's front face
 
 const LEG_INSET_X = BODY_SIZE[0] / 2 - LEG_SIZE[0] / 2 - PX(1); // tucked in slightly from the body's sides
 const LEG_Z = BODY_HALF_LENGTH * 0.6;
+
+const HORN_SIZE: [number, number, number] = [PX(1.5), PX(3), PX(1.5)];
+const HORN_X = HEAD_SIZE[0] / 2 - PX(0.5); // near the sides of the head
+const HORN_Y = HEAD_SIZE[1] / 2; // resting on the top edge
+const HORN_Z = -HEAD_SIZE[2] * 0.15; // slightly toward the front
 
 export const COW_SPEC: QuadrupedSpec = {
   texturePath: TEXTURE_PATH,
@@ -74,5 +91,15 @@ export const COW_SPEC: QuadrupedSpec = {
     [LEG_INSET_X, LEG_TOP_Y, -LEG_Z],  // front-right
     [-LEG_INSET_X, LEG_TOP_Y, LEG_Z],  // back-left
     [LEG_INSET_X, LEG_TOP_Y, LEG_Z],   // back-right
+  ],
+  extras: [
+    {
+      size: HORN_SIZE, pivot: [-HORN_X, HORN_Y, HORN_Z], uv: HORN_UV, parent: 'head',
+      texture: HORN_COLOR_TEXTURE, textureW: HORN_TEXTURE_SIZE, textureH: HORN_TEXTURE_SIZE,
+    },
+    {
+      size: HORN_SIZE, pivot: [HORN_X, HORN_Y, HORN_Z], uv: HORN_UV, parent: 'head',
+      texture: HORN_COLOR_TEXTURE, textureW: HORN_TEXTURE_SIZE, textureH: HORN_TEXTURE_SIZE,
+    },
   ],
 };
