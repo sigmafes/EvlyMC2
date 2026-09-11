@@ -3,15 +3,25 @@ import { PlayerModel } from './player-model';
 
 const DEG = Math.PI / 180;
 
+export type InventoryDollOptions = {
+  /** CSS selector for the <canvas> the doll renders into. */
+  canvasSelector: string;
+  /** CSS selector for the element whose mousemove drives the doll's head/body tracking. */
+  containerSelector: string;
+  width?: number;
+  height?: number;
+};
+
 /**
  * Small player figure in the survival inventory's preview box. Ported from LCE
  * `UIControl_MinecraftPlayer::render`: the body + head turn toward the cursor
  * (head twice as far as the body) and the whole model leans on the pitch axis.
+ * Reused (with a bigger canvas) for the Player Options skin preview.
  */
 export class InventoryDoll {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(32, 98 / 140, 0.1, 100);
+  private readonly camera: THREE.PerspectiveCamera;
   private readonly model = new PlayerModel();
   private readonly tiltGroup = new THREE.Group();
   private readonly clock = new THREE.Clock();
@@ -28,12 +38,15 @@ export class InventoryDoll {
   private headPitch = 0;
   private tilt = 0;
 
-  constructor() {
-    const canvas = document.querySelector<HTMLCanvasElement>('#backpack-doll')!;
-    const backpack = document.querySelector<HTMLElement>('#backpack')!;
+  constructor(opts: InventoryDollOptions = { canvasSelector: '#backpack-doll', containerSelector: '#backpack' }) {
+    const width = opts.width ?? 98;
+    const height = opts.height ?? 140;
+    const canvas = document.querySelector<HTMLCanvasElement>(opts.canvasSelector)!;
+    const container = document.querySelector<HTMLElement>(opts.containerSelector)!;
+    this.camera = new THREE.PerspectiveCamera(32, width / height, 0.1, 100);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(98, 140, false);
+    this.renderer.setSize(width, height, false);
     this.renderer.setClearColor(0x000000, 0);
 
     const group = this.model.getGroup();
@@ -46,7 +59,7 @@ export class InventoryDoll {
     this.camera.position.set(0, 0, -5);
     this.camera.lookAt(0, 0, 0);
 
-    backpack.addEventListener('mousemove', (event) => {
+    container.addEventListener('mousemove', (event) => {
       const rect = canvas.getBoundingClientRect();
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;

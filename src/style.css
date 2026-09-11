@@ -1045,6 +1045,78 @@ body {
   gap: 10px;
 }
 
+/* ===== Player Options (name + skin import) ===== */
+#player-options {
+  position: fixed;
+  inset: 0;
+  z-index: 211; /* above #menu-options, which stays open behind it */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 6vh 0;
+  overflow-y: auto;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)),
+    url('../gui/bg.png');
+  background-repeat: repeat;
+  background-size: auto, 64px 64px;
+  image-rendering: pixelated;
+  color: #fff;
+  font-family: 'Tricraft', sans-serif;
+}
+#player-options[hidden] { display: none; }
+#player-options h1 { margin: 0 0 8px; }
+#player-options-body {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  width: min(560px, 90vw);
+}
+#player-options-doll {
+  width: 196px;
+  height: 280px;
+  flex: none;
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+#player-options-form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.player-name-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+.player-name-row input {
+  height: 36px;
+  padding: 0 10px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 16px;
+}
+.player-name-row input:focus { outline: none; border-color: #fff; }
+#skin-import-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: -4px;
+}
+#skin-import-error {
+  font-size: 13px;
+  color: #ff6b6b;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+}
+#skin-import-error[hidden] { display: none; }
+#player-options-form .mc-button { width: 100%; height: 38px; font-size: 16px; }
+
 /* ===== Intro (centered Mojang video, running mouse, fade to menu) ===== */
 #intro {
   position: fixed;

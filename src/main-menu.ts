@@ -16,6 +16,12 @@ import splashRaw from '../gui/splash.txt?raw';
 import { playClick } from './ui-sound';
 import { WorldSelect } from './world-select';
 import { isTouchDevice } from './is-touch';
+import { InventoryDoll } from './inventory-doll';
+import { applySkinTexture, resetSkinTexture } from './player-model';
+import {
+  loadPlayerName, savePlayerName, clearPlayerSkin,
+  readAndValidateSkinFile, applyPersistedSkin, savePlayerSkinDataUrl,
+} from './player-skin';
 
 const MUSIC = [track0, track1, track2, track3];
 const SPLASHES = splashRaw.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -32,6 +38,13 @@ type MainMenuHandlers = {
 export class MainMenu {
   private readonly root = document.querySelector<HTMLElement>('#main-menu')!;
   private readonly optionsRoot = document.querySelector<HTMLElement>('#menu-options')!;
+  private readonly playerOptionsRoot = document.querySelector<HTMLElement>('#player-options')!;
+  private readonly playerOptionsDoll = new InventoryDoll({
+    canvasSelector: '#player-options-doll',
+    containerSelector: '#player-options-body',
+    width: 196,
+    height: 280,
+  });
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(90, 1, 0.01, 10);
@@ -114,6 +127,7 @@ export class MainMenu {
     };
     this.root.addEventListener('click', clickSfx);
     this.optionsRoot.addEventListener('click', clickSfx);
+    this.playerOptionsRoot.addEventListener('click', clickSfx);
 
     this.root.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLElement>('.mc-button');
@@ -127,8 +141,27 @@ export class MainMenu {
     this.optionsRoot.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLElement>('.mc-button');
       if (button?.dataset.action === 'options-back') this.optionsRoot.hidden = true;
+      else if (button?.id === 'open-player-options') this.openPlayerOptions();
+    });
+    this.playerOptionsRoot.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLElement>('.mc-button');
+      if (button?.dataset.action === 'player-options-back') this.closePlayerOptions();
     });
     this.bindOptions();
+    this.bindPlayerOptions();
+  }
+
+  private openPlayerOptions(): void {
+    this.optionsRoot.hidden = true;
+    this.playerOptionsRoot.hidden = false;
+    this.playerOptionsDoll.setSlim(loadSettings().alexSkin);
+    this.playerOptionsDoll.setActive(true);
+  }
+
+  private closePlayerOptions(): void {
+    this.playerOptionsRoot.hidden = true;
+    this.optionsRoot.hidden = false;
+    this.playerOptionsDoll.setActive(false);
   }
 
   private tick = () => {
@@ -232,5 +265,48 @@ export class MainMenu {
     toggle('menu-fog', 'fog');
     toggle('menu-alex-skin', 'alexSkin');
     toggle('menu-view-bob', 'viewBob');
+  }
+
+  private bindPlayerOptions() {
+    applyPersistedSkin((image) => applySkinTexture(image));
+
+    const nameInput = document.querySelector<HTMLInputElement>('#player-name-input')!;
+    nameInput.value = loadPlayerName();
+    nameInput.addEventListener('change', () => {
+      savePlayerName(nameInput.value);
+      nameInput.value = loadPlayerName(); // reflect the trimmed/defaulted value back
+    });
+
+    const fileInput = document.querySelector<HTMLInputElement>('#skin-file-input')!;
+    const errorEl = document.querySelector<HTMLElement>('#skin-import-error')!;
+    const showError = (message: string | null) => {
+      errorEl.hidden = !message;
+      errorEl.textContent = message ?? '';
+    };
+
+    document.querySelector<HTMLButtonElement>('#import-skin-btn')!.addEventListener('click', () => {
+      fileInput.click();
+    });
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = ''; // allow re-selecting the same file after a failed import
+      if (!file) return;
+      void (async () => {
+        const result = await readAndValidateSkinFile(file);
+        if (!result.ok) {
+          showError(result.error);
+          return;
+        }
+        showError(null);
+        applySkinTexture(result.image);
+        savePlayerSkinDataUrl(result.dataUrl);
+      })();
+    });
+
+    document.querySelector<HTMLButtonElement>('#reset-skin-btn')!.addEventListener('click', () => {
+      resetSkinTexture();
+      clearPlayerSkin();
+      showError(null);
+    });
   }
 }

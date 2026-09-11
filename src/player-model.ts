@@ -34,6 +34,41 @@ function getAtlasMaterial(): THREE.MeshBasicMaterial {
   return sharedAtlasMaterial;
 }
 
+/**
+ * Swap the skin atlas for a custom one (Player Options -> Import Skin).
+ * Replaces the shared material's map in place, so every existing mesh built
+ * with getAtlasMaterial()/getSkinAtlasMaterial() - the world player model, the
+ * inventory doll(s), the first-person arm - picks it up immediately without
+ * needing to be rebuilt.
+ */
+export function applySkinTexture(image: HTMLImageElement): void {
+  const material = getAtlasMaterial();
+  const oldTexture = material.map;
+  const texture = new THREE.Texture(image);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  material.map = texture;
+  material.needsUpdate = true;
+  if (oldTexture && oldTexture !== texture) oldTexture.dispose();
+}
+
+/** Revert to the built-in default skin (Player Options -> Reset Skin). */
+export function resetSkinTexture(): void {
+  const material = getAtlasMaterial();
+  const oldTexture = material.map;
+  const texture = new THREE.TextureLoader().load(ATLAS_PATH);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  material.map = texture;
+  material.needsUpdate = true;
+  if (oldTexture && oldTexture !== texture) oldTexture.dispose();
+}
+
 // --- Outer "3D" layer (hat / jacket / sleeves / pants). Same atlas as the base. ---
 // MCPE inflates the shell box by g=0.5 px per side. In EvlyMC units that is
 // ~0.069 blocks on width/depth and ~0.063 on height (px->block ratio differs per axis).

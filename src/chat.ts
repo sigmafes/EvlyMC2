@@ -1,4 +1,5 @@
 import { lockPointer, isTouchDevice } from './is-touch';
+import { loadPlayerName } from './player-skin';
 
 export type ChatCommandHandler = (args: string[]) => string | void;
 
@@ -134,7 +135,7 @@ export class Chat {
     if (raw.startsWith('/')) {
       this.runCommand(raw);
     } else {
-      this.addLine(`<Player> ${raw}`);
+      this.addLine(`<${loadPlayerName()}> ${raw}`);
     }
     this.closeChat(true);
   }
