@@ -201,6 +201,21 @@ export class MobManager {
     for (const mob of this.mobs) mob.box.visible = on;
   }
 
+  /** Total live mobs (dying ones included - they're still despawning, not free capacity yet). */
+  get count(): number {
+    return this.mobs.length;
+  }
+
+  /** How many live mobs currently sit within `radius` blocks of `pos` (horizontal distance). */
+  countNear(pos: THREE.Vector3, radius: number): number {
+    let n = 0;
+    for (const mob of this.mobs) {
+      const p = mob.model.getGroup().position;
+      if (Math.hypot(p.x - pos.x, p.z - pos.z) <= radius) n++;
+    }
+    return n;
+  }
+
   /** Nearest mob a ray from `origin` toward `dir` (normalised) hits within `maxDist`, or null. */
   raycastMobs(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): MobRaycastHit | null {
     let best: MobRaycastHit | null = null;

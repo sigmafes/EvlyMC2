@@ -211,7 +211,7 @@ let hitTestMob: ((origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) =>
 let attackMobFn: ((mobId: number) => void) | undefined;
 const interaction = new BlockInteraction(
   canvas, camera, world, player, soundManager, pauseMenu,
-  () => hand.swing(),
+  () => { hand.swing(); playerModel.swingArm(); },
   () => { hand.bump(); inventory.consumeSelected(); },
   particles,
   (id, pos) => {
@@ -317,15 +317,25 @@ attackMobFn = (mobId) => {
 
 // --- Health & death ---
 const deathScreen = document.querySelector<HTMLElement>('#death-screen')!;
+let deathParticlesSpawned = false;
 const playerHealth = new PlayerHealth(
   () => {
     deathScreen.hidden = false;
     document.exitPointerLock();
     ambient.stopAll();
     persistPlayer();
+    // Same death treatment as mobs (mob-manager.ts): topple + red tint, then
+    // a smoke burst - shown in forced third-person while the camera slowly
+    // pulls back from the death spot (see the playerHealth.isDead branch).
+    deathParticlesSpawned = false;
+    player.startDeathCamera();
+    playerModel.startDeath();
+    playerModel.setVisible(true); // forced third-person needs the body visible, even if it was hidden (first person) the instant before
+    hand.setVisible(false); // the dead branch below never re-runs the normal first/third-person visibility toggle
   },
   (cause) => {
     player.hurtImpulse();
+    playerModel.hurt();
     // Throttle the damage-over-time causes so the sound doesn't machine-gun.
     const now = performance.now();
     const gap = cause === 'fire' || cause === 'drown' ? 900 : 0;
@@ -351,6 +361,7 @@ function respawn() {
   playerHealth.reset();
   playerAir.reset();
   player.restore({ ...SPAWN, yaw: player.state.yaw, pitch: player.state.pitch });
+  playerModel.resetDeath();
   hud.setHealth(playerHealth.current);
   deathScreen.hidden = true;
   player.setMovementLocked(false);
@@ -366,6 +377,7 @@ document.querySelector<HTMLButtonElement>('#death-title')!.addEventListener('cli
   // Save the world at a clean spawn state, then return to the menu.
   playerHealth.reset();
   player.restore({ ...SPAWN, yaw: player.state.yaw, pitch: player.state.pitch });
+  playerModel.resetDeath();
   void leaveWorld();
 });
 
@@ -466,6 +478,54 @@ chat.registerCommand('summon', (args) => {
   return `Summoned a ${kind}.`;
 });
 
+// --- Ambient mob spawning: passive mobs (pig/cow/sheep) appear on their own
+// on grass near the player, in small herds - LCE-style groups of 2-4, not
+// one at a time. No biome system yet, so any grass column qualifies.
+const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep'];
+const MOB_SPAWN_INTERVAL_MIN = 8;
+const MOB_SPAWN_INTERVAL_MAX = 15;
+const MOB_SPAWN_MIN_RADIUS = 14; // outside the player's immediate view, so herds don't pop in visibly
+const MOB_SPAWN_MAX_RADIUS = 36;
+const MOB_SPAWN_GROUP_JITTER = 4; // blocks a group member can land from the group's anchor point
+const MOB_SPAWN_GLOBAL_CAP = 30; // total live mobs before spawning stops entirely
+const MOB_SPAWN_LOCAL_CAP = 8; // live mobs within MOB_SPAWN_MAX_RADIUS of the player before spawning pauses nearby
+let mobSpawnTimer = MOB_SPAWN_INTERVAL_MIN + Math.random() * (MOB_SPAWN_INTERVAL_MAX - MOB_SPAWN_INTERVAL_MIN);
+
+/** True if (x,gy,z) is generated grass with two clear blocks above - a valid spot for a passive mob to stand. */
+function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
+  if (!world.isChunkLoaded(x, z)) return false;
+  if (world.getBlock(x, gy, z) !== BlockId.GRASS) return false;
+  return !isSolidBlock(world.getBlock(x, gy + 1, z)) && !isSolidBlock(world.getBlock(x, gy + 2, z));
+}
+
+function tryNaturalMobSpawn(): void {
+  if (mobManager.count >= MOB_SPAWN_GLOBAL_CAP) return;
+  const p = player.state.position;
+  if (mobManager.countNear(p, MOB_SPAWN_MAX_RADIUS) >= MOB_SPAWN_LOCAL_CAP) return;
+
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = MOB_SPAWN_MIN_RADIUS + Math.random() * (MOB_SPAWN_MAX_RADIUS - MOB_SPAWN_MIN_RADIUS);
+    const gx = Math.round(p.x + Math.sin(angle) * radius);
+    const gz = Math.round(p.z + Math.cos(angle) * radius);
+    if (!world.isChunkLoaded(gx, gz)) continue;
+    const gy = world.getSurfaceHeight(gx, gz);
+    if (!isValidMobSpawnColumn(gx, gy, gz)) continue;
+
+    const kind = MOB_KINDS[Math.floor(Math.random() * MOB_KINDS.length)];
+    const spec = MOB_SPECS[kind];
+    const groupSize = 2 + Math.floor(Math.random() * 3); // 2-4
+    for (let i = 0; i < groupSize; i++) {
+      const jx = gx + Math.round((Math.random() - 0.5) * MOB_SPAWN_GROUP_JITTER * 2);
+      const jz = gz + Math.round((Math.random() - 0.5) * MOB_SPAWN_GROUP_JITTER * 2);
+      const jy = world.getSurfaceHeight(jx, jz);
+      if (!isValidMobSpawnColumn(jx, jy, jz)) continue; // skip this one member rather than the whole group
+      mobManager.spawn(kind, spec, new THREE.Vector3(jx, jy + 0.5, jz), Math.random() * Math.PI * 2 - Math.PI);
+    }
+    return;
+  }
+}
+
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 chat.registerCommand('give', (args) => {
   if (args.length === 0) return 'Usage: /give <item|block> [count]';
@@ -546,8 +606,21 @@ function animate() {
     interaction.setTouchActive(!menuOpen);
   }
 
-  // Dead: freeze the world behind the death screen until Respawn / Title screen.
+  // Dead: gameplay (movement, mobs, damage) freezes behind the death screen,
+  // but the death animation + camera boom-out (player.startDeathCamera() /
+  // playerModel.startDeath(), fired from the onDeath callback above) keep
+  // playing for DEATH_ZOOM-ish seconds before everything truly settles.
   if (playerHealth.isDead) {
+    const toppled = playerModel.updateDeathAnimation(delta);
+    if (toppled && !deathParticlesSpawned) {
+      deathParticlesSpawned = true;
+      const pos = playerModel.group.position.clone();
+      pos.y += 0.9;
+      smokeParticles.burst(pos);
+      playerModel.setVisible(false);
+    }
+    player.updateDeathCamera(delta);
+    smokeParticles.update(delta);
     renderer.render(scene, camera);
     return;
   }
@@ -562,6 +635,12 @@ function animate() {
     droppedItems.update(delta, player.state.position, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
     furnaceManager.tick(delta);
     mobManager.update(delta, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
+
+    mobSpawnTimer -= delta;
+    if (mobSpawnTimer <= 0) {
+      mobSpawnTimer = MOB_SPAWN_INTERVAL_MIN + Math.random() * (MOB_SPAWN_INTERVAL_MAX - MOB_SPAWN_INTERVAL_MIN);
+      tryNaturalMobSpawn();
+    }
 
     if (player.consumeWaterEntry()) soundManager.playRandom('player/Water_splash', 2, 0.5);
 
@@ -621,7 +700,7 @@ function animate() {
   // Shade the model by the world light level where the player stands.
   const lp = player.state.position;
   const lightLevel = lightEngine.getRawBrightness(Math.round(lp.x), Math.round(lp.y), Math.round(lp.z));
-  playerModel.setLightLevel(lightLevel / 15);
+  playerModel.setLightLevel(lightLevel / 15, delta);
 
   // First-person hand: visible only in true first person, gameplay unobstructed.
   hand.setVisible(cameraDistance <= 0.5 && !pauseMenu.isPaused && !inventoryOpen);

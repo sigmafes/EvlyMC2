@@ -48,7 +48,8 @@ export const MATERIAL_FURNACE_FRONT_OFF = 32;
 export const MATERIAL_FURNACE_FRONT_ON = 33;
 export const MATERIAL_FURNACE_TOP = 34;
 export const MATERIAL_TORCH = 35;
-const MATERIAL_COUNT = 36;
+export const MATERIAL_WOOL = 36;
+const MATERIAL_COUNT = 37;
 
 export type BlockReader = (x: number, y: number, z: number) => BlockId;
 export type LightReader = (x: number, y: number, z: number) => number;
@@ -267,6 +268,7 @@ function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number 
   if (id === BlockId.OBSIDIAN) return MATERIAL_OBSIDIAN;
   if (id === BlockId.ICE) return MATERIAL_ICE;
   if (id === BlockId.GLASS) return MATERIAL_GLASS;
+  if (id === BlockId.WOOL) return MATERIAL_WOOL;
   if (id === BlockId.FURNACE) {
     if (faceIndex === 2 || faceIndex === 3) return MATERIAL_FURNACE_TOP; // top & bottom
     const front = data?.facing != null ? FACING_TO_FACE_INDEX[data.facing] : 4; // default +Z

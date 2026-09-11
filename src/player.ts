@@ -65,6 +65,11 @@ export class PlayerController {
   /** Timestamp (ms) of the last jump-button press, for double-tap-to-fly. */
   private lastJumpPressTime = 0;
   private static readonly DOUBLE_JUMP_MS = 300;
+  /** On death: forced third-person, camera slowly booming out from the death spot. */
+  private deathZoomActive = false;
+  private deathZoomTimer = 0;
+  private static readonly DEATH_ZOOM_DURATION = 10;
+  private static readonly DEATH_ZOOM_EXTRA = 8; // blocks added to the third-person distance over DEATH_ZOOM_DURATION
 
   constructor(
     private readonly camera: THREE.Camera,
@@ -228,7 +233,10 @@ export class PlayerController {
       const desiredOffset = this.thirdPersonOffset.clone()
         .applyAxisAngle(new THREE.Vector3(1, 0, 0), (front ? 1 : -1) * -this.state.pitch)
         .applyAxisAngle(new THREE.Vector3(0, 1, 0), this.state.yaw + (front ? Math.PI : 0));
-      const maxDist = desiredOffset.length();
+      const deathZoomOut = this.deathZoomActive
+        ? PlayerController.DEATH_ZOOM_EXTRA * (this.deathZoomTimer / PlayerController.DEATH_ZOOM_DURATION)
+        : 0;
+      const maxDist = desiredOffset.length() + deathZoomOut;
       const dir = desiredOffset.clone().normalize();
       const dist = this.cameraCollisionDistance(eye, dir, maxDist);
       this.camera.position.copy(dir).multiplyScalar(dist).add(eye);
@@ -339,6 +347,24 @@ export class PlayerController {
     this.hurtTime = 0;
     this.wasInWater = false;
     this.waterEntered = false;
+    this.cameraMode = 0;
+    this.deathZoomActive = false;
+    this.deathZoomTimer = 0;
+  }
+
+  /** Called the moment the player dies: forces third-person so the death animation is visible. */
+  startDeathCamera(): void {
+    if (this.cameraMode === 0) this.cameraMode = 1;
+    this.deathZoomActive = true;
+    this.deathZoomTimer = 0;
+  }
+
+  /** Advances the death camera boom-out and applies it. Call every frame in place of update() while dead. */
+  updateDeathCamera(delta: number): void {
+    if (this.deathZoomActive) {
+      this.deathZoomTimer = Math.min(this.deathZoomTimer + delta, PlayerController.DEATH_ZOOM_DURATION);
+    }
+    this.updateCamera();
   }
 
   isInWater(): boolean {

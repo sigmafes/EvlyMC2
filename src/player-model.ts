@@ -280,6 +280,25 @@ export class PlayerModel {
   private returnStartAngleRight = 0;
   private returnStartLegAngleLeft = 0;
   private returnStartLegAngleRight = 0;
+  // Third-person attack/mine swing (loro Player::swing) - an overlay on top
+  // of the right arm's walk-cycle/idle angle, same duration as the
+  // first-person hand's own swing (first-person-hand.ts SWING_DURATION).
+  private swinging = false;
+  private swingTime = 0;
+  private readonly SWING_DURATION = 0.3;
+  private readonly SWING_ARC = Math.PI / 2;
+  // Hurt flash (same non-emissive 75%-red tint as MobModel.hurt()).
+  private hurtFlashTimer = 0;
+  private static readonly HURT_FLASH_DURATION = 0.2;
+  private static readonly HURT_TINT_STRENGTH = 0.75;
+  private static readonly HURT_RED = new THREE.Color(1, 0, 0);
+  private static readonly hurtTintScratch = new THREE.Color();
+  // Death animation (same treatment as MobModel: topple over Z while
+  // permanently red-tinted - see startDeath()/updateDeathAnimation()).
+  private dying = false;
+  private forcedTint = false;
+  private deathTimer = 0;
+  static readonly DEATH_SPIN_DURATION = 0.75;
   private slimArms = false;
   private bodyYaw = 0;
   private bodyYawInit = false;
@@ -648,10 +667,32 @@ export class PlayerModel {
     }
   }
 
+  /** Start (or restart) the third-person attack/mine swing overlay. */
+  swingArm(): void {
+    this.swingTime = 0;
+    this.swinging = true;
+  }
+
+  /** Advances the swing timer and returns this frame's overlay angle for the right arm (0 when not swinging). */
+  private updateSwing(deltaTime: number): number {
+    if (!this.swinging) return 0;
+    this.swingTime += deltaTime;
+    if (this.swingTime >= this.SWING_DURATION) {
+      this.swinging = false;
+      return 0;
+    }
+    const t = this.swingTime / this.SWING_DURATION;
+    // Single forward-and-back arc (positive = backward for this arm, see
+    // setRightArmRotation, so the attack swing itself is negative).
+    return -Math.sin(t * Math.PI) * this.SWING_ARC;
+  }
+
   /**
    * Update walking animation (call every frame with delta time in seconds).
    */
   updateWalkingAnimation(deltaTime: number) {
+    const swingOffset = this.updateSwing(deltaTime);
+
     // Handle return to idle pose
     if (this.isReturning) {
       this.returnStartTime += deltaTime;
@@ -664,7 +705,7 @@ export class PlayerModel {
       const rightLegAngle = this.returnStartLegAngleRight * (1 - returnProgress);
 
       this.setLeftArmRotation(leftArmAngle);
-      this.setRightArmRotation(rightArmAngle);
+      this.setRightArmRotation(rightArmAngle + swingOffset);
       this.setLeftLegRotation(leftLegAngle);
       this.setRightLegRotation(rightLegAngle);
 
@@ -674,7 +715,13 @@ export class PlayerModel {
       return;
     }
 
-    if (!this.isWalking) return;
+    if (!this.isWalking) {
+      // Fully idle: the swing overlay still needs to play (and to reset the
+      // arm to exactly 0 for one extra frame once it finishes, since the arc
+      // only asymptotically nears 0 rather than landing on it exactly).
+      if (swingOffset !== 0 || this.armRightRotation !== 0) this.setRightArmRotation(swingOffset);
+      return;
+    }
 
     this.walkCycleTime += deltaTime;
     if (this.walkCycleTime >= this.WALK_CYCLE_DURATION) {
@@ -727,7 +774,7 @@ export class PlayerModel {
     let rightLegAngle = -rightArmAngle;
 
     this.setLeftArmRotation(leftArmAngle);
-    this.setRightArmRotation(rightArmAngle);
+    this.setRightArmRotation(rightArmAngle + swingOffset);
     this.setLeftLegRotation(leftLegAngle);
     this.setRightLegRotation(rightLegAngle);
   }
@@ -884,14 +931,58 @@ export class PlayerModel {
     }
   }
 
+  /** Flash red for HURT_FLASH_DURATION - call when the player takes damage. */
+  hurt(): void {
+    this.hurtFlashTimer = PlayerModel.HURT_FLASH_DURATION;
+  }
+
+  /** Starts the death animation (same treatment as MobModel): topple over Z while staying red-tinted. Call once, the instant the player dies. */
+  startDeath(): void {
+    this.dying = true;
+    this.forcedTint = true;
+    this.deathTimer = 0;
+  }
+
+  /** Advances the death topple; call every frame instead of updateWalkingAnimation while dying. Returns true once the topple has finished. */
+  updateDeathAnimation(delta: number): boolean {
+    if (!this.dying) return false;
+    this.deathTimer = Math.min(this.deathTimer + delta, PlayerModel.DEATH_SPIN_DURATION);
+    this.group.rotation.z = (Math.PI / 2) * (this.deathTimer / PlayerModel.DEATH_SPIN_DURATION);
+    return this.deathTimer >= PlayerModel.DEATH_SPIN_DURATION;
+  }
+
+  /** Undoes startDeath() - call on respawn. */
+  resetDeath(): void {
+    this.dying = false;
+    this.forcedTint = false;
+    this.deathTimer = 0;
+    this.group.rotation.z = 0;
+    this.setVisible(true);
+  }
+
   /**
    * Tint the whole model by the world light level at its position (0..1),
    * matching the terrain shading curve. Combines with the baked face shading.
+   * `delta` (seconds since last call) decays a pending hurt() flash - pass 0
+   * (the default) for a call that shouldn't advance it, e.g. the inventory
+   * doll forcing itself back to full brightness on the same shared material.
    */
-  setLightLevel(level01: number) {
+  setLightLevel(level01: number, delta = 0) {
+    if (this.hurtFlashTimer > 0) this.hurtFlashTimer = Math.max(0, this.hurtFlashTimer - delta);
+
     const b = Math.pow(THREE.MathUtils.clamp(level01, 0, 1), 1.25);
-    getAtlasMaterial().color.setScalar(b);
-    getOverlayMaterial().color.setScalar(b);
+    const atlas = getAtlasMaterial();
+    const overlay = getOverlayMaterial();
+    if (this.hurtFlashTimer > 0 || this.forcedTint) {
+      // Non-emissive: tint the lit base colour toward red instead of
+      // overriding it outright, so the flash still darkens in shade.
+      PlayerModel.hurtTintScratch.setScalar(b).lerp(PlayerModel.HURT_RED, PlayerModel.HURT_TINT_STRENGTH);
+      atlas.color.copy(PlayerModel.hurtTintScratch);
+      overlay.color.copy(PlayerModel.hurtTintScratch);
+    } else {
+      atlas.color.setScalar(b);
+      overlay.color.setScalar(b);
+    }
     this.lightLevel = level01;
     if (this.heldMesh) tintByLight(this.heldMesh, level01);
   }
