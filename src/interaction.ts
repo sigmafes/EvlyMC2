@@ -3,7 +3,8 @@ import { BlockId, isInteractive, isOrientable } from './block';
 import { facingTowardPlayer } from './block-data';
 import { isBlock, foodValue } from './item';
 import { getDrops } from './drops';
-import { Raycast } from './raycast';
+import { isShapedBlock, isSlab, isStairs } from './block-shapes';
+import { Raycast, type RaycastHit } from './raycast';
 import { BlockHighlight } from './block-highlight';
 import { BlockPlacer } from './block-placer';
 import { BreakOverlay } from './break-overlay';
@@ -163,6 +164,19 @@ export class BlockInteraction {
     }
   }
 
+  /**
+   * Which half of the cell a stair/slab placed from this click should occupy.
+   * LCE StairTile::getPlacedOnFaceDataValue: clicking the underside of a
+   * block, or the upper half of a side face, puts the piece up top.
+   */
+  private placedHalfIsTop(hit: RaycastHit): 'top' | 'bottom' {
+    const n = hit.intersection.face?.normal;
+    if (n && n.y > 0.5) return 'bottom';
+    if (n && n.y < -0.5) return 'top';
+    const clickY = hit.intersection.point.y - (hit.blockPosition.y - 0.5);
+    return clickY > 0.5 ? 'top' : 'bottom';
+  }
+
   /** World brightness 0..1 at (rounded) `p`, for shading particles/overlay. */
   private lightAt(p: THREE.Vector3): number {
     return (this.getLight?.(Math.round(p.x), Math.round(p.y), Math.round(p.z)) ?? 15) / 15;
@@ -307,9 +321,10 @@ export class BlockInteraction {
         if (slot?.id != null && slot.count > 0) this.onDrop?.(slot.id, slot.count, pos.clone());
       }
     }
+    const wasDouble = this.world.getBlockData(pos.x, pos.y, pos.z)?.double === true;
     this.world.remove(pos.x, pos.y, pos.z);
     this.particles?.burst(pos, id, light);
-    for (const drop of getDrops(id, canHarvest)) this.onDrop?.(drop.id, drop.count, pos.clone());
+    for (const drop of getDrops(id, canHarvest, wasDouble)) this.onDrop?.(drop.id, drop.count, pos.clone());
     const sound = getBlockSound(id, 'dig');
     if (sound) this.soundManager?.playSound(sound);
     this.mining = null;
@@ -398,6 +413,22 @@ export class BlockInteraction {
     // Torches can't hang from a ceiling.
     if (this.selectedBlock === BlockId.TORCH && hit.intersection.face.normal.y < -0.5) return;
 
+    // Slab onto its matching other half -> one full block (LCE StoneSlabTileItem::useOn).
+    if (this.selectedBlock != null && isSlab(this.selectedBlock) && clicked === this.selectedBlock) {
+      const b = hit.blockPosition;
+      const data = this.world.getBlockData(b.x, b.y, b.z);
+      const clickedTop = data?.half === 'top';
+      const wantsTop = this.placedHalfIsTop(hit) === 'top';
+      if (!data?.double && clickedTop !== wantsTop) {
+        this.world.setBlockData(b.x, b.y, b.z, { ...data, half: 'bottom', double: true });
+        this.onSwing?.();
+        this.onPlace?.();
+        const sound = getBlockSound(this.selectedBlock, 'place') ?? getBlockSound(this.selectedBlock, 'dig');
+        if (sound && this.soundManager) this.soundManager.playSound(sound);
+        return;
+      }
+    }
+
     let placedAt: THREE.Vector3 | null = null;
     const placed = this.placer.placeBlock(
       hit.blockPosition,
@@ -424,6 +455,18 @@ export class BlockInteraction {
         // Orientable block (furnace): its front (off) face looks at the player.
         const p = placedAt as THREE.Vector3;
         this.world.setBlockData(p.x, p.y, p.z, { facing: facingTowardPlayer(this.player.state.yaw) });
+      }
+      if (placedAt && placedBlockId != null && isShapedBlock(placedBlockId)) {
+        const p = placedAt as THREE.Vector3;
+        const half = this.placedHalfIsTop(hit);
+        if (isStairs(placedBlockId)) {
+          // LCE StairTile::setPlacedBy - stairs ascend the way the player is
+          // looking, so you walk up them going forward.
+          const away = facingTowardPlayer(this.player.state.yaw);
+          this.world.setBlockData(p.x, p.y, p.z, { facing: ((away + 2) & 3) as 0 | 1 | 2 | 3, half });
+        } else {
+          this.world.setBlockData(p.x, p.y, p.z, { half });
+        }
       }
       if (placedAt && placedBlockId === BlockId.TORCH) {
         // Side face -> wall torch leaning along the face normal; top face -> floor torch.

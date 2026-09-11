@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { BlockId, blockLightProperties, isFlammable, STATEFUL_BLOCKS } from './block';
 import type { BlockData } from './block-data';
 import { FACING_TO_FACE_INDEX } from './block-data';
+import { type ShapeBox, shapeBoxesFor, coversWholeFace, isShapedBlock, SHAPE_PARENT } from './block-shapes';
 
 /** A block that fire can stand on top of (used to pick floor vs wall fire). */
 function isFireGround(id: BlockId): boolean {
@@ -252,7 +253,75 @@ function addTorch(
   }
 }
 
+/**
+ * Per-face (u,v) parametrisation matching what the full-cube path produces,
+ * so a sub-box samples exactly the part of the texture that the same slice of
+ * a full block would have shown (a half slab gets the bottom half of the
+ * texture on its sides, not a squashed copy of the whole thing).
+ */
+function faceUV(faceIndex: number, x: number, y: number, z: number): [number, number] {
+  switch (faceIndex) {
+    case 0: return [z, y];         // +X
+    case 1: return [1 - z, y];     // -X
+    case 2: return [1 - z, x];     // +Y
+    case 3: return [z, x];         // -Y
+    case 4: return [1 - x, y];     // +Z
+    default: return [x, y];        // -Z
+  }
+}
+
+/** Emits the 6 faces of one sub-box of a stair/slab, in local 0..1 cell coords. */
+function addShapeBox(
+  vertices: number[][], uvs: number[][], colors: number[][], indices: number[][],
+  material: number, box: ShapeBox, worldX: number, y: number, worldZ: number,
+  readBlock: BlockReader, readLight: LightReader,
+): number {
+  const lo = [box.x0, box.y0, box.z0];
+  const hi = [box.x1, box.y1, box.z1];
+  if (hi[0] <= lo[0] || hi[1] <= lo[1] || hi[2] <= lo[2]) return 0;
+
+  let emitted = 0;
+  for (let faceIndex = 0; faceIndex < faces.length; faceIndex += 1) {
+    const face = faces[faceIndex];
+    const [nx, ny, nz] = face.normal;
+    const axis = nx !== 0 ? 0 : ny !== 0 ? 1 : 2;
+    const positive = nx + ny + nz > 0;
+
+    // Only a face flush with the cell boundary can be hidden, and only by a
+    // neighbour that fills its own cell opaquely.
+    const flush = positive ? hi[axis] === 1 : lo[axis] === 0;
+    if (flush && coversWholeFace(readBlock(worldX + nx, y + ny, worldZ + nz))) continue;
+
+    const positionData = vertices[material];
+    const uvData = uvs[material];
+    const indexData = indices[material];
+    const vertexOffset = positionData.length / 3;
+
+    for (const corner of face.corners) {
+      const lx = corner[0] === 0 ? lo[0] : hi[0];
+      const ly = corner[1] === 0 ? lo[1] : hi[1];
+      const lz = corner[2] === 0 ? lo[2] : hi[2];
+      positionData.push(worldX - 0.5 + lx, y - 0.5 + ly, worldZ - 0.5 + lz);
+      const [u, v] = faceUV(faceIndex, lx, ly, lz);
+      uvData.push(u, v);
+      const level = readLight(worldX + nx, y + ny, worldZ + nz);
+      const brightness = getFaceBrightness(level, faceIndex);
+      colors[material].push(brightness, brightness, brightness);
+    }
+    indexData.push(
+      vertexOffset, vertexOffset + 1, vertexOffset + 2,
+      vertexOffset, vertexOffset + 2, vertexOffset + 3,
+    );
+    emitted += 1;
+  }
+  return emitted;
+}
+
 function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number = 0, data?: BlockData) {
+  // Stairs/slabs (including a doubled slab coming through the full-cube path)
+  // render with their parent block's texture.
+  const parent = SHAPE_PARENT[id];
+  if (parent !== undefined) return materialForFace(parent, faceIndex, liquidDistance, data);
   if (id === BlockId.BEDROCK) return MATERIAL_BEDROCK;
   if (id === BlockId.OAK_PLANKS) return MATERIAL_OAK_PLANKS;
   if (id === BlockId.STONE) return MATERIAL_STONE;
@@ -414,6 +483,22 @@ export function buildSubchunkGeometry(
           );
           exposedFaces += 2;
           continue;
+        }
+
+        if (isShapedBlock(id)) {
+          // Stairs / slabs: a handful of sub-boxes instead of one cell-filling
+          // cube (a doubled slab falls through to the normal path).
+          const boxes = shapeBoxesFor(id, worldX, y, worldZ, readBlock, readBlockData);
+          if (boxes) {
+            const material = materialForFace(id, 0);
+            for (const box of boxes) {
+              exposedFaces += addShapeBox(
+                vertices, uvs, colors, indices, material, box,
+                worldX, y, worldZ, readBlock, readLight,
+              );
+            }
+            continue;
+          }
         }
 
         const blockData = STATEFUL_BLOCKS.has(id) ? readBlockData(worldX, y, worldZ) : undefined;

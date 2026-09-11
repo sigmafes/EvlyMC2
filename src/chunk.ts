@@ -3,6 +3,7 @@ import { BlockId, BlockMaterials, isSolidBlock } from './block';
 import { ChunkLightData } from './chunk-light-data';
 import { SUBCHUNK_HEIGHT, Subchunk } from './subchunk';
 import type { LightReader, WaterDistanceReader, WaterFlowReader, BlockDataReader } from './mesher';
+import { isShapedBlock, shapeBoxesFor } from './block-shapes';
 import type { TerrainNoise } from './terrain-noise';
 
 export const CHUNK_SIZE = 16;
@@ -68,6 +69,8 @@ export class Chunk {
   readonly minZ: number;
   private readonly maxY = CHUNK_HEIGHT - 1;
   private readonly dirtySubchunks = new Set<number>();
+  /** Kept alongside the subchunks' copy so collision can read stair/slab orientation too. */
+  private readBlockData: BlockDataReader = () => undefined;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -485,6 +488,7 @@ export class Chunk {
   }
 
   setBlockDataReader(readBlockData: BlockDataReader) {
+    this.readBlockData = readBlockData;
     for (const subchunk of this.subchunks) subchunk.setBlockDataReader(readBlockData);
   }
 
@@ -555,6 +559,23 @@ export class Chunk {
         for (let x = Math.floor(minX); x <= Math.ceil(maxX); x += 1) {
           const id = this.getBlock(x, y, z);
           if (!isSolidBlock(id)) continue;
+          // Stairs/slabs collide as the same sub-boxes they're drawn from, so
+          // you can walk up a step instead of bumping into a full cube.
+          const boxes = isShapedBlock(id)
+            ? shapeBoxesFor(id, x, y, z, (bx, by, bz) => this.getBlock(bx, by, bz), this.readBlockData)
+            : null;
+          if (boxes) {
+            for (const b of boxes) {
+              colliders.push({
+                id, x, y, z,
+                collider: new THREE.Box3(
+                  new THREE.Vector3(x - 0.5 + b.x0, y - 0.5 + b.y0, z - 0.5 + b.z0),
+                  new THREE.Vector3(x - 0.5 + b.x1, y - 0.5 + b.y1, z - 0.5 + b.z1),
+                ),
+              });
+            }
+            continue;
+          }
           colliders.push({ id, x, y, z, collider: new THREE.Box3(new THREE.Vector3(x - 0.5, y - 0.5, z - 0.5), new THREE.Vector3(x + 0.5, y + 0.5, z + 0.5)) });
         }
       }

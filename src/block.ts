@@ -29,6 +29,10 @@ export enum BlockId {
   FURNACE = 25,
   TORCH = 26,
   WOOL = 27,
+  OAK_STAIRS = 28,
+  COBBLESTONE_STAIRS = 29,
+  OAK_SLAB = 30,
+  COBBLESTONE_SLAB = 31,
 }
 
 export type VoxelBlock = {
@@ -86,6 +90,12 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   // Same odds as real Minecraft wool (as flammable as leaves): catches easily
   // and burns away fast once it does.
   [BlockId.WOOL]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: { catchOdds: 30, burnOdds: 60 } },
+  // Stairs/slabs don't fill their cell, so `cull: false` keeps their
+  // neighbours drawing the faces a full cube would have hidden.
+  [BlockId.OAK_STAIRS]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
+  [BlockId.COBBLESTONE_STAIRS]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: null },
+  [BlockId.OAK_SLAB]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
+  [BlockId.COBBLESTONE_SLAB]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -106,8 +116,11 @@ export function isSolidBlock(id: BlockId): boolean {
 /** Blocks that respond to right-click (open a GUI) instead of being placed against. */
 export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE, BlockId.FURNACE]);
 
-/** Blocks that carry side-table state (facing / lit) the mesher must read. */
-export const STATEFUL_BLOCKS = new Set<BlockId>([BlockId.FURNACE, BlockId.TORCH]);
+/** Blocks that carry side-table state (facing / lit / half) the mesher must read. */
+export const STATEFUL_BLOCKS = new Set<BlockId>([
+  BlockId.FURNACE, BlockId.TORCH,
+  BlockId.OAK_STAIRS, BlockId.COBBLESTONE_STAIRS, BlockId.OAK_SLAB, BlockId.COBBLESTONE_SLAB,
+]);
 
 /** Blocks whose `facing` is set from the player's yaw when placed. */
 export const ORIENTABLE_BLOCKS = new Set<BlockId>([BlockId.FURNACE]);
@@ -300,6 +313,11 @@ export function createBlockMaterials(): BlockMaterials {
       vertexColors: true,
     }),
     [BlockId.WOOL]: new THREE.MeshBasicMaterial({ map: wool, vertexColors: true }),
+    // Stairs/slabs are cut from their parent block and share its texture.
+    [BlockId.OAK_STAIRS]: new THREE.MeshBasicMaterial({ map: oakPlanks, vertexColors: true }),
+    [BlockId.OAK_SLAB]: new THREE.MeshBasicMaterial({ map: oakPlanks, vertexColors: true }),
+    [BlockId.COBBLESTONE_STAIRS]: new THREE.MeshBasicMaterial({ map: cobblestone, vertexColors: true }),
+    [BlockId.COBBLESTONE_SLAB]: new THREE.MeshBasicMaterial({ map: cobblestone, vertexColors: true }),
   };
 
   materials.updateWaterAnimation = (time: number) => {

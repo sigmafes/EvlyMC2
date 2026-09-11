@@ -9,7 +9,7 @@ const ri = (min: number, max: number) => min + Math.floor(Math.random() * (max -
  * What breaking a block yields (LCE `Tile::spawnResources` / `getResource` /
  * `getResourceCount`). `canHarvest` false (wrong / missing tool) -> nothing.
  */
-export function getDrops(id: BlockId, canHarvest: boolean): DropStack[] {
+export function getDrops(id: BlockId, canHarvest: boolean, isDouble = false): DropStack[] {
   if (!canHarvest) return [];
 
   switch (id) {
@@ -24,7 +24,14 @@ export function getDrops(id: BlockId, canHarvest: boolean): DropStack[] {
     case BlockId.FURNACE:
     case BlockId.TORCH:
     case BlockId.WOOL:
+    case BlockId.OAK_STAIRS:
+    case BlockId.COBBLESTONE_STAIRS:
       return [{ id, count: 1 }];
+
+    // Slabs: a doubled one gives both halves back (LCE fullSize HalfSlabTile).
+    case BlockId.OAK_SLAB:
+    case BlockId.COBBLESTONE_SLAB:
+      return [{ id, count: isDouble ? 2 : 1 }];
 
     // Special block drops.
     case BlockId.STONE:

@@ -33,6 +33,15 @@ export const RECIPES: Recipe[] = [
   { kind: 'shaped', pattern: [[ItemId.COAL], [S]], out: { id: BlockId.TORCH, count: 4 } },
   { kind: 'shaped', pattern: [[ItemId.CHARCOAL], [S]], out: { id: BlockId.TORCH, count: 4 } },
 
+  // Stairs: 6 in a staircase pattern -> 4, both mirrors (like the axe recipes).
+  { kind: 'shaped', pattern: [[P, _, _], [P, P, _], [P, P, P]], out: { id: BlockId.OAK_STAIRS, count: 4 } },
+  { kind: 'shaped', pattern: [[_, _, P], [_, P, P], [P, P, P]], out: { id: BlockId.OAK_STAIRS, count: 4 } },
+  { kind: 'shaped', pattern: [[C, _, _], [C, C, _], [C, C, C]], out: { id: BlockId.COBBLESTONE_STAIRS, count: 4 } },
+  { kind: 'shaped', pattern: [[_, _, C], [_, C, C], [C, C, C]], out: { id: BlockId.COBBLESTONE_STAIRS, count: 4 } },
+  // Slabs: 3 in a row -> 6.
+  { kind: 'shaped', pattern: [[P, P, P]], out: { id: BlockId.OAK_SLAB, count: 6 } },
+  { kind: 'shaped', pattern: [[C, C, C]], out: { id: BlockId.COBBLESTONE_SLAB, count: 6 } },
+
   ...toolSet(P, ItemId.WOODEN_PICKAXE, ItemId.WOODEN_AXE, ItemId.WOODEN_SHOVEL),
   ...toolSet(BlockId.COBBLESTONE, ItemId.STONE_PICKAXE, ItemId.STONE_AXE, ItemId.STONE_SHOVEL),
   ...toolSet(ItemId.IRON_INGOT, ItemId.IRON_PICKAXE, ItemId.IRON_AXE, ItemId.IRON_SHOVEL),

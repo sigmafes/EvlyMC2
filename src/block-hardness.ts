@@ -34,6 +34,10 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.FURNACE]: 3.5,
   [BlockId.TORCH]: 0,
   [BlockId.WOOL]: 0.8,
+  [BlockId.OAK_STAIRS]: 2,
+  [BlockId.OAK_SLAB]: 2,
+  [BlockId.COBBLESTONE_STAIRS]: 2,
+  [BlockId.COBBLESTONE_SLAB]: 2,
 };
 
 type BlockTool = {
@@ -64,6 +68,10 @@ const BLOCK_TOOL: Partial<Record<BlockId, BlockTool>> = {
   [BlockId.GRASS]: { kind: 'shovel', harvest: 0, required: false },
   [BlockId.SAND]: { kind: 'shovel', harvest: 0, required: false },
   [BlockId.FURNACE]: { kind: 'pickaxe', harvest: 0, required: true },
+  [BlockId.OAK_STAIRS]: { kind: 'axe', harvest: 0, required: false },
+  [BlockId.OAK_SLAB]: { kind: 'axe', harvest: 0, required: false },
+  [BlockId.COBBLESTONE_STAIRS]: { kind: 'pickaxe', harvest: 0, required: true },
+  [BlockId.COBBLESTONE_SLAB]: { kind: 'pickaxe', harvest: 0, required: true },
 };
 
 export type BreakInfo = {

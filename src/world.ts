@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BlockId, BlockMaterials, blockLightProperties, FURNACE_LIT_LIGHT } from './block';
+import { isStairs } from './block-shapes';
 import { BlockCollider, CHUNK_HEIGHT, CHUNK_MAX_Y, CHUNK_SIZE, WATER_LEVEL } from './chunk';
 import { BlockStore } from './block-store';
 import { ChunkManager } from './chunk-manager';
@@ -462,6 +463,19 @@ export class World {
     const chunkZ = this.blockStore.getChunkCoordinate(z);
     this.markEdgeNeighbors(chunkX, chunkZ, x, z, y);
     this.markFireNeighborsDirty(x, y, z);
+    this.markStairNeighborsDirty(x, y, z);
+  }
+
+  /**
+   * A stair's shape depends on the stairs in front of and behind it (that's
+   * how corners form), so placing or breaking anything next to one has to
+   * re-mesh it - same reason fire neighbours are marked above.
+   */
+  private markStairNeighborsDirty(x: number, y: number, z: number) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz;
+      if (isStairs(this.getBlock(nx, y, nz))) this.blockStore.markDirty(nx, y, nz);
+    }
   }
 
   /** A fire cell's mesh depends on its neighbours (floor vs wall/ceiling fire). */

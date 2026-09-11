@@ -24,6 +24,10 @@ export type BlockData = {
   facing?: 0 | 1 | 2 | 3;
   lit?: boolean;
   furnace?: FurnaceState;
+  /** Which half of the cell a stair/slab occupies (LCE's UPSIDEDOWN_BIT / TOP_SLOT_BIT). */
+  half?: 'bottom' | 'top';
+  /** A slab that was doubled back into a full block (LCE's fullSize HalfSlabTile). */
+  double?: boolean;
 };
 
 export function emptyFurnace(): FurnaceState {
