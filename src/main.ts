@@ -303,6 +303,7 @@ const mobManager = new MobManager(
   scene,
   (x, y, z) => isSolidBlock(world.getBlock(x, y, z)),
   (id, count, pos) => spawnDrop?.(id, count, pos),
+  soundManager,
 );
 hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);
 attackMobFn = (mobId) => {

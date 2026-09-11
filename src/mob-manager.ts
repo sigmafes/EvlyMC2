@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { MobModel, type QuadrupedSpec } from './mob-model';
 import { ItemId } from './item';
+import { playMobSound } from './mob-sounds';
+import type { SoundManager } from './sound-manager';
 
 export type MobKind = 'pig' | 'cow' | 'sheep';
 
@@ -55,6 +57,9 @@ const WANDER_MOVE_MIN = 1.5;
 const WANDER_MOVE_MAX = 3.5;
 const WANDER_PAUSE_MIN = 1;
 const WANDER_PAUSE_MAX = 2.5;
+const STEP_INTERVAL = 0.45;
+const IDLE_SOUND_MIN = 4;
+const IDLE_SOUND_MAX = 9;
 
 type Mob = {
   id: number;
@@ -74,6 +79,9 @@ type Mob = {
   wanderDir: THREE.Vector3;
   wanderTimer: number; // >0 while walking toward wanderDir, counts down
   pauseTimer: number;  // >0 while idling, counts down
+  // Sound
+  stepTimer: number;
+  idleSoundTimer: number;
 };
 
 export type MobRaycastHit = { mobId: number; kind: MobKind; distance: number };
@@ -92,6 +100,7 @@ export class MobManager {
     private readonly scene: THREE.Scene,
     private readonly isSolid: (x: number, y: number, z: number) => boolean,
     private readonly onDrop?: (id: number, count: number, pos: THREE.Vector3) => void,
+    private readonly soundManager?: SoundManager,
   ) {}
 
   spawn(kind: MobKind, spec: QuadrupedSpec, pos: THREE.Vector3, yaw: number): void {
@@ -119,6 +128,8 @@ export class MobManager {
       wanderDir: new THREE.Vector3(),
       wanderTimer: 0,
       pauseTimer: ri(0, 20) / 10, // stagger initial wander so a group doesn't move in lockstep
+      stepTimer: 0,
+      idleSoundTimer: ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10,
     });
   }
 
@@ -144,12 +155,14 @@ export class MobManager {
     mob.health -= amount;
 
     if (mob.health <= 0) {
+      if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'death', 0.8);
       const pos = mob.model.getGroup().position.clone();
       pos.y += mob.height / 2;
       for (const drop of rollDrops(mob.kind)) this.onDrop?.(drop.id, drop.count, pos);
       this.removeAt(index);
       return true;
     }
+    if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
 
     // Flee straight away from the hit's source (LCE PanicGoal picks a random
     // direction biased away from the attacker - this is the simplified
@@ -171,12 +184,34 @@ export class MobManager {
       const moving = mob.fleeTimer > 0 || mob.wanderTimer > 0;
       mob.model.setWalking(moving);
       mob.model.update(delta);
+      this.updateSounds(mob, delta, moving);
 
       if (getLight) {
         const p = group.position;
         const level = getLight(Math.round(p.x), Math.round(p.y + mob.height / 2), Math.round(p.z));
         mob.model.setLightLevel(level / 15);
       }
+    }
+  }
+
+  /** Footstep while moving (grounded only) + a random ambient idle bark. */
+  private updateSounds(mob: Mob, delta: number, moving: boolean): void {
+    if (!this.soundManager) return;
+
+    if (moving && mob.grounded) {
+      mob.stepTimer -= delta;
+      if (mob.stepTimer <= 0) {
+        mob.stepTimer = STEP_INTERVAL;
+        playMobSound(this.soundManager, mob.kind, 'step', 0.4);
+      }
+    } else {
+      mob.stepTimer = 0; // next step plays immediately once it starts moving again
+    }
+
+    mob.idleSoundTimer -= delta;
+    if (mob.idleSoundTimer <= 0) {
+      mob.idleSoundTimer = ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10;
+      playMobSound(this.soundManager, mob.kind, 'idle', 0.5);
     }
   }
 
