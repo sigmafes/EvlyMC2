@@ -2,9 +2,10 @@ import * as THREE from 'three';
 
 const MAX = 32;
 const FRAME_COUNT = 7; // Smoke1.png..Smoke7.png
-const LIFE = 3; // seconds - shown "por 3s antes de desaparecer"
+const LIFE = 2; // seconds - shown "por 2s antes de desaparecer"
 const RISE_SPEED = 0.35; // "suben lentamente"
-const DRIFT = 0.15;
+const SPREAD_RADIUS = 0.55; // ring radius the 6 puffs are placed around, so they don't overlap
+const OUTWARD_SPEED = 0.5; // keeps drifting apart (away from the burst centre) as they rise
 const FADE_START = 0.7; // fraction of LIFE elapsed before it starts fading out
 
 /**
@@ -57,16 +58,22 @@ export class SmokeParticles {
     scene.add(this.group);
   }
 
-  /** 6 smoke puffs at `pos`, each cycling Smoke1..7 in order over LIFE seconds while rising slowly. */
+  /** 6 smoke puffs at `pos`, spread around a ring so they don't overlap, each cycling Smoke1..7 in order over LIFE seconds while drifting outward and rising slowly. */
   burst(pos: THREE.Vector3): void {
-    for (let k = 0; k < 6; k++) {
+    const count = 6;
+    const baseAngle = Math.random() * Math.PI * 2;
+    for (let k = 0; k < count; k++) {
       const i = this.cursor;
       this.cursor = (this.cursor + 1) % MAX;
+      const angle = baseAngle + (k / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+      const dirX = Math.sin(angle);
+      const dirZ = Math.cos(angle);
+      const radius = SPREAD_RADIUS * (0.7 + Math.random() * 0.5);
       const sprite = this.sprites[i];
       sprite.position.set(
-        pos.x + (Math.random() - 0.5) * 0.4,
-        pos.y + (Math.random() - 0.5) * 0.3,
-        pos.z + (Math.random() - 0.5) * 0.4,
+        pos.x + dirX * radius,
+        pos.y + (Math.random() - 0.5) * 0.2,
+        pos.z + dirZ * radius,
       );
       sprite.visible = true;
       sprite.scale.setScalar(0.5);
@@ -74,7 +81,7 @@ export class SmokeParticles {
       material.map = this.textures[0];
       material.opacity = 0.9;
       material.needsUpdate = true;
-      this.vel[i].set((Math.random() - 0.5) * DRIFT, RISE_SPEED * (0.8 + Math.random() * 0.4), (Math.random() - 0.5) * DRIFT);
+      this.vel[i].set(dirX * OUTWARD_SPEED, RISE_SPEED * (0.8 + Math.random() * 0.4), dirZ * OUTWARD_SPEED);
       this.life[i] = LIFE;
       this.frame[i] = 0;
     }
