@@ -13,6 +13,9 @@ const SMELT: Record<number, SmeltOut> = {
   [BlockId.COBBLESTONE]: { id: BlockId.STONE, count: 1 },
   [ItemId.RAW_IRON]: { id: ItemId.IRON_INGOT, count: 1 },
   [ItemId.RAW_GOLD]: { id: ItemId.GOLD_INGOT, count: 1 },
+  [ItemId.RAW_BEEF]: { id: ItemId.COOKED_BEEF, count: 1 },
+  [ItemId.RAW_PORKCHOP]: { id: ItemId.COOKED_PORKCHOP, count: 1 },
+  [ItemId.RAW_MUTTON]: { id: ItemId.COOKED_MUTTON, count: 1 },
 };
 
 /** How long one unit of a fuel burns, in seconds (LCE getBurnDuration / 20). */

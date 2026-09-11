@@ -83,6 +83,9 @@ export class BlockInteraction {
     private readonly onDropSelected?: (all: boolean) => void,
     /** World brightness 0..15 at a block, to shade the break overlay. */
     private readonly getLight?: (x: number, y: number, z: number) => number,
+    /** Nearest mob within reach along a ray, if any - checked ahead of block mining on left-click. */
+    private readonly hitTestMob?: (origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) => { mobId: number; distance: number } | null,
+    private readonly attackMob?: (mobId: number) => void,
   ) {
     this.raycast = new Raycast(4);
     this.highlight = new BlockHighlight();
@@ -217,6 +220,25 @@ export class BlockInteraction {
     this.selectedBlock = isBlock(id) ? (id as BlockId) : null;
   }
 
+  // --- Mobs -------------------------------------------------------------
+
+  /** If a mob is the nearest thing on the crosshair (closer than any targeted block), hit it and return true. */
+  private attackNearestMob(): boolean {
+    if (!this.hitTestMob) return false;
+    const origin = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    this.camera.getWorldPosition(origin);
+    this.camera.getWorldDirection(dir);
+    const mobHit = this.hitTestMob(origin, dir, 4);
+    if (!mobHit) return false;
+    if (this.target) {
+      const blockDist = origin.distanceTo(this.target.position);
+      if (blockDist < mobHit.distance) return false;
+    }
+    this.attackMob?.(mobHit.mobId);
+    return true;
+  }
+
   // --- Mining ---------------------------------------------------------------
 
   private canMine(id: BlockId): boolean {
@@ -314,6 +336,7 @@ export class BlockInteraction {
       this.leftHeld = true;
       this.onSwing?.(); // MC/LCE swing even at air
       this.swingTimer = 0; // next auto-swing a full interval after this one
+      if (this.attackNearestMob()) return;
       this.startMining();
       return;
     }
@@ -410,6 +433,7 @@ export class BlockInteraction {
     this.leftHeld = true;
     this.onSwing?.();
     this.swingTimer = 0;
+    if (this.attackNearestMob()) return;
     this.startMining();
   }
 

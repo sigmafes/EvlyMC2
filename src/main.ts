@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import './style.css';
-import { BlockId, createBlockMaterials } from './block';
+import { BlockId, createBlockMaterials, isSolidBlock } from './block';
 import { Diagnostics } from './diagnostics';
 import { BlockInteraction } from './interaction';
 import { PlayerController } from './player';
@@ -20,7 +20,7 @@ import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { DroppedItems } from './dropped-items';
 import { FurnaceManager } from './furnace';
-import { MobManager } from './mob-manager';
+import { MobManager, type MobKind } from './mob-manager';
 import type { QuadrupedSpec } from './mob-model';
 import { PIG_SPEC } from './pig-model';
 import { COW_SPEC } from './cow-model';
@@ -202,6 +202,10 @@ pauseMenu.setViewBob(menuSettings.viewBob);
 const particles = new ParticleSystem();
 particles.attachToScene(scene);
 
+// mobManager is constructed later (needs `world`/`spawnDrop`); same
+// indirection pattern as spawnDrop/applyButtonOpacity above.
+let hitTestMob: ((origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) => { mobId: number; distance: number } | null) | undefined;
+let attackMobFn: ((mobId: number) => void) | undefined;
 const interaction = new BlockInteraction(
   canvas, camera, world, player, soundManager, pauseMenu,
   () => hand.swing(),
@@ -230,6 +234,8 @@ const interaction = new BlockInteraction(
     droppedItems.spawn(stack.id, stack.count ?? 1, from, dir);
   },
   (x, y, z) => lightEngine.getRawBrightness(x, y, z),
+  (origin, dir, maxDist) => hitTestMob?.(origin, dir, maxDist) ?? null,
+  (mobId) => attackMobFn?.(mobId),
 );
 interaction.attachHighlight(scene);
 
@@ -291,9 +297,17 @@ await droppedItems.loadPersisted();
 // side table; the phase-5 GUI feeds it items.
 const furnaceManager = new FurnaceManager(world);
 
-// Mobs (PLAN-MOBS.md): models + animation only for now, no AI yet - see
+// Mobs (PLAN-MOBS.md): models + wander/flee AI, health and drops - see
 // mob-manager.ts. Spawned in via /summon for now, nothing places them on its own.
-const mobManager = new MobManager(scene);
+const mobManager = new MobManager(
+  scene,
+  (x, y, z) => isSolidBlock(world.getBlock(x, y, z)),
+  (id, count, pos) => spawnDrop?.(id, count, pos),
+);
+hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);
+attackMobFn = (mobId) => {
+  mobManager.damage(mobId, 1, player.state.position); // flat bare-hand damage, no tool variance yet
+};
 
 // --- Health & death ---
 const deathScreen = document.querySelector<HTMLElement>('#death-screen')!;
@@ -419,9 +433,9 @@ chat.registerCommand('fly', () => {
     : 'Flight disabled.';
 });
 
-const MOB_SPECS: Record<string, QuadrupedSpec> = { pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC };
+const MOB_SPECS: Record<MobKind, QuadrupedSpec> = { pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC };
 chat.registerCommand('summon', (args) => {
-  const kind = (args[0] ?? '').toLowerCase();
+  const kind = (args[0] ?? '').toLowerCase() as MobKind;
   const spec = MOB_SPECS[kind];
   if (!spec) return 'Usage: /summon <pig|cow|sheep>';
 
@@ -431,7 +445,7 @@ chat.registerCommand('summon', (args) => {
   const dir = new THREE.Vector3(-Math.sin(player.state.yaw), 0, -Math.cos(player.state.yaw));
   const pos = player.state.position.clone().addScaledVector(dir, 3);
   pos.y -= 1.62;
-  mobManager.spawn(spec, pos, player.state.yaw + Math.PI);
+  mobManager.spawn(kind, spec, pos, player.state.yaw + Math.PI);
   return `Summoned a ${kind}.`;
 });
 
