@@ -86,7 +86,7 @@ const MOB_AIR_ACCEL_MULT = 0.15; // much less control while airborne, matches th
 const WATER_BUOYANCY = 18; // upward accel while submerged, LCE-ish "float up" feel
 const WATER_RISE_SPEED = 2.2; // cap on how fast a mob bobs upward
 const WATER_RECHECK_INTERVAL = 1; // how often a swimming mob looks for shore
-const DEATH_SPIN_DURATION = 1; // seconds toppling over its Z axis before vanishing
+const DEATH_SPIN_DURATION = 0.75; // seconds toppling over its Z axis before vanishing
 
 // Shared wireframe box geometry/material for the debug hitbox (R key) - one
 // GPU resource, scaled per mob instance, same pattern as DroppedItems' boxes.

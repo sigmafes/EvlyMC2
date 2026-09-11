@@ -2,7 +2,8 @@ import * as THREE from 'three';
 
 const MAX = 32;
 const FRAME_COUNT = 7; // Smoke1.png..Smoke7.png
-const LIFE = 2; // seconds - shown "por 2s antes de desaparecer"
+const LIFE_MIN = 0.5; // seconds - each puff gets a random life in [LIFE_MIN, LIFE_MAX]
+const LIFE_MAX = 2;
 const RISE_SPEED = 0.35; // "suben lentamente"
 const SPREAD_RADIUS = 0.55; // ring radius the 6 puffs are placed around, so they don't overlap
 const OUTWARD_SPEED = 0.5; // keeps drifting apart (away from the burst centre) as they rise
@@ -23,6 +24,7 @@ export class SmokeParticles {
   private readonly sprites: THREE.Sprite[] = [];
   private readonly vel: THREE.Vector3[] = [];
   private readonly life: number[] = [];
+  private readonly totalLife: number[] = [];
   private readonly frame: number[] = [];
   private cursor = 0;
 
@@ -50,6 +52,7 @@ export class SmokeParticles {
       this.sprites.push(sprite);
       this.vel.push(new THREE.Vector3());
       this.life.push(0);
+      this.totalLife.push(LIFE_MAX);
       this.frame.push(0);
     }
   }
@@ -58,7 +61,7 @@ export class SmokeParticles {
     scene.add(this.group);
   }
 
-  /** 6 smoke puffs at `pos`, spread around a ring so they don't overlap, each cycling Smoke1..7 in order over LIFE seconds while drifting outward and rising slowly. */
+  /** 6 smoke puffs at `pos`, spread around a ring so they don't overlap, each with its own random life in [LIFE_MIN, LIFE_MAX] and cycling Smoke1..7 in order over it while drifting outward and rising slowly. */
   burst(pos: THREE.Vector3): void {
     const count = 6;
     const baseAngle = Math.random() * Math.PI * 2;
@@ -82,7 +85,9 @@ export class SmokeParticles {
       material.opacity = 0.9;
       material.needsUpdate = true;
       this.vel[i].set(dirX * OUTWARD_SPEED, RISE_SPEED * (0.8 + Math.random() * 0.4), dirZ * OUTWARD_SPEED);
-      this.life[i] = LIFE;
+      const life = LIFE_MIN + Math.random() * (LIFE_MAX - LIFE_MIN);
+      this.life[i] = life;
+      this.totalLife[i] = life;
       this.frame[i] = 0;
     }
   }
@@ -98,7 +103,7 @@ export class SmokeParticles {
       }
       sprite.position.addScaledVector(this.vel[i], delta);
 
-      const elapsedFrac = 1 - this.life[i] / LIFE;
+      const elapsedFrac = 1 - this.life[i] / this.totalLife[i];
       const frame = Math.min(FRAME_COUNT - 1, Math.floor(elapsedFrac * FRAME_COUNT));
       if (frame !== this.frame[i]) {
         this.frame[i] = frame;
