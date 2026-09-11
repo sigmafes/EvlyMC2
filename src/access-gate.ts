@@ -165,7 +165,14 @@ export function waitForAccessGate(): Promise<void> {
           setMessage(result.error, true);
           return;
         }
-        succeed(result.username);
+        // Registration never unlocks the gate by itself - only a successful
+        // /login does, and that's where the whitelist is actually enforced.
+        // Without this, anyone could create an account and walk straight in
+        // regardless of whether their name is invited.
+        showLogin();
+        loginUsername.value = result.username;
+        setMessage('Account created - log in to continue', false);
+        loginPassword.focus();
       });
     });
 
