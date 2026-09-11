@@ -1,21 +1,32 @@
 import * as THREE from 'three';
 
 const STAGES = 10; // break.png is a 160x16 atlas: 10 crack stages
+const ATLAS_W = 160;
+const ATLAS_H = 16;
+/** How hard the cracks bite into the block: 0 = invisible, 1 = the raw texture. */
+const CRACK_STRENGTH = 0.55;
 
 /**
  * The block-cracking overlay: a slightly inflated textured cube showing the
  * current destroy stage from `break.png` over the target block.
  *
- * How it blends into the block instead of sitting on top of it as a grey
- * haze: a MULTIPLY blend at full opacity, which is what LCE/loro do too
- * (LevelRenderer::renderHit -> glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR),
- * i.e. out = 2*src*dst, against a terrain.png destroy tile whose background
- * is 50% grey so 2*0.5 = 1 leaves the block untouched). Our break.png is
- * authored differently - its background is pure WHITE (255,255,255) and the
- * crack lines are opaque dark grey (61 and 155) - so the equivalent for this
- * asset is a plain multiply, out = src*dst: white background multiplies to
- * 1 and passes the block's own texture through untouched, while the crack
- * pixels scale it down to ~24%/~61% and read as real cracks in the surface.
+ * How it blends into the block instead of sitting on top of it as a flat
+ * decal: a MULTIPLY blend (out = src*dst), so every crack pixel scales the
+ * block's own colour rather than replacing it, and the white background
+ * multiplies by 1 and leaves the face untouched. LCE/loro do the same thing
+ * with a factor of two - LevelRenderer::renderHit ->
+ * glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR), i.e. out = 2*src*dst - because
+ * their destroy tile (terrain.png row 15) is drawn on a 50% GREY background,
+ * where 2*0.5 = 1 is the neutral value. Ours is drawn on white instead, so
+ * plain multiply is the same idea in this asset's own encoding.
+ *
+ * The one adjustment: our crack pixels are quite dark (61 and 155 of 255),
+ * and multiplying a block down to 24% of its colour reads as flat black
+ * paint rather than a crack. So the atlas is softened toward white by
+ * CRACK_STRENGTH once at load (61 -> ~0.58 of the block's colour instead of
+ * 0.24), which is the same gentle darkening LCE lands on, and keeps enough
+ * of the block's own colour showing through for the crack to look like it's
+ * IN the surface.
  *
  * Deliberately NOT light-tinted: under a multiply blend the overlay inherits
  * the destination's brightness for free, so tinting it would darken the
@@ -29,9 +40,35 @@ export class BreakOverlay {
   private readonly texture: THREE.Texture;
 
   constructor() {
-    this.texture = new THREE.TextureLoader().load(
-      new URL('../textures/atlas/break.png', import.meta.url).href,
-    );
+    // Starts as a blank white canvas, which under the multiply blend is a
+    // no-op, and is repainted with the softened cracks once the PNG decodes.
+    const canvas = document.createElement('canvas');
+    canvas.width = ATLAS_W;
+    canvas.height = ATLAS_H;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, ATLAS_W, ATLAS_H);
+
+    this.texture = new THREE.CanvasTexture(canvas);
+    const image = new Image();
+    image.onload = () => {
+      ctx.clearRect(0, 0, ATLAS_W, ATLAS_H);
+      ctx.drawImage(image, 0, 0);
+      const pixels = ctx.getImageData(0, 0, ATLAS_W, ATLAS_H);
+      const d = pixels.data;
+      for (let i = 0; i < d.length; i += 4) {
+        // Lerp each channel toward white, weighted by the pixel's own alpha:
+        // the "empty" background is white at alpha ~0 and must stay exactly
+        // white (the blend's neutral), the opaque crack lines get softened.
+        const a = d[i + 3] / 255;
+        for (let c = 0; c < 3; c++) d[i + c] = 255 - (255 - d[i + c]) * CRACK_STRENGTH * a;
+        d[i + 3] = 255; // alpha plays no part in a multiply blend
+      }
+      ctx.putImageData(pixels, 0, 0);
+      this.texture.needsUpdate = true;
+    };
+    image.src = new URL('../textures/atlas/break.png', import.meta.url).href;
+
     this.texture.magFilter = THREE.NearestFilter;
     this.texture.minFilter = THREE.NearestFilter;
     this.texture.colorSpace = THREE.SRGBColorSpace;
