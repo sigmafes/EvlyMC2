@@ -31,7 +31,7 @@ caja inflada con alpha por encima).
 Así que la Fase A es extraer lo reusable a un módulo compartido en vez de duplicar
 ~150 líneas de matemática de UVs en cada mob.
 
-## Fase A — Extraer utilidades de atlas/caja compartidas
+## Fase A — Extraer utilidades de atlas/caja compartidas  ✅ HECHO
 Mover `FaceKey`, `FACE_ORDER`, `applyAtlasUVs()`, `applyFaceShading()` (y el tipo
 `FaceRects`/`PixelRect`) de `player-model.ts` a un nuevo `src/atlas-box.ts`, sin
 cambiar su comportamiento. `player-model.ts` pasa a importarlos desde ahí. Riesgo

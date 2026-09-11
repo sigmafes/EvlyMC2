@@ -3,6 +3,9 @@ import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight } from './
 import { BLOCK_CATALOG } from './creative-palette';
 import { BlockId } from './block';
 import { ITEMS, isBlock } from './item';
+import {
+  type FaceRects, type FaceFlips, MIRROR_U, applyAtlasUVs as applyAtlasUVsRaw, applyFaceShading,
+} from './atlas-box';
 
 export type ModelAdjustments = {
   head: { x: number; y: number; z: number };
@@ -105,65 +108,10 @@ function getOverlayMaterial(): THREE.MeshBasicMaterial {
   return overlayMaterial;
 }
 
-// BoxGeometry assigns faces in this order. Forward (look arrow) is local -Z = 'nz'.
-type FaceKey = 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
-const FACE_ORDER: FaceKey[] = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
-
-/** Pixel rect in the atlas, inclusive, top-left origin: [x0, y0, x1, y1]. */
-type PixelRect = [number, number, number, number];
-type FaceRects = Partial<Record<FaceKey, PixelRect>>;
-type FaceFlips = Partial<Record<FaceKey, { u?: boolean; v?: boolean }>>;
-
-/**
- * Map each cube face to a pixel rectangle of the atlas.
- * "8, 8 > 15, 15" means x0=8, y0=8, x1=15, y1=15 (an 8x8 patch, edges inclusive).
- */
+/** player.png-bound wrapper: applyAtlasUVsRaw() (atlas-box.ts) needs the atlas
+ *  size explicitly since it's shared with mobs, which use a different one. */
 function applyAtlasUVs(geo: THREE.BoxGeometry, rects: FaceRects, flips: FaceFlips = {}) {
-  const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
-  const arr = uv.array as Float32Array;
-
-  FACE_ORDER.forEach((key, face) => {
-    const rect = rects[key];
-    if (!rect) return;
-    const [x0, y0, x1, y1] = rect;
-    let uMin = x0 / ATLAS_W;
-    let uMax = (x1 + 1) / ATLAS_W;
-    let vMax = 1 - y0 / ATLAS_H;       // top edge of the patch
-    let vMin = 1 - (y1 + 1) / ATLAS_H; // bottom edge of the patch
-
-    const flip = flips[key] ?? {};
-    if (flip.u) [uMin, uMax] = [uMax, uMin];
-    if (flip.v) [vMin, vMax] = [vMax, vMin];
-
-    // BoxGeometry per-face vertex order: (uMin,vMax) (uMax,vMax) (uMin,vMin) (uMax,vMin)
-    const o = face * 8;
-    arr[o] = uMin;     arr[o + 1] = vMax;
-    arr[o + 2] = uMax; arr[o + 3] = vMax;
-    arr[o + 4] = uMin; arr[o + 5] = vMin;
-    arr[o + 6] = uMax; arr[o + 7] = vMin;
-  });
-
-  uv.needsUpdate = true;
-}
-
-/**
- * Per-face brightness, matching the terrain mesher's directionFactor
- * (mesher.ts getFaceBrightness). Face order: +X, -X, +Y, -Y, +Z, -Z.
- * Baked into a vertex-color attribute so the model reads as 3D without any lights.
- */
-const FACE_SHADE = [0.8, 0.6, 1.0, 0.5, 0.8, 0.6];
-
-function applyFaceShading(geo: THREE.BoxGeometry) {
-  const count = geo.getAttribute('position').count; // 24 (4 verts * 6 faces)
-  const colors = new Float32Array(count * 3);
-  for (let face = 0; face < 6; face++) {
-    const s = FACE_SHADE[face];
-    for (let v = 0; v < 4; v++) {
-      const o = (face * 4 + v) * 3;
-      colors[o] = s; colors[o + 1] = s; colors[o + 2] = s;
-    }
-  }
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  applyAtlasUVsRaw(geo, rects, ATLAS_W, ATLAS_H, flips);
 }
 
 /** Shortest signed angle in (-PI, PI]. */
@@ -173,12 +121,6 @@ function wrapAngle(a: number): number {
   else if (a > Math.PI) a -= Math.PI * 2;
   return a;
 }
-
-/** Flip U on every face (for MCPE `mirror` parts: left arm / left leg). */
-const MIRROR_U: FaceFlips = {
-  px: { u: true }, nx: { u: true }, py: { u: true },
-  ny: { u: true }, pz: { u: true }, nz: { u: true },
-};
 
 /**
  * Atlas pixel rects per body part, derived from MCPE 0.6.1 (loro/src/client/model:
