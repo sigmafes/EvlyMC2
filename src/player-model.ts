@@ -35,38 +35,52 @@ function getAtlasMaterial(): THREE.MeshBasicMaterial {
 }
 
 /**
+ * Point both the base atlas material AND the outer 3D-layer overlay material
+ * (hat/jacket/sleeves/pants - see getOverlayMaterial()) at the same new
+ * texture, then dispose whatever they both used to share. Overlay's map is
+ * only ever seeded once, at first use, as a snapshot of whatever the atlas
+ * had then - if a skin swap only ever touched the atlas material, the
+ * overlay kept showing the old skin's 3D layers (or, worse, a disposed
+ * texture once the old one was freed).
+ */
+function setSharedSkinTexture(texture: THREE.Texture): void {
+  const atlas = getAtlasMaterial();
+  const overlay = overlayMaterial; // don't force-create it if nothing has yet
+  const oldTexture = atlas.map;
+  atlas.map = texture;
+  atlas.needsUpdate = true;
+  if (overlay) {
+    overlay.map = texture;
+    overlay.needsUpdate = true;
+  }
+  if (oldTexture && oldTexture !== texture) oldTexture.dispose();
+}
+
+/**
  * Swap the skin atlas for a custom one (Player Options -> Import Skin).
- * Replaces the shared material's map in place, so every existing mesh built
+ * Replaces the shared materials' map in place, so every existing mesh built
  * with getAtlasMaterial()/getSkinAtlasMaterial() - the world player model, the
- * inventory doll(s), the first-person arm - picks it up immediately without
- * needing to be rebuilt.
+ * inventory doll(s), the first-person arm, and their 3D overlay layers -
+ * picks it up immediately without needing to be rebuilt.
  */
 export function applySkinTexture(image: HTMLImageElement): void {
-  const material = getAtlasMaterial();
-  const oldTexture = material.map;
   const texture = new THREE.Texture(image);
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   texture.generateMipmaps = false;
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.needsUpdate = true;
-  material.map = texture;
-  material.needsUpdate = true;
-  if (oldTexture && oldTexture !== texture) oldTexture.dispose();
+  setSharedSkinTexture(texture);
 }
 
 /** Revert to the built-in default skin (Player Options -> Reset Skin). */
 export function resetSkinTexture(): void {
-  const material = getAtlasMaterial();
-  const oldTexture = material.map;
   const texture = new THREE.TextureLoader().load(ATLAS_PATH);
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   texture.generateMipmaps = false;
   texture.colorSpace = THREE.SRGBColorSpace;
-  material.map = texture;
-  material.needsUpdate = true;
-  if (oldTexture && oldTexture !== texture) oldTexture.dispose();
+  setSharedSkinTexture(texture);
 }
 
 // --- Outer "3D" layer (hat / jacket / sleeves / pants). Same atlas as the base. ---
