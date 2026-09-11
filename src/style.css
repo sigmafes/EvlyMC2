@@ -1289,13 +1289,15 @@ body {
 }
 #hud-bubbles[hidden] { display: none; }
 .hud-bubble {
-  /* 2x the 9px source sprite: integer scaling keeps pixelated art crisp and
+  /* 3x the 9px source sprite: integer scaling keeps pixelated art crisp and
      on-grid (the old 20px was a non-integer 2.22x, which under
      image-rendering:pixelated replicates source pixels unevenly and reads
-     as "misaligned" between adjacent icons). */
-  width: 18px;
-  height: 18px;
+     as "misaligned" between adjacent icons). 2x (18px) was still too small
+     for the sprite's 1px outline to read clearly, so bumped to 3x. */
+  width: 27px;
+  height: 27px;
   background: center / 100% 100% no-repeat;
+  image-rendering: pixelated;
 }
 #hud-hearts {
   display: flex;
@@ -1303,9 +1305,10 @@ body {
 }
 .hud-heart {
   position: relative;
-  width: 18px;
-  height: 18px;
+  width: 27px;
+  height: 27px;
   background: url('../gui/heart_empty.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
 }
 .hud-heart::after {
   content: '';
@@ -1317,6 +1320,7 @@ body {
      and never lined up. */
   inset: 0;
   background: var(--heart-fill, none) center / 100% 100% no-repeat;
+  image-rendering: pixelated;
 }
 #hud-xp {
   position: relative;

@@ -25,8 +25,9 @@ export class LeavesManager {
    * to roll a flat 0.06 once per game-loop frame, so decay speed scaled with
    * framerate (~0.28s mean life at 60fps, near-instant) instead of real time.
    * Tuned so a felled tree's canopy fully clears in roughly 10-20s.
+   * Still decayed too fast in practice, so slowed to 1/6th of that (~60-120s).
    */
-  private static readonly DECAY_RATE_PER_SECOND = 0.35;
+  private static readonly DECAY_RATE_PER_SECOND = 0.35 / 6;
 
   addLeaf(x: number, y: number, z: number) {
     this.watched.add(key(x, y, z));

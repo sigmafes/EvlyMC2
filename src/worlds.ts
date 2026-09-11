@@ -1,5 +1,6 @@
 import { ChunkEditStore } from './chunk-edits';
 import { BlockDataStore } from './block-data';
+import { DroppedItemsStore } from './dropped-items-store';
 import { deletePlayerSave } from './player-store';
 
 export const EVLYMC_VERSION = '0.1.0';
@@ -96,6 +97,7 @@ export function deleteWorld(id: string): void {
   if (!list.some((w) => w.id !== id && w.seed === world.seed)) {
     void ChunkEditStore.deleteSeed(world.seed);
     void BlockDataStore.deleteSeed(world.seed);
+    void DroppedItemsStore.deleteSeed(world.seed);
   }
 }
 

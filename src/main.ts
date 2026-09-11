@@ -151,6 +151,7 @@ const pauseMenu = new PauseMenu(
 // Save everything and return to the main menu (skipping the intro on reload).
 async function leaveWorld() {
   worldMusic.stop();
+  await droppedItems.flush();
   droppedItems.clear();
   persistPlayer();
   await world.flushEdits();
@@ -264,8 +265,10 @@ const droppedItems = new DroppedItems(
   (x, y, z) => !NON_SOLID.has(world.getBlock(x, y, z)),
   (stack) => inventory.addItem(stack),
   () => soundManager.playOne('player/Pop', 0.4),
+  worldSeed,
 );
 spawnDrop = (id, count, pos) => droppedItems.spawn(id, count, pos);
+await droppedItems.loadPersisted();
 
 // Smelting: steps every lit/loaded furnace. Contents live in the block-data
 // side table; the phase-5 GUI feeds it items.

@@ -6,9 +6,10 @@
  */
 
 const DB_NAME = 'evlymc';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 export const STORE_CHUNK_EDITS = 'chunkEdits';
 export const STORE_BLOCK_DATA = 'blockData';
+export const STORE_DROPPED_ITEMS = 'droppedItems';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -23,6 +24,9 @@ export function openEvlymcDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_BLOCK_DATA)) {
         db.createObjectStore(STORE_BLOCK_DATA, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(STORE_DROPPED_ITEMS)) {
+        db.createObjectStore(STORE_DROPPED_ITEMS, { keyPath: 'key' });
       }
     };
     req.onblocked = () => {

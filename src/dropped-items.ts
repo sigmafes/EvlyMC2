@@ -3,6 +3,7 @@ import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight } from './
 import { makeStack } from './item-stack';
 import { isBlock, maxStackOf } from './item';
 import type { InventorySlot } from './inventory';
+import { DroppedItemsStore, type DroppedItemRecord } from './dropped-items-store';
 
 /**
  * LCE-style dropped items: breaking a block (or pressing the drop key) spawns a
@@ -18,8 +19,9 @@ const HALF = 0.125;         // half-extent of the cubic item hitbox (0.25 block)
 const PICKUP_RANGE = 1.5;
 const PICKUP_DELAY = 0.5;   // seconds before an item can be collected
 const MERGE_RANGE = 0.7;
-const DESPAWN = 300;        // 5 minutes
+const DESPAWN = 60;         // 1 minute
 const MAX_ENTITIES = 256;
+const SAVE_INTERVAL = 5;    // seconds between periodic persistence snapshots
 
 type Entity = {
   group: THREE.Group;
@@ -37,6 +39,8 @@ export class DroppedItems {
   private debug = false;
   private readonly boxGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(HALF * 2, HALF * 2, HALF * 2));
   private readonly boxMat = new THREE.LineBasicMaterial({ color: 0xffee44 });
+  private readonly store?: DroppedItemsStore;
+  private saveAccum = 0;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -44,7 +48,27 @@ export class DroppedItems {
     /** Merge a stack into the inventory; returns the count that did not fit. */
     private readonly collect: (slot: InventorySlot) => number,
     private readonly onPickup?: () => void,
-  ) {}
+    seed?: number,
+  ) {
+    if (seed != null) {
+      this.store = new DroppedItemsStore(seed);
+      if (typeof window !== 'undefined') {
+        window.addEventListener('beforeunload', () => { void this.flush(); });
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') void this.flush();
+        });
+      }
+    }
+  }
+
+  /** Restore ground items saved from a previous session (call once, before the first update()). */
+  async loadPersisted(): Promise<void> {
+    if (!this.store) return;
+    const records = await this.store.load();
+    for (const rec of records) {
+      this.spawnEntity(rec.id, rec.count, new THREE.Vector3(rec.x, rec.y, rec.z), new THREE.Vector3(0, 0, 0), rec.age);
+    }
+  }
 
   /** Toggle the wireframe hitboxes (bound to the same key as the debug overlay). */
   setDebug(on: boolean): void {
@@ -55,6 +79,23 @@ export class DroppedItems {
   /** Drop `count` of `id` at `pos`, thrown along `dir` (need not be normalised). */
   spawn(id: number | null, count: number, pos: THREE.Vector3, dir?: THREE.Vector3): void {
     if (id == null || count <= 0) return;
+
+    const vel = new THREE.Vector3(
+      (Math.random() - 0.5) * 1.5,
+      3 + Math.random() * 1.5,
+      (Math.random() - 0.5) * 1.5,
+    );
+    if (dir && dir.lengthSq() > 0) {
+      const d = dir.clone().normalize();
+      vel.x += d.x * 5;
+      vel.z += d.z * 5;
+      vel.y += d.y * 3 + 1;
+    }
+
+    this.spawnEntity(id, count, pos, vel, 0);
+  }
+
+  private spawnEntity(id: number, count: number, pos: THREE.Vector3, vel: THREE.Vector3, age: number): void {
     if (this.entities.length >= MAX_ENTITIES) this.removeAt(0);
 
     const slot = makeStack(id, count);
@@ -69,19 +110,7 @@ export class DroppedItems {
     box.position.copy(pos);
     this.scene.add(box);
 
-    const vel = new THREE.Vector3(
-      (Math.random() - 0.5) * 1.5,
-      3 + Math.random() * 1.5,
-      (Math.random() - 0.5) * 1.5,
-    );
-    if (dir && dir.lengthSq() > 0) {
-      const d = dir.clone().normalize();
-      vel.x += d.x * 5;
-      vel.z += d.z * 5;
-      vel.y += d.y * 3 + 1;
-    }
-
-    this.entities.push({ group, box, vel, restY: pos.y, id, count, age: 0, grounded: false });
+    this.entities.push({ group, box, vel, restY: pos.y, id, count, age, grounded: false });
   }
 
   /**
@@ -158,9 +187,34 @@ export class DroppedItems {
         break;
       }
     }
+
+    if (this.store) {
+      this.saveAccum += delta;
+      if (this.saveAccum >= SAVE_INTERVAL) {
+        this.saveAccum = 0;
+        void this.store.save(this.snapshot());
+      }
+    }
   }
 
-  /** Remove every entity (leaving the world). */
+  private snapshot(): DroppedItemRecord[] {
+    return this.entities.map((e) => ({
+      id: e.id,
+      count: e.count,
+      x: e.group.position.x,
+      y: e.grounded ? e.restY : e.group.position.y,
+      z: e.group.position.z,
+      age: e.age,
+    }));
+  }
+
+  /** Write the current entity list now (leaving the world, tab hidden, unload). */
+  async flush(): Promise<void> {
+    if (!this.store) return;
+    await this.store.save(this.snapshot());
+  }
+
+  /** Remove every entity (leaving the world). Call flush() first if it should persist. */
   clear(): void {
     for (let i = this.entities.length - 1; i >= 0; i--) this.removeAt(i);
   }
