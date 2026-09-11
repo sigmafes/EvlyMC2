@@ -51,6 +51,13 @@ body {
   border: 0;
   background: url('../gui/slot.png') center / 100% 100% no-repeat;
   cursor: pointer;
+  /* Without this, a finger dragging across slots inside a scrollable panel
+     (backpack/creative list) gets claimed by the browser as a pan/scroll
+     gesture instead of reaching inventory.ts's pointermove handlers - the
+     drag-to-paint-deposit gesture (grab a stack, drag it across slots to
+     drop one per slot) silently stops working the moment it's inside
+     anything scrollable, which is most of the time. */
+  touch-action: none;
 }
 
 .inventory-slot.selected::after {
