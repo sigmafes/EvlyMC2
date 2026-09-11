@@ -1,6 +1,5 @@
-import { ACCESS_KEYS } from './access-keys';
-
 const UNLOCK_KEY = 'evlymc-access-unlocked';
+const VALIDATE_URL = 'https://evlymc-access.mrfierrocarrilgames.workers.dev/validate';
 
 function isUnlocked(): boolean {
   try {
@@ -23,6 +22,9 @@ function markUnlocked(): void {
  * this browser already unlocked it before. Call this before anything else in
  * main.ts runs - awaiting it holds up the entire rest of module init (world,
  * player, the intro sequence, all of it) until the gate is cleared.
+ *
+ * Validation happens server-side (access-worker/, a Cloudflare Worker backed
+ * by KV) so the key list and "used" state never ship in this client bundle.
  */
 export function waitForAccessGate(): Promise<void> {
   if (isUnlocked()) return Promise.resolve();
@@ -37,34 +39,51 @@ export function waitForAccessGate(): Promise<void> {
   nameInput.focus();
 
   return new Promise<void>((resolve) => {
-    const setInvalid = () => {
-      message.textContent = 'Invalid access key';
-      message.classList.add('access-gate-error');
+    const setMessage = (text: string, error: boolean) => {
+      message.textContent = text;
+      message.classList.toggle('access-gate-error', error);
     };
-    const setNormal = () => {
-      message.textContent = 'Enter your access key';
-      message.classList.remove('access-gate-error');
-    };
+    const setNormal = () => setMessage('Enter your access key', false);
 
-    const submit = () => {
+    let checking = false;
+    const submit = async () => {
+      if (checking) return;
       const name = nameInput.value.trim();
       const key = keyInput.value.trim();
-      const match = ACCESS_KEYS.some(
-        (entry) => entry.name.toLowerCase() === name.toLowerCase() && entry.key === key,
-      );
-      if (!match || !name || !key) {
-        setInvalid();
+      if (!name || !key) {
+        setMessage('Invalid access key', true);
         return;
       }
-      markUnlocked();
-      root.hidden = true;
-      resolve();
+
+      checking = true;
+      continueBtn.disabled = true;
+      setMessage('Checking...', false);
+      try {
+        const res = await fetch(VALIDATE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, key }),
+        });
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+        if (!res.ok || !data?.ok) {
+          setMessage(data?.error ?? 'Invalid access key', true);
+          return;
+        }
+        markUnlocked();
+        root.hidden = true;
+        resolve();
+      } catch {
+        setMessage('Could not reach the server - check your connection', true);
+      } finally {
+        checking = false;
+        continueBtn.disabled = false;
+      }
     };
 
-    continueBtn.addEventListener('click', submit);
+    continueBtn.addEventListener('click', () => { void submit(); });
     for (const input of [nameInput, keyInput]) {
       input.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') submit();
+        if (event.key === 'Enter') void submit();
       });
       input.addEventListener('input', setNormal);
     }
