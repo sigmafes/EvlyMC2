@@ -4,13 +4,24 @@ const STAGES = 10; // break.png is a 160x16 atlas: 10 crack stages
 
 /**
  * The block-cracking overlay: a slightly inflated textured cube showing the
- * current destroy stage from `break.png`, at 50% opacity, over the target
- * block. (A multiply blend was tried here to darken the block's own texture
- * instead of hazing it with a translucent square, but break.png's "empty"
- * pixels are black with zero alpha rather than opaque white, so multiplying
- * by them blacked out the whole face - alpha blending, which actually
- * respects that alpha channel, is what avoids that.) Its colour tracks the
- * target block's light level so it isn't a bright patch in the dark.
+ * current destroy stage from `break.png` over the target block.
+ *
+ * How it blends into the block instead of sitting on top of it as a grey
+ * haze: a MULTIPLY blend at full opacity, which is what LCE/loro do too
+ * (LevelRenderer::renderHit -> glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR),
+ * i.e. out = 2*src*dst, against a terrain.png destroy tile whose background
+ * is 50% grey so 2*0.5 = 1 leaves the block untouched). Our break.png is
+ * authored differently - its background is pure WHITE (255,255,255) and the
+ * crack lines are opaque dark grey (61 and 155) - so the equivalent for this
+ * asset is a plain multiply, out = src*dst: white background multiplies to
+ * 1 and passes the block's own texture through untouched, while the crack
+ * pixels scale it down to ~24%/~61% and read as real cracks in the surface.
+ *
+ * Deliberately NOT light-tinted: under a multiply blend the overlay inherits
+ * the destination's brightness for free, so tinting it would darken the
+ * whole face a second time. (An earlier attempt at this blend looked solid
+ * black, but that was the caller feeding it a light level of 0 sampled from
+ * inside the solid block - see BlockInteraction.blockSurfaceLight.)
  */
 export class BreakOverlay {
   private readonly mesh: THREE.Mesh;
@@ -30,7 +41,7 @@ export class BreakOverlay {
     this.material = new THREE.MeshBasicMaterial({
       map: this.texture,
       transparent: true,
-      opacity: 0.5,
+      blending: THREE.MultiplyBlending,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
@@ -45,11 +56,8 @@ export class BreakOverlay {
     scene.add(this.mesh);
   }
 
-  /**
-   * `progress` in [0,1). Any value < 0 hides the overlay. `light01` (0..1) shades
-   * the crack texture to match the block's world light.
-   */
-  setProgress(pos: THREE.Vector3, progress: number, light01 = 1): void {
+  /** `progress` in [0,1). Any value < 0 hides the overlay. */
+  setProgress(pos: THREE.Vector3, progress: number): void {
     if (progress < 0) {
       this.mesh.visible = false;
       return;
@@ -57,7 +65,6 @@ export class BreakOverlay {
     const stage = Math.min(STAGES - 1, Math.max(0, Math.floor(progress * STAGES)));
     this.texture.offset.x = stage / STAGES;
     this.mesh.position.copy(pos);
-    this.material.color.setScalar(Math.pow(THREE.MathUtils.clamp(light01, 0, 1), 1.25));
     this.mesh.visible = true;
   }
 

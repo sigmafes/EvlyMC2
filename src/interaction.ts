@@ -340,7 +340,7 @@ export class BlockInteraction {
 
     this.mining.elapsed += delta;
     const light = this.blockSurfaceLight(this.mining.pos);
-    this.breakOverlay.setProgress(this.mining.pos, this.mining.elapsed / this.mining.total, light);
+    this.breakOverlay.setProgress(this.mining.pos, this.mining.elapsed / this.mining.total);
 
     this.chipTimer += delta;
     if (this.chipTimer >= CHIP_INTERVAL) {

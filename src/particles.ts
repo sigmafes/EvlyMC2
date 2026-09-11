@@ -57,10 +57,12 @@ export class ParticleSystem {
     if (this.materialCache.has(id)) return this.materialCache.get(id)!;
 
     let source: THREE.Texture | null = null;
+    let baseMaterial: THREE.MeshBasicMaterial | undefined;
     if (isBlock(id)) {
       const mat = (this.blockMaterials as Record<number, THREE.Material | THREE.Material[]>)[id];
       const base = Array.isArray(mat) ? mat[0] : mat;
-      source = (base as THREE.MeshBasicMaterial | undefined)?.map ?? null;
+      baseMaterial = base as THREE.MeshBasicMaterial | undefined;
+      source = baseMaterial?.map ?? null;
     } else {
       const itemTexture = ITEMS[id]?.texture;
       if (itemTexture) {
@@ -73,9 +75,22 @@ export class ParticleSystem {
 
     const material = source
       ? new THREE.MeshBasicMaterial({
-        map: source, vertexColors: true, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide, depthWrite: false,
+        map: source,
+        vertexColors: true,
+        transparent: true,
+        // Inherit the block's own cutout threshold (leaves/glass are 0.5), so a
+        // chip cropped from a see-through part of the texture drops out cleanly
+        // instead of lingering as a murky half-transparent square.
+        alphaTest: Math.max(0.05, baseMaterial?.alphaTest ?? 0),
+        side: THREE.DoubleSide,
+        depthWrite: false,
       })
       : null;
+    // Carry over the block material's own tint. Leaves are the case that needs
+    // it: oak_leaves.png is a greyscale/indexed texture that only becomes green
+    // because its material multiplies in 0x4a8a2e, so without this its chips
+    // broke off grey. (Untinted blocks have a white colour here, a no-op.)
+    if (material && baseMaterial?.color) material.color.copy(baseMaterial.color);
     this.materialCache.set(id, material);
     return material;
   }
