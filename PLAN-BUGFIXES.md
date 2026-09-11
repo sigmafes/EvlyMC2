@@ -54,7 +54,7 @@ independiente, de menor a mayor riesgo.
    (la extrusión de píxeles que ya usan herramientas/items) en vez de `buildBlockMesh`,
    con la pose/escala de item.
 
-## Fase C — Delineado de bloque (todas)
+## Fase C — Delineado de bloque (todas)  ✅ HECHO
 8. **El wireframe muestra aristas por dentro del bloque.** Causa exacta encontrada:
    `block-highlight.ts` usa `depthTest: false` en el `LineBasicMaterial` — dibuja las
    12 aristas del cubo sin importar qué haya delante, incluidas las del lado opuesto a

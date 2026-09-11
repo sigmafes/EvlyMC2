@@ -11,7 +11,12 @@ export class BlockHighlight {
   constructor() {
     this.highlight = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-      new THREE.LineBasicMaterial({ color: 0x000000, depthTest: false }),
+      // depthTest: true so the far (camera-hidden) edges of the box are occluded
+      // by the block's own solid mesh instead of drawing through it like an
+      // x-ray; the 1.01 inflation below keeps the near/visible edges from
+      // z-fighting against that same surface. depthWrite stays off so the thin
+      // lines never occlude anything drawn after them.
+      new THREE.LineBasicMaterial({ color: 0x000000, depthTest: true, depthWrite: false }),
     );
     this.highlight.scale.setScalar(1.01);
     this.highlight.renderOrder = 2;
