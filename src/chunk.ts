@@ -536,7 +536,10 @@ export class Chunk {
   private generateSurfacePatches() {
     const rng = mulberry32(hashSeed(this.chunkX, this.chunkZ, this.seed ^ 0x9a7c1e));
     const rngInt = (n: number) => Math.floor(rng() * n);
-    const tries = 2 + rngInt(2); // 2-3 attempts per chunk
+    // 75% of chunks skip patches entirely (down from every chunk rolling
+    // 2-3) - the patches themselves were fine, there were just too many.
+    if (rng() >= 0.25) return;
+    const tries = 2 + rngInt(2); // 2-3 attempts per chunk that does roll one
 
     for (let t = 0; t < tries; t += 1) {
       const cx = this.minX + rngInt(CHUNK_SIZE);
