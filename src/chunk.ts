@@ -126,15 +126,16 @@ export class Chunk {
           this.setBlockData(x, y, z, BlockId.STONE);
         }
 
-        // Subsurface layers (dirt or sand)
+        // Subsurface layers (dirt or sand/gravel)
         if (isWaterBody) {
-          // Under water: 2 layers of sand, then dirt
+          // Under water: the top layer touching the water stays sand (shore
+          // continuity); the layer below that is gravel instead of a 2nd
+          // sand layer, then dirt underneath.
           for (let y = surfaceY - 4; y < surfaceY - 1; y += 1) {
             if (y > 0) this.setBlockData(x, y, z, BlockId.DIRT);
           }
-          for (let y = Math.max(1, surfaceY - 1); y <= surfaceY; y += 1) {
-            this.setBlockData(x, y, z, BlockId.SAND);
-          }
+          if (surfaceY - 1 > 0) this.setBlockData(x, surfaceY - 1, z, BlockId.GRAVEL);
+          this.setBlockData(x, surfaceY, z, BlockId.SAND);
           // Water column from surfaceY + 1 up to WATER_LEVEL
           for (let y = surfaceY + 1; y <= WATER_LEVEL; y += 1) {
             this.setBlockData(x, y, z, BlockId.WATER);
@@ -158,7 +159,9 @@ export class Chunk {
     }
 
     this.generateCaves();
+    this.generateRavines();
     this.generateOres();
+    this.generateSurfacePatches();
     this.generateTrees();
   }
 
@@ -324,6 +327,153 @@ export class Chunk {
     }
   }
 
+  // --- Ravines (ported from Minecraft LCE CanyonFeature) ---
+  private generateRavines() {
+    // Same neighbour-chunk scan as generateCaves(), independent seed stream
+    // (salted differently) so ravines and caves don't always land together.
+    for (let nx = this.chunkX - CAVE_SCAN_RADIUS; nx <= this.chunkX + CAVE_SCAN_RADIUS; nx += 1) {
+      for (let nz = this.chunkZ - CAVE_SCAN_RADIUS; nz <= this.chunkZ + CAVE_SCAN_RADIUS; nz += 1) {
+        const rng = mulberry32(hashSeed(nx, nz, this.seed ^ 0x52766e));
+        this.ravineFeature(rng, nx, nz);
+      }
+    }
+  }
+
+  /** LCE CanyonFeature::addFeature - 1/50 chance of a single long, narrow gash per candidate chunk. */
+  private ravineFeature(rng: () => number, nChunkX: number, nChunkZ: number) {
+    if (Math.floor(rng() * 50) !== 0) return;
+    const ri = (n: number) => Math.floor(rng() * n);
+
+    const originX = nChunkX * CHUNK_SIZE - 8;
+    const originZ = nChunkZ * CHUNK_SIZE - 8;
+    const xCave = originX + ri(CHUNK_SIZE);
+    const yCave = 20 + ri(ri(40) + 8);
+    const zCave = originZ + ri(CHUNK_SIZE);
+
+    const yRot = rng() * Math.PI * 2;
+    const xRot = ((rng() - 0.5) * 2) / 8;
+    const thickness = (rng() * 2 + rng()) * 2;
+    this.ravineTunnel(hashSeed(ri(1e9), 0, 0x52), xCave, yCave, zCave, thickness, yRot, xRot, 0, 0, 3.0);
+  }
+
+  /**
+   * LCE CanyonFeature::addTunnel - the same drifting-spline carve as
+   * caveTunnel, but a single unbranched pass (a ravine doesn't fork) with a
+   * per-Y-layer width jitter (`layerScale`, LCE's `rs[i]`) instead of a
+   * uniform ellipse cross-section, so the walls read as a jagged crack
+   * rather than a smooth round tunnel. yScale=3.0 (tall and narrow) makes it
+   * read as a ravine rather than a cave.
+   */
+  private ravineTunnel(
+    seed: number, xCave: number, yCave: number, zCave: number,
+    thickness: number, yRot: number, xRot: number, step: number, dist: number, yScale: number,
+  ) {
+    const r = mulberry32(seed);
+    const rInt = (n: number) => Math.floor(r() * n);
+
+    const xMid = this.minX + 8;
+    const zMid = this.minZ + 8;
+    let yRota = 0;
+    let xRota = 0;
+
+    if (dist <= 0) dist = CAVE_MAX_DIST - rInt(Math.floor(CAVE_MAX_DIST / 4));
+
+    const layerScale = new Float32Array(CHUNK_HEIGHT);
+    let f = 1;
+    for (let i = 0; i < CHUNK_HEIGHT; i += 1) {
+      if (i === 0 || rInt(3) === 0) f = 1 + r() * r() * 1.0;
+      layerScale[i] = f * f;
+    }
+
+    for (; step < dist; step += 1) {
+      let rad = 1.5 + Math.sin((step * Math.PI) / dist) * thickness;
+      let yRad = rad * yScale;
+      rad *= r() * 0.25 + 0.75;
+      yRad *= r() * 0.25 + 0.75;
+
+      const xc = Math.cos(xRot);
+      xCave += Math.cos(yRot) * xc;
+      yCave += Math.sin(xRot);
+      zCave += Math.sin(yRot) * xc;
+
+      xRot *= 0.7;
+      xRot += xRota * 0.05;
+      yRot += yRota * 0.05;
+      xRota *= 0.8;
+      yRota *= 0.5;
+      xRota += (r() - r()) * r() * 2;
+      yRota += (r() - r()) * r() * 4;
+
+      if (rInt(4) === 0) continue;
+
+      const xd0 = xCave - xMid;
+      const zd0 = zCave - zMid;
+      const remaining = dist - step;
+      const rr = thickness + 2 + 16;
+      if (xd0 * xd0 + zd0 * zd0 - remaining * remaining > rr * rr) return;
+
+      if (xCave < xMid - 16 - rad * 2 || zCave < zMid - 16 - rad * 2
+        || xCave > xMid + 16 + rad * 2 || zCave > zMid + 16 + rad * 2) continue;
+
+      let lx0 = Math.floor(xCave - rad) - this.minX - 1;
+      let lx1 = Math.floor(xCave + rad) - this.minX + 1;
+      let ly0 = Math.floor(yCave - yRad) - 1;
+      let ly1 = Math.floor(yCave + yRad) + 1;
+      let lz0 = Math.floor(zCave - rad) - this.minZ - 1;
+      let lz1 = Math.floor(zCave + rad) - this.minZ + 1;
+      if (lx0 < 0) lx0 = 0;
+      if (lx1 > CHUNK_SIZE) lx1 = CHUNK_SIZE;
+      if (ly0 < 1) ly0 = 1;
+      if (ly1 > CHUNK_HEIGHT - 6) ly1 = CHUNK_HEIGHT - 6;
+      if (lz0 < 0) lz0 = 0;
+      if (lz1 > CHUNK_SIZE) lz1 = CHUNK_SIZE;
+
+      // Same "don't carve into a body of water" guard as caveTunnel.
+      if (ly1 > 38 && ly0 <= WATER_LEVEL) {
+        let touchesWater = false;
+        for (let lx = lx0; !touchesWater && lx < lx1; lx += 1) {
+          for (let lz = lz0; !touchesWater && lz < lz1; lz += 1) {
+            for (let ly = ly0; ly < ly1; ly += 1) {
+              if (this.blocks[this.index(this.minX + lx, ly, this.minZ + lz)] === BlockId.WATER) {
+                touchesWater = true;
+                break;
+              }
+            }
+          }
+        }
+        if (touchesWater) continue;
+      }
+
+      for (let lx = lx0; lx < lx1; lx += 1) {
+        const xd = (this.minX + lx + 0.5 - xCave) / rad;
+        if (xd * xd >= 1) continue;
+        for (let lz = lz0; lz < lz1; lz += 1) {
+          const zd = (this.minZ + lz + 0.5 - zCave) / rad;
+          if (xd * xd + zd * zd >= 1) continue;
+          let hasGrass = false;
+          for (let ly = ly1 - 1; ly >= ly0; ly -= 1) {
+            const yd = (ly + 0.5 - yCave) / yRad;
+            if (yd <= -0.7) continue;
+            if ((xd * xd + zd * zd) * layerScale[ly] + (yd * yd) / 6 >= 1) continue;
+            const idx = this.index(this.minX + lx, ly, this.minZ + lz);
+            const block = this.blocks[idx];
+            if (block === BlockId.GRASS) hasGrass = true;
+            if (block === BlockId.STONE || block === BlockId.DIRT || block === BlockId.GRASS) {
+              if (ly < CAVE_LAVA_Y) {
+                this.blocks[idx] = BlockId.LAVA;
+              } else {
+                this.blocks[idx] = BlockId.AIR;
+                if (hasGrass && this.blocks[this.index(this.minX + lx, ly - 1, this.minZ + lz)] === BlockId.DIRT) {
+                  this.blocks[this.index(this.minX + lx, ly - 1, this.minZ + lz)] = BlockId.GRASS;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   private generateOres() {
     const rng = mulberry32(hashSeed(this.chunkX, this.chunkZ, this.seed));
     const rngInt = (n: number) => Math.floor(rng() * n);
@@ -370,6 +520,43 @@ export class Chunk {
             if (xd * xd + yd * yd + zd * zd >= 1) continue;
             if (this.blocks[this.index(bx, by, bz)] === BlockId.STONE) {
               this.setBlockData(bx, by, bz, id);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Loose sand/gravel patches scattered across dry surface ground - a much
+   * smaller, shallower version of placeOreVein's lens blob, restricted to
+   * the top couple of layers under grass/dirt instead of anywhere in stone.
+   */
+  private generateSurfacePatches() {
+    const rng = mulberry32(hashSeed(this.chunkX, this.chunkZ, this.seed ^ 0x9a7c1e));
+    const rngInt = (n: number) => Math.floor(rng() * n);
+    const tries = 2 + rngInt(2); // 2-3 attempts per chunk
+
+    for (let t = 0; t < tries; t += 1) {
+      const cx = this.minX + rngInt(CHUNK_SIZE);
+      const cz = this.minZ + rngInt(CHUNK_SIZE);
+      const surfaceY = Math.min(CHUNK_MAX_Y, Math.max(5, Math.floor(this.getTerrainHeight(cx, cz))));
+      if (surfaceY <= WATER_LEVEL + 2) continue; // shore/underwater already has its own sand/gravel
+      const patchId = rng() < 0.5 ? BlockId.SAND : BlockId.GRAVEL;
+      const radius = 2 + rngInt(3); // 2-4 blocks
+      const depth = 1 + rngInt(2); // replace the top 1-2 layers
+
+      for (let bx = cx - radius; bx <= cx + radius; bx += 1) {
+        if (bx < this.minX || bx >= this.minX + CHUNK_SIZE) continue;
+        for (let bz = cz - radius; bz <= cz + radius; bz += 1) {
+          if (bz < this.minZ || bz >= this.minZ + CHUNK_SIZE) continue;
+          const dx = bx - cx, dz = bz - cz;
+          if (dx * dx + dz * dz > radius * radius) continue; // circular footprint, not a square stamp
+          const colY = Math.min(CHUNK_MAX_Y, Math.max(5, Math.floor(this.getTerrainHeight(bx, bz))));
+          for (let by = colY; by > colY - depth; by -= 1) {
+            const idx = this.index(bx, by, bz);
+            if (this.blocks[idx] === BlockId.GRASS || this.blocks[idx] === BlockId.DIRT) {
+              this.blocks[idx] = patchId;
             }
           }
         }

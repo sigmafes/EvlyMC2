@@ -34,6 +34,9 @@ export function getDrops(id: BlockId, canHarvest: boolean, isDouble = false): Dr
       return [{ id, count: isDouble ? 2 : 1 }];
 
     // Special block drops.
+    case BlockId.GRAVEL:
+      // LCE GravelTile::getResource - 10% chance of flint instead of gravel itself.
+      return Math.random() < 0.1 ? [{ id: ItemId.FLINT, count: 1 }] : [{ id, count: 1 }];
     case BlockId.STONE:
       return [{ id: BlockId.COBBLESTONE, count: 1 }];
     case BlockId.GRASS:

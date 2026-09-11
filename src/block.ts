@@ -33,6 +33,7 @@ export enum BlockId {
   COBBLESTONE_STAIRS = 29,
   OAK_SLAB = 30,
   COBBLESTONE_SLAB = 31,
+  GRAVEL = 32,
 }
 
 export type VoxelBlock = {
@@ -106,6 +107,7 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.COBBLESTONE_STAIRS]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
   [BlockId.OAK_SLAB]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
   [BlockId.COBBLESTONE_SLAB]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
+  [BlockId.GRAVEL]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -164,6 +166,7 @@ export function createBlockMaterials(): BlockMaterials {
   const oakLogTop = loader.load(new URL('../textures/blocks/oak_log_top.png', import.meta.url).href);
   const oakLeaves = loader.load(new URL('../textures/blocks/oak_leaves.png', import.meta.url).href);
   const sand = loader.load(new URL('../textures/blocks/sand.png', import.meta.url).href);
+  const gravel = loader.load(new URL('../textures/blocks/gravel.png', import.meta.url).href);
   const waterStill = loader.load(new URL('../textures/atlas/water_still.png', import.meta.url).href);
   const waterFlow = loader.load(new URL('../textures/atlas/water_flow.png', import.meta.url).href);
   const fireAtlas = loader.load(new URL('../textures/atlas/fire_atlas.png', import.meta.url).href);
@@ -190,7 +193,7 @@ export function createBlockMaterials(): BlockMaterials {
   const torch = loader.load(new URL('../textures/blocks/torch.png', import.meta.url).href);
   const wool = loader.load(new URL('../textures/blocks/wool.png', import.meta.url).href);
 
-  for (const texture of [bedrock, oakPlanks, stone, dirt, grassTop, grassSide, glowstone, oakLog, oakLogTop, oakLeaves, sand, fireAtlas, cobblestone, obsidian, ice, coalOre, ironOre, goldOre, diamondOre, emeraldOre, lapisOre, redstoneOre, craftingTableSide1, craftingTableSide2, craftingTableTop, glass, furnaceSide, furnaceOff, furnaceOn, furnaceTop, torch, wool]) {
+  for (const texture of [bedrock, oakPlanks, stone, dirt, grassTop, grassSide, glowstone, oakLog, oakLogTop, oakLeaves, sand, gravel, fireAtlas, cobblestone, obsidian, ice, coalOre, ironOre, goldOre, diamondOre, emeraldOre, lapisOre, redstoneOre, craftingTableSide1, craftingTableSide2, craftingTableTop, glass, furnaceSide, furnaceOff, furnaceOn, furnaceTop, torch, wool]) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.magFilter = THREE.NearestFilter;
     texture.minFilter = THREE.NearestFilter;
@@ -248,6 +251,7 @@ export function createBlockMaterials(): BlockMaterials {
     ],
     [BlockId.OAK_LEAVES]: new THREE.MeshBasicMaterial({ map: oakLeaves, vertexColors: true, transparent: true, alphaTest: 0.5, color: 0x4a8a2e }),
     [BlockId.SAND]: new THREE.MeshBasicMaterial({ map: sand, vertexColors: true }),
+    [BlockId.GRAVEL]: new THREE.MeshBasicMaterial({ map: gravel, vertexColors: true }),
     [BlockId.WATER]: [
       new THREE.MeshBasicMaterial({
         map: waterStill,

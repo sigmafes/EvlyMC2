@@ -16,6 +16,7 @@ export const blockSounds: Record<BlockId, BlockSoundSet> = {
   [BlockId.WATER]: { dig: 'water_place' },
   [BlockId.OAK_LEAVES]: { hit: 'grass_hit', dig: 'leaves_break', mine: 'grass_mining' },
   [BlockId.SAND]: { hit: 'sand_hit', dig: 'sand_dig', mine: 'sand_mining' },
+  [BlockId.GRAVEL]: { hit: 'gravel_hit', dig: 'gravel_dig', mine: 'gravel_mining' },
   [BlockId.FIRE]: {},
   [BlockId.LAVA]: { dig: 'lava_place' },
   [BlockId.COBBLESTONE]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },

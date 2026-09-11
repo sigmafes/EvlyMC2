@@ -22,6 +22,11 @@ function toolSet(m: number, pick: number, axe: number, shovel: number): Recipe[]
   ];
 }
 
+/** Sword from a single material `m`, 2 material + 1 stick in a column. */
+function swordRecipe(m: number, sword: number): Recipe {
+  return { kind: 'shaped', pattern: [[m], [m], [S]], out: { id: sword, count: 1 } };
+}
+
 export const RECIPES: Recipe[] = [
   { kind: 'shapeless', input: [BlockId.OAK_LOG], out: { id: BlockId.OAK_PLANKS, count: 4 } },
   { kind: 'shaped', pattern: [[P, P], [P, P]], out: { id: BlockId.CRAFTING_TABLE, count: 1 } },
@@ -47,6 +52,17 @@ export const RECIPES: Recipe[] = [
   ...toolSet(ItemId.IRON_INGOT, ItemId.IRON_PICKAXE, ItemId.IRON_AXE, ItemId.IRON_SHOVEL),
   ...toolSet(ItemId.GOLD_INGOT, ItemId.GOLDEN_PICKAXE, ItemId.GOLDEN_AXE, ItemId.GOLDEN_SHOVEL),
   ...toolSet(ItemId.DIAMOND, ItemId.DIAMOND_PICKAXE, ItemId.DIAMOND_AXE, ItemId.DIAMOND_SHOVEL),
+
+  swordRecipe(P, ItemId.WOODEN_SWORD),
+  swordRecipe(BlockId.COBBLESTONE, ItemId.STONE_SWORD),
+  swordRecipe(ItemId.IRON_INGOT, ItemId.IRON_SWORD),
+  swordRecipe(ItemId.GOLD_INGOT, ItemId.GOLDEN_SWORD),
+  swordRecipe(ItemId.DIAMOND, ItemId.DIAMOND_SWORD),
+
+  // Arrow: flint head, stick shaft, feather fletching -> 4 (vanilla recipe).
+  { kind: 'shaped', pattern: [[ItemId.FLINT], [S], [ItemId.FEATHER]], out: { id: ItemId.ARROW, count: 4 } },
+  // Flint and Steel: iron ingot + flint on the opposite diagonal (vanilla recipe).
+  { kind: 'shaped', pattern: [[ItemId.IRON_INGOT, _], [_, ItemId.FLINT]], out: { id: ItemId.FLINT_AND_STEEL, count: 1 } },
 ];
 
 /**

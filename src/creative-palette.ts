@@ -17,6 +17,7 @@ export const BLOCK_CATALOG: InventorySlot[] = [
   { id: BlockId.CRAFTING_TABLE, name: 'Crafting Table', sideTexture: 'blocks/crafting_table_side1.png', topTexture: 'blocks/crafting_table_top.png' },
   { id: BlockId.OAK_LEAVES, name: 'Oak Leaves', sideTexture: 'blocks/oak_leaves.png', topTexture: 'blocks/oak_leaves.png', previewColor: 0x4a8a2e },
   { id: BlockId.SAND, name: 'Sand', sideTexture: 'blocks/sand.png', topTexture: 'blocks/sand.png' },
+  { id: BlockId.GRAVEL, name: 'Gravel', sideTexture: 'blocks/gravel.png', topTexture: 'blocks/gravel.png' },
   { id: BlockId.COBBLESTONE, name: 'Cobblestone', sideTexture: 'blocks/cobblestone.png', topTexture: 'blocks/cobblestone.png' },
   { id: BlockId.OBSIDIAN, name: 'Obsidian', sideTexture: 'blocks/obsidian.png', topTexture: 'blocks/obsidian.png' },
   { id: BlockId.COAL_ORE, name: 'Coal Ore', sideTexture: 'blocks/coal_ore.png', topTexture: 'blocks/coal_ore.png' },

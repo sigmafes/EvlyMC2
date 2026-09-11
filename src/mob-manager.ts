@@ -1,12 +1,28 @@
 import * as THREE from 'three';
-import { MobModel, type QuadrupedSpec } from './mob-model';
+import { MobModel, BipedMobModel, type QuadrupedSpec, type BipedSpec } from './mob-model';
 import { BlockId } from './block';
 import { ItemId } from './item';
 import { playMobSound } from './mob-sounds';
 import type { SoundManager } from './sound-manager';
 import { findPath, type PathPoint } from './mob-pathfinding';
 
-export type MobKind = 'pig' | 'cow' | 'sheep';
+export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie';
+export type MobSpec = QuadrupedSpec | BipedSpec;
+
+/** Common surface both MobModel (quadruped) and BipedMobModel (zombie) expose - all MobManager needs. */
+type AnyMobModel = {
+  getGroup(): THREE.Group;
+  setWalking(walking: boolean): void;
+  setLightLevel(level01: number): void;
+  hurt(): void;
+  setDying(on: boolean): void;
+  update(delta: number): void;
+};
+
+const HOSTILE_KINDS: MobKind[] = ['zombie'];
+export function isHostileKind(kind: MobKind): boolean {
+  return HOSTILE_KINDS.includes(kind);
+}
 
 type DropStack = { id: number; count: number };
 
@@ -36,6 +52,16 @@ function rollDrops(kind: MobKind): DropStack[] {
     }
     case 'sheep':
       return [{ id: BlockId.WOOL, count: 1 }, { id: ItemId.RAW_MUTTON, count: 1 }];
+    case 'zombie': {
+      const out: DropStack[] = [];
+      const flesh = ri(0, 2);
+      if (flesh > 0) out.push({ id: ItemId.ROTTEN_FLESH, count: flesh });
+      if (Math.random() < 0.005) {
+        const rare = [ItemId.FLINT, ItemId.FEATHER, ItemId.POTATO, ItemId.CARROT, ItemId.IRON_INGOT];
+        out.push({ id: rare[Math.floor(Math.random() * rare.length)], count: 1 });
+      }
+      return out;
+    }
   }
 }
 
@@ -51,7 +77,18 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
   pig: { maxHealth: 10, walkSpeed: 2.3, fleeSpeedMult: 1.6, radius: 0.45, height: 0.9 },
   cow: { maxHealth: 10, walkSpeed: 2.0, fleeSpeedMult: 1.6, radius: 0.5, height: 1.4 },
   sheep: { maxHealth: 8, walkSpeed: 2.0, fleeSpeedMult: 1.6, radius: 0.45, height: 1.3 },
+  // LCE zombie: 20 HP (10 hearts). No flee behaviour, fleeSpeedMult unused.
+  zombie: { maxHealth: 20, walkSpeed: 2.3, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
 };
+
+const CHASE_RADIUS = 16;         // blocks - zombie notices/keeps chasing the player within this range
+const CHASE_REPATH_INTERVAL = 1; // seconds between chase path re-plans
+const ATTACK_RANGE = 1.2;        // blocks, centre-to-centre
+const ATTACK_INTERVAL = 1;       // seconds between hits while in range
+const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
+const ZOMBIE_STEP_DELTA = 3;     // max up/down step a zombie's path can take (vs 1 for animals)
+const BURN_DAMAGE_INTERVAL = 1;  // seconds between sunlight-burn ticks
+const BURN_DAMAGE = 1;
 
 const GRAVITY = 24;
 const JUMP_FORCE = 8; // matches the player's own jump impulse (player-physics.ts)
@@ -97,7 +134,7 @@ const hitboxMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
 type Mob = {
   id: number;
   kind: MobKind;
-  model: MobModel;
+  model: AnyMobModel;
   velocity: THREE.Vector3;
   health: number;
   maxHealth: number;
@@ -118,6 +155,13 @@ type Mob = {
   lookTargetYaw: number;
   inWater: boolean;
   waterCheckTimer: number;
+  // Hostile AI (zombie): chase the player within CHASE_RADIUS, attack on contact.
+  chasing: boolean;
+  chaseRepathTimer: number;
+  attackTimer: number;
+  // Sunlight burn (zombie): ticks damage while exposed, independent of combat.
+  burning: boolean;
+  burnTimer: number;
   // Death
   dying: boolean;
   deathTimer: number;
@@ -149,11 +193,15 @@ export class MobManager {
     private readonly soundManager?: SoundManager,
     private readonly isWater?: (x: number, y: number, z: number) => boolean,
     private readonly onDeath?: (pos: THREE.Vector3) => void,
+    /** Hostile mobs (zombie) attack the player when in range - damage flows back through this. */
+    private readonly onAttackPlayer?: (damage: number) => void,
+    /** Player position, for hostile mobs to detect/chase - undefined disables chasing entirely. */
+    private readonly getPlayerPos?: () => THREE.Vector3,
   ) {}
 
-  spawn(kind: MobKind, spec: QuadrupedSpec, pos: THREE.Vector3, yaw: number): void {
+  spawn(kind: MobKind, spec: MobSpec, pos: THREE.Vector3, yaw: number): void {
     const stats = MOB_STATS[kind];
-    const model = new MobModel(spec);
+    const model: AnyMobModel = kind === 'zombie' ? new BipedMobModel(spec as BipedSpec) : new MobModel(spec as QuadrupedSpec);
     const group = model.getGroup();
     group.position.copy(pos);
     group.rotation.y = yaw;
@@ -188,6 +236,11 @@ export class MobManager {
       lookTargetYaw: yaw,
       inWater: false,
       waterCheckTimer: 0,
+      chasing: false,
+      chaseRepathTimer: 0,
+      attackTimer: 0,
+      burning: false,
+      burnTimer: 0,
       dying: false,
       deathTimer: 0,
       stepTimer: 0,
@@ -207,12 +260,28 @@ export class MobManager {
     return this.mobs.length;
   }
 
-  /** How many live mobs currently sit within `radius` blocks of `pos` (horizontal distance). */
-  countNear(pos: THREE.Vector3, radius: number): number {
+  /**
+   * How many live mobs currently sit within `radius` blocks of `pos`
+   * (horizontal distance). `filter`, when given, restricts the count to mobs
+   * matching a predicate (e.g. kind==='zombie' AND above/below the surface),
+   * so passive and hostile spawn caps can be tracked independently.
+   */
+  countNear(pos: THREE.Vector3, radius: number, filter?: (mob: { kind: MobKind; pos: THREE.Vector3 }) => boolean): number {
     let n = 0;
     for (const mob of this.mobs) {
       const p = mob.model.getGroup().position;
-      if (Math.hypot(p.x - pos.x, p.z - pos.z) <= radius) n++;
+      if (Math.hypot(p.x - pos.x, p.z - pos.z) > radius) continue;
+      if (filter && !filter({ kind: mob.kind, pos: p })) continue;
+      n++;
+    }
+    return n;
+  }
+
+  /** Total live mobs matching `filter` (dying ones included), for a spawn cap tracked independently of `count`. */
+  countAll(filter: (mob: { kind: MobKind; pos: THREE.Vector3 }) => boolean): number {
+    let n = 0;
+    for (const mob of this.mobs) {
+      if (filter({ kind: mob.kind, pos: mob.model.getGroup().position })) n++;
     }
     return n;
   }
@@ -253,8 +322,11 @@ export class MobManager {
     if (this.soundManager && this.inSoundRange(mob, fromPos)) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
     mob.model.hurt(); // 0.2s red flash
 
-    // Panic (LCE PanicGoal): forget whatever it was doing and start pathing
-    // to a random reachable point biased away from the attacker.
+    // Hostile mobs (zombie) never flee - they keep chasing through the hit.
+    // Panic (LCE PanicGoal) only applies to passive mobs: forget whatever it
+    // was doing and start pathing to a random reachable point away from the attacker.
+    if (isHostileKind(mob.kind)) return false;
+
     const pos = mob.model.getGroup().position;
     mob.fleeDir.set(pos.x - fromPos.x, 0, pos.z - fromPos.z);
     if (mob.fleeDir.lengthSq() < 1e-6) mob.fleeDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
@@ -273,7 +345,13 @@ export class MobManager {
     return false;
   }
 
-  update(delta: number, getLight?: (x: number, y: number, z: number) => number, listenerPos?: THREE.Vector3): void {
+  update(
+    delta: number,
+    getLight?: (x: number, y: number, z: number) => number,
+    listenerPos?: THREE.Vector3,
+    /** Raw sky exposure 0..15 (sun only, ignores torches) at a position - drives zombie sunlight burn. */
+    getSkyExposure?: (x: number, y: number, z: number) => number,
+  ): void {
     // Reverse iteration: updateDeath() may splice a finished mob out mid-loop.
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const mob = this.mobs[i];
@@ -285,6 +363,8 @@ export class MobManager {
 
       this.updateAI(mob, delta);
       this.updatePhysics(mob, delta);
+      if (mob.kind === 'zombie' && getSkyExposure) this.updateBurn(mob, delta, getSkyExposure);
+      if (mob.dying) continue; // burn just killed it this frame - death handled next tick
 
       const group = mob.model.getGroup();
       const moving = mob.path !== null && mob.pathIndex < mob.path.length;
@@ -299,6 +379,25 @@ export class MobManager {
       this.updateSounds(mob, delta, moving, listenerPos);
 
       mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
+    }
+  }
+
+  /**
+   * Sunlight burn (zombie): catches fire once sky exposure at its head hits
+   * BURN_LIGHT_THRESHOLD (dawn - see main.ts's getSkyExposure), ticking
+   * BURN_DAMAGE every BURN_DAMAGE_INTERVAL until it dies or steps back into
+   * shade/underground. Independent of combat - reuses the same damage() path
+   * so hurt sound/flash/knockback-free death all just work.
+   */
+  private updateBurn(mob: Mob, delta: number, getSkyExposure: (x: number, y: number, z: number) => number): void {
+    const p = mob.model.getGroup().position;
+    const exposure = getSkyExposure(Math.round(p.x), Math.round(p.y + mob.height), Math.round(p.z));
+    mob.burning = exposure >= 12;
+    if (!mob.burning) { mob.burnTimer = 0; return; }
+    mob.burnTimer -= delta;
+    if (mob.burnTimer <= 0) {
+      mob.burnTimer = BURN_DAMAGE_INTERVAL;
+      this.damage(mob.id, BURN_DAMAGE, p);
     }
   }
 
@@ -355,6 +454,8 @@ export class MobManager {
   }
 
   private updateAI(mob: Mob, delta: number): void {
+    if (isHostileKind(mob.kind) && this.updateHostileAI(mob, delta)) return;
+
     if (mob.fleeTimer > 0) {
       mob.fleeTimer -= delta;
       if (!mob.path || mob.pathIndex >= mob.path.length) this.pickFleeTarget(mob);
@@ -400,6 +501,49 @@ export class MobManager {
 
     mob.decisionTimer -= delta;
     if (mob.decisionTimer <= 0) this.pickWanderTarget(mob);
+  }
+
+  /**
+   * Hostile targeting (zombie): while the player is within CHASE_RADIUS,
+   * chase and melee them, re-pathing every CHASE_REPATH_INTERVAL; returns
+   * true to tell updateAI() this frame's movement is already handled. Once
+   * the player leaves range, returns false so the mob falls through to the
+   * exact same wander/idle-look behaviour animals use (per the design:
+   * hostile idle == animal idle).
+   */
+  private updateHostileAI(mob: Mob, delta: number): boolean {
+    const playerPos = this.getPlayerPos?.();
+    const pos = mob.model.getGroup().position;
+    if (!playerPos || pos.distanceTo(playerPos) > CHASE_RADIUS) {
+      mob.chasing = false;
+      mob.attackTimer = 0;
+      return false;
+    }
+    mob.chasing = true;
+    const dist = pos.distanceTo(playerPos);
+
+    if (dist <= ATTACK_RANGE) {
+      mob.path = null;
+      this.applyGroundFriction(mob, delta);
+      this.easeYawTo(mob, Math.atan2(-(playerPos.x - pos.x), -(playerPos.z - pos.z)), delta, TURN_RATE);
+      mob.attackTimer -= delta;
+      if (mob.attackTimer <= 0) {
+        mob.attackTimer = ATTACK_INTERVAL;
+        this.onAttackPlayer?.(ZOMBIE_ATTACK_DAMAGE);
+      }
+      return true;
+    }
+
+    mob.attackTimer = 0;
+    mob.chaseRepathTimer -= delta;
+    if (!mob.path || mob.pathIndex >= mob.path.length || mob.chaseRepathTimer <= 0) {
+      mob.chaseRepathTimer = CHASE_REPATH_INTERVAL;
+      const path = findPath(this.isSolid, pos, playerPos.x, playerPos.z, 150, ZOMBIE_STEP_DELTA);
+      if (path) { mob.path = path; mob.pathIndex = 1; }
+    }
+    if (mob.path) this.followPath(mob, mob.walkSpeed, delta);
+    else this.applyGroundFriction(mob, delta);
+    return true;
   }
 
   /** Path::A* (mob-pathfinding.ts) to a random reachable point within WANDER_RADIUS_MIN..MAX blocks. */

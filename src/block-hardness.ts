@@ -38,6 +38,7 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.OAK_SLAB]: 2,
   [BlockId.COBBLESTONE_STAIRS]: 2,
   [BlockId.COBBLESTONE_SLAB]: 2,
+  [BlockId.GRAVEL]: 0.6,
 };
 
 type BlockTool = {
@@ -67,6 +68,7 @@ const BLOCK_TOOL: Partial<Record<BlockId, BlockTool>> = {
   [BlockId.DIRT]: { kind: 'shovel', harvest: 0, required: false },
   [BlockId.GRASS]: { kind: 'shovel', harvest: 0, required: false },
   [BlockId.SAND]: { kind: 'shovel', harvest: 0, required: false },
+  [BlockId.GRAVEL]: { kind: 'shovel', harvest: 0, required: false },
   [BlockId.FURNACE]: { kind: 'pickaxe', harvest: 0, required: true },
   [BlockId.OAK_STAIRS]: { kind: 'axe', harvest: 0, required: false },
   [BlockId.OAK_SLAB]: { kind: 'axe', harvest: 0, required: false },

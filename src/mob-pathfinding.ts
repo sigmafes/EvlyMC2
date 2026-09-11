@@ -19,11 +19,14 @@ const DIRS: [number, number][] = [
 
 /**
  * Ground block index near `refGroundBlock` at (x,z), or null if there's no
- * walkable column within +-2 blocks of it (a solid floor with 2 clear blocks
- * of headroom above).
+ * walkable column within the search window (a solid floor with 2 clear
+ * blocks of headroom above). Search radius follows `maxStepDelta` (+1 above,
+ * since a step up is checked the same way as a step down) so a wider step
+ * budget (zombies) can actually find ledges that far away, not just accept
+ * ones within the default +1/-2 animal window.
  */
-function findGroundBlock(isSolid: (x: number, y: number, z: number) => boolean, x: number, z: number, refGroundBlock: number): number | null {
-  for (let dy = 1; dy >= -2; dy--) {
+function findGroundBlock(isSolid: (x: number, y: number, z: number) => boolean, x: number, z: number, refGroundBlock: number, maxStepDelta = 1): number | null {
+  for (let dy = 1; dy >= -(maxStepDelta + 1); dy--) {
     const groundBlock = refGroundBlock + dy;
     if (isSolid(x, groundBlock, z) && !isSolid(x, groundBlock + 1, z) && !isSolid(x, groundBlock + 2, z)) {
       return groundBlock;
@@ -45,6 +48,8 @@ export function findPath(
   goalX: number,
   goalZ: number,
   maxNodes = 150,
+  /** Largest ground-height change a single step may take (1 for animals; a zombie passes 3 to also climb/drop ledges up to 3 blocks). */
+  maxStepDelta = 1,
 ): PathPoint[] | null {
   const startX = Math.round(startFeet.x);
   const startZ = Math.round(startFeet.z);
@@ -81,13 +86,13 @@ export function findPath(
       const nk = key(nx, nz);
       if (closed.has(nk)) continue;
 
-      const groundBlock = findGroundBlock(isSolid, nx, nz, current.groundBlock);
-      if (groundBlock === null || Math.abs(groundBlock - current.groundBlock) > 1) continue;
+      const groundBlock = findGroundBlock(isSolid, nx, nz, current.groundBlock, maxStepDelta);
+      if (groundBlock === null || Math.abs(groundBlock - current.groundBlock) > maxStepDelta) continue;
 
       if (dx !== 0 && dz !== 0) {
         // No corner-cutting: both orthogonal neighbours must be walkable too.
-        if (findGroundBlock(isSolid, current.x + dx, current.z, current.groundBlock) === null) continue;
-        if (findGroundBlock(isSolid, current.x, current.z + dz, current.groundBlock) === null) continue;
+        if (findGroundBlock(isSolid, current.x + dx, current.z, current.groundBlock, maxStepDelta) === null) continue;
+        if (findGroundBlock(isSolid, current.x, current.z + dz, current.groundBlock, maxStepDelta) === null) continue;
       }
 
       const stepCost = dx !== 0 && dz !== 0 ? Math.SQRT2 : 1;

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BlockId, isInteractive, isOrientable } from './block';
 import { facingTowardPlayer } from './block-data';
-import { isBlock, foodValue } from './item';
+import { isBlock, foodValue, ItemId } from './item';
 import { getDrops } from './drops';
 import { isShapedBlock, isSlab, isStairs, shapeBoxesFor } from './block-shapes';
 import { Raycast, type RaycastHit } from './raycast';
@@ -9,7 +9,7 @@ import { BlockHighlight } from './block-highlight';
 import { BlockPlacer } from './block-placer';
 import { BreakOverlay } from './break-overlay';
 import { breakTime } from './block-hardness';
-import { isTool } from './tools';
+import { isTool, attackDamage } from './tools';
 import { getBlockSound } from './block-sounds';
 import { lockPointer } from './is-touch';
 import type { ParticleSystem } from './particles';
@@ -95,7 +95,7 @@ export class BlockInteraction {
     private readonly getLight?: (x: number, y: number, z: number) => number,
     /** Nearest mob within reach along a ray, if any - checked ahead of block mining on left-click. */
     private readonly hitTestMob?: (origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) => { mobId: number; distance: number } | null,
-    private readonly attackMob?: (mobId: number) => void,
+    private readonly attackMob?: (mobId: number, damage: number) => void,
     /** Spend uses on the held tool; the callback reports back whether it broke. */
     private readonly onToolUse?: (amount: number) => void,
   ) {
@@ -283,7 +283,7 @@ export class BlockInteraction {
       const blockDist = origin.distanceTo(this.target.position);
       if (blockDist < mobHit.distance) return false;
     }
-    this.attackMob?.(mobHit.mobId);
+    this.attackMob?.(mobHit.mobId, attackDamage(this.selectedItemId));
     // LCE DiggerItem::hurtEnemy - hitting something costs two uses, not one.
     if (isTool(this.selectedItemId)) this.onToolUse?.(2);
     this.attackCooldown = BlockInteraction.ATTACK_COOLDOWN;
@@ -422,6 +422,20 @@ export class BlockInteraction {
     const clicked = this.world.getBlock(hit.blockPosition.x, hit.blockPosition.y, hit.blockPosition.z);
     if (isInteractive(clicked)) {
       this.onInteract?.(clicked, hit.blockPosition.clone());
+      return;
+    }
+
+    // Flint and Steel: ignite the air cell in front of the clicked face
+    // instead of placing a block - LCE FlintAndSteelItem::useOn.
+    if (this.selectedItemId === ItemId.FLINT_AND_STEEL) {
+      const firePos = hit.blockPosition.clone().add(hit.intersection.face.normal).round();
+      if (this.world.getBlock(firePos.x, firePos.y, firePos.z) === BlockId.AIR) {
+        this.world.add(firePos.x, firePos.y, firePos.z, BlockId.FIRE);
+        this.onSwing?.();
+        this.onToolUse?.(1);
+        const sound = getBlockSound(BlockId.FIRE, 'place') ?? getBlockSound(BlockId.FIRE, 'dig');
+        if (sound && this.soundManager) this.soundManager.playSound(sound);
+      }
       return;
     }
 

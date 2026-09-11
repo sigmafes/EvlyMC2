@@ -68,6 +68,19 @@ export class LightEngine {
     return Math.max(0, Math.max(this.world.getLight('skyLight', x, y, z) - this.skyDarken, this.world.getLight('blockLight', x, y, z)));
   }
 
+  /**
+   * Natural sunlight exposure 0..15 at a column, ignoring blockLight
+   * entirely (a torch must not stop a zombie from catching fire, nor from
+   * spawning at night the way it stops one spawning underground - that's
+   * getRawBrightness's job). At full noon (skyDarken 0) an open-sky column
+   * reads 15; at full night (skyDarken === nightSkyDarken, currently 11) the
+   * same column floors out at 4, which is intentionally not 0 - "reaches its
+   * minimum" per the spawn/burn design, not "goes dark".
+   */
+  getSkyExposure(x: number, y: number, z: number) {
+    return Math.max(0, this.world.getLight('skyLight', x, y, z) - this.skyDarken);
+  }
+
   setSkyDarken(skyDarken: number) {
     const next = Math.max(0, Math.min(15, Math.floor(skyDarken)));
     if (next === this.skyDarken) return false;

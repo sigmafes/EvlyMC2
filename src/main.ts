@@ -21,11 +21,12 @@ import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { DroppedItems } from './dropped-items';
 import { FurnaceManager } from './furnace';
-import { MobManager, type MobKind } from './mob-manager';
-import type { QuadrupedSpec } from './mob-model';
+import { MobManager, isHostileKind, type MobKind, type MobSpec } from './mob-manager';
 import { PIG_SPEC } from './pig-model';
 import { COW_SPEC } from './cow-model';
 import { SHEEP_SPEC } from './sheep-model';
+import { ZOMBIE_SPEC } from './zombie-model';
+import { WATER_LEVEL } from './chunk';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
@@ -211,7 +212,7 @@ smokeParticles.attachToScene(scene);
 // mobManager is constructed later (needs `world`/`spawnDrop`); same
 // indirection pattern as spawnDrop/applyButtonOpacity above.
 let hitTestMob: ((origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) => { mobId: number; distance: number } | null) | undefined;
-let attackMobFn: ((mobId: number) => void) | undefined;
+let attackMobFn: ((mobId: number, damage: number) => void) | undefined;
 const interaction = new BlockInteraction(
   canvas, camera, world, player, soundManager, pauseMenu,
   () => { hand.swing(); playerModel.swingArm(); },
@@ -241,7 +242,7 @@ const interaction = new BlockInteraction(
   },
   (x, y, z) => lightEngine.getRawBrightness(x, y, z),
   (origin, dir, maxDist) => hitTestMob?.(origin, dir, maxDist) ?? null,
-  (mobId) => attackMobFn?.(mobId),
+  (mobId, damage) => attackMobFn?.(mobId, damage),
   (amount) => {
     if (inventory.damageSelected(amount)) soundManager.playOne('player/break', 0.8);
   },
@@ -317,11 +318,14 @@ const mobManager = new MobManager(
   (pos) => {
     smokeParticles.burst(pos);
     mobSpawnBlockTimer = MOB_SPAWN_DEATH_COOLDOWN; // no new ambient spawns for a while after a death/despawn
+    hostileSpawnBlockTimer = HOSTILE_SPAWN_DEATH_COOLDOWN;
   },
+  (damage) => playerHealth.damage(damage, { cause: 'generic' }),
+  () => player.state.position,
 );
 hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);
-attackMobFn = (mobId) => {
-  mobManager.damage(mobId, 1, player.state.position); // flat bare-hand damage, no tool variance yet
+attackMobFn = (mobId, damage) => {
+  mobManager.damage(mobId, damage, player.state.position);
 };
 
 // --- Health & death ---
@@ -471,11 +475,11 @@ chat.registerCommand('fly', () => {
     : 'Flight disabled.';
 });
 
-const MOB_SPECS: Record<MobKind, QuadrupedSpec> = { pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC };
+const MOB_SPECS: Record<MobKind, MobSpec> = { pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC };
 chat.registerCommand('summon', (args) => {
   const kind = (args[0] ?? '').toLowerCase() as MobKind;
   const spec = MOB_SPECS[kind];
-  if (!spec) return 'Usage: /summon <pig|cow|sheep>';
+  if (!spec) return 'Usage: /summon <pig|cow|sheep|zombie>';
 
   // A few blocks in front of the player, facing back toward them; forward
   // direction matches PlayerController's own yaw convention. state.position
@@ -534,6 +538,87 @@ function tryNaturalMobSpawn(): void {
       if (!isValidMobSpawnColumn(jx, jy, jz)) continue; // skip this one member rather than the whole group
       mobManager.spawn(kind, spec, new THREE.Vector3(jx, jy + 0.5, jz), Math.random() * Math.PI * 2 - Math.PI);
     }
+    return;
+  }
+}
+
+// --- Hostile mob spawning (zombie): its own caps/cooldown, separate from the
+// passive-mob system above, since the two shouldn't compete for the same
+// budget. Surface spawns only at night (sky exposure at its minimum, not
+// necessarily 0 - see LightEngine.getSkyExposure); underground spawns any
+// time the column is fully dark (raw brightness 0 - a nearby torch still
+// blocks it, unlike the sunlight-only surface check).
+// The pool tryHostileMobSpawn() picks from - kept separate from
+// isHostileKind() (mob-manager.ts), which is the "is this mob one of the
+// hostile kinds" check used for the surface/underground count filters below.
+const HOSTILE_SPAWN_POOL: MobKind[] = ['zombie'];
+const HOSTILE_SPAWN_INTERVAL_MIN = 6;
+const HOSTILE_SPAWN_INTERVAL_MAX = 12;
+const HOSTILE_SPAWN_MIN_RADIUS = 14;
+const HOSTILE_SPAWN_MAX_RADIUS = 36;
+const HOSTILE_SURFACE_CAP = 8;
+const HOSTILE_UNDERGROUND_CAP = 12;
+const HOSTILE_SPAWN_DEATH_COOLDOWN = 60;
+const NIGHT_SKY_EXPOSURE_MAX = 4; // day/night-cycle.ts's nightSkyDarken=11 floors an exposed column at 15-11
+let hostileSpawnTimer = HOSTILE_SPAWN_INTERVAL_MIN + Math.random() * (HOSTILE_SPAWN_INTERVAL_MAX - HOSTILE_SPAWN_INTERVAL_MIN);
+let hostileSpawnBlockTimer = 0;
+
+/** Surface: dark enough (night, not just shaded), solid dry footing, at/above water level, not standing in water. */
+function isValidHostileSurfaceColumn(x: number, gy: number, z: number): boolean {
+  if (!world.isChunkLoaded(x, z)) return false;
+  if (gy < WATER_LEVEL) return false;
+  const ground = world.getBlock(x, gy, z);
+  if (ground === BlockId.AIR || ground === BlockId.WATER || ground === BlockId.LAVA) return false;
+  if (!isSolidBlock(ground)) return false;
+  if (isSolidBlock(world.getBlock(x, gy + 1, z)) || isSolidBlock(world.getBlock(x, gy + 2, z))) return false;
+  if (world.getBlock(x, gy + 1, z) === BlockId.WATER || world.getBlock(x, gy + 2, z) === BlockId.WATER) return false;
+  return lightEngine.getSkyExposure(x, gy + 1, z) <= NIGHT_SKY_EXPOSURE_MAX;
+}
+
+/** Underground: any fully-dark (raw brightness 0, torches included) standable column below water level. */
+function isValidHostileCaveColumn(x: number, y: number, z: number): boolean {
+  if (!world.isChunkLoaded(x, z)) return false;
+  if (y >= WATER_LEVEL) return false;
+  if (!isSolidBlock(world.getBlock(x, y, z))) return false;
+  if (isSolidBlock(world.getBlock(x, y + 1, z)) || isSolidBlock(world.getBlock(x, y + 2, z))) return false;
+  if (world.getBlock(x, y + 1, z) === BlockId.WATER || world.getBlock(x, y + 2, z) === BlockId.WATER) return false;
+  return lightEngine.getRawBrightness(x, y + 1, z) === 0;
+}
+
+function tryHostileMobSpawn(): void {
+  if (hostileSpawnBlockTimer > 0) return;
+  const p = player.state.position;
+  const isSurfaceMob = (m: { kind: MobKind; pos: THREE.Vector3 }) => isHostileKind(m.kind) && m.pos.y >= WATER_LEVEL;
+  const isCaveMob = (m: { kind: MobKind; pos: THREE.Vector3 }) => isHostileKind(m.kind) && m.pos.y < WATER_LEVEL;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = HOSTILE_SPAWN_MIN_RADIUS + Math.random() * (HOSTILE_SPAWN_MAX_RADIUS - HOSTILE_SPAWN_MIN_RADIUS);
+    const gx = Math.round(p.x + Math.sin(angle) * radius);
+    const gz = Math.round(p.z + Math.cos(angle) * radius);
+    if (!world.isChunkLoaded(gx, gz)) continue;
+
+    // Roughly half the attempts try the surface column, half a random cave
+    // depth near the player's own height - simple approximation of "anywhere
+    // dark underground" without a real cave-position scanner.
+    const trySurface = Math.random() < 0.5;
+    if (trySurface) {
+      const gy = world.getSurfaceHeight(gx, gz);
+      if (gy < WATER_LEVEL || !isValidHostileSurfaceColumn(gx, gy, gz)) continue;
+      if (mobManager.countAll(isSurfaceMob) >= HOSTILE_SURFACE_CAP) continue;
+      if (mobManager.countNear(p, HOSTILE_SPAWN_MAX_RADIUS, isSurfaceMob) >= HOSTILE_SURFACE_CAP) continue;
+      const kind = HOSTILE_SPAWN_POOL[Math.floor(Math.random() * HOSTILE_SPAWN_POOL.length)];
+      mobManager.spawn(kind, MOB_SPECS[kind], new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
+      return;
+    }
+
+    const surfaceY = world.getSurfaceHeight(gx, gz);
+    const gy = Math.max(1, Math.min(surfaceY - 3, Math.round(p.y) + Math.round((Math.random() - 0.5) * 16)));
+    if (gy >= WATER_LEVEL || !isValidHostileCaveColumn(gx, gy, gz)) continue;
+    if (mobManager.countAll(isCaveMob) >= HOSTILE_UNDERGROUND_CAP) continue;
+    if (mobManager.countNear(p, HOSTILE_SPAWN_MAX_RADIUS, isCaveMob) >= HOSTILE_UNDERGROUND_CAP) continue;
+    const kind = HOSTILE_SPAWN_POOL[Math.floor(Math.random() * HOSTILE_SPAWN_POOL.length)];
+    mobManager.spawn(kind, MOB_SPECS[kind], new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
     return;
   }
 }
@@ -646,13 +731,25 @@ function animate() {
     playerHealth.tick(delta);
     droppedItems.update(delta, player.state.position, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
     furnaceManager.tick(delta);
-    mobManager.update(delta, (x, y, z) => lightEngine.getRawBrightness(x, y, z), player.state.position);
+    mobManager.update(
+      delta,
+      (x, y, z) => lightEngine.getRawBrightness(x, y, z),
+      player.state.position,
+      (x, y, z) => lightEngine.getSkyExposure(x, y, z),
+    );
 
     if (mobSpawnBlockTimer > 0) mobSpawnBlockTimer -= delta;
     mobSpawnTimer -= delta;
     if (mobSpawnTimer <= 0) {
       mobSpawnTimer = MOB_SPAWN_INTERVAL_MIN + Math.random() * (MOB_SPAWN_INTERVAL_MAX - MOB_SPAWN_INTERVAL_MIN);
       tryNaturalMobSpawn();
+    }
+
+    if (hostileSpawnBlockTimer > 0) hostileSpawnBlockTimer -= delta;
+    hostileSpawnTimer -= delta;
+    if (hostileSpawnTimer <= 0) {
+      hostileSpawnTimer = HOSTILE_SPAWN_INTERVAL_MIN + Math.random() * (HOSTILE_SPAWN_INTERVAL_MAX - HOSTILE_SPAWN_INTERVAL_MIN);
+      tryHostileMobSpawn();
     }
 
     if (player.consumeWaterEntry()) soundManager.playRandom('player/Water_splash', 2, 0.5);

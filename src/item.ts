@@ -48,6 +48,20 @@ export const ItemId = {
   IRON_SHOVEL: 132,
   GOLDEN_SHOVEL: 133,
   DIAMOND_SHOVEL: 134,
+
+  WOODEN_SWORD: 135,
+  STONE_SWORD: 136,
+  IRON_SWORD: 137,
+  GOLDEN_SWORD: 138,
+  DIAMOND_SWORD: 139,
+  FLINT_AND_STEEL: 140,
+
+  ROTTEN_FLESH: 141,
+  FLINT: 142,
+  FEATHER: 143,
+  POTATO: 144,
+  CARROT: 145,
+  ARROW: 146,
 } as const;
 export type ItemId = (typeof ItemId)[keyof typeof ItemId];
 
@@ -99,6 +113,20 @@ export const ITEMS: Record<number, ItemDef> = {
   [ItemId.IRON_SHOVEL]: TOOL('Iron Shovel', 'items/iron_shovel.png'),
   [ItemId.GOLDEN_SHOVEL]: TOOL('Golden Shovel', 'items/golden_shovel.png'),
   [ItemId.DIAMOND_SHOVEL]: TOOL('Diamond Shovel', 'items/diamond_shovel.png'),
+
+  [ItemId.WOODEN_SWORD]: TOOL('Wooden Sword', 'items/wooden_sword.png'),
+  [ItemId.STONE_SWORD]: TOOL('Stone Sword', 'items/stone_sword.png'),
+  [ItemId.IRON_SWORD]: TOOL('Iron Sword', 'items/iron_sword.png'),
+  [ItemId.GOLDEN_SWORD]: TOOL('Golden Sword', 'items/gold_sword.png'),
+  [ItemId.DIAMOND_SWORD]: TOOL('Diamond Sword', 'items/diamond_sword.png'),
+  [ItemId.FLINT_AND_STEEL]: TOOL('Flint and Steel', 'items/flint_and_steel.png'),
+
+  [ItemId.ROTTEN_FLESH]: { name: 'Rotten Flesh', texture: 'items/rotten_flesh.png', maxStack: 64, food: 1 },
+  [ItemId.FLINT]: MAT('Flint', 'items/flint.png'),
+  [ItemId.FEATHER]: MAT('Feather', 'items/feather.png'),
+  [ItemId.POTATO]: { name: 'Potato', texture: 'items/potato.png', maxStack: 64, food: 1 },
+  [ItemId.CARROT]: { name: 'Carrot', texture: 'items/carrot.png', maxStack: 64, food: 2 },
+  [ItemId.ARROW]: MAT('Arrow', 'items/arrow.png'),
 };
 
 /** A slot id is a "block" (renders as a 3D cube) when it's in the BlockId range. */

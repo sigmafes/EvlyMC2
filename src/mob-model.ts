@@ -245,3 +245,133 @@ export class MobModel {
     this.headGroup.rotation.x = walkBob + idleSway;
   }
 }
+
+/**
+ * Biped mob spec (zombie): head + body + 2 legs + 2 arms, built from a single
+ * texture atlas. Unlike QuadrupedSpec the arms have no walk animation - they
+ * hold a fixed pose (`armPitch`, e.g. raised up for a zombie) set once at
+ * construction, only the legs swing. Same box+UV+face-shading machinery as
+ * MobModel/PlayerModel, reused via atlas-box.ts.
+ */
+export type BipedSpec = {
+  texturePath: string;
+  textureW: number;
+  textureH: number;
+  head: QuadrupedBoxSpec;
+  body: QuadrupedBoxSpec;
+  leg: QuadrupedLegSpec;
+  /** Attachment points (top of the limb), order: left, right. */
+  legPivots: [number, number, number][];
+  arm: QuadrupedLegSpec;
+  armPivots: [number, number, number][];
+  /** Fixed pose applied to both arm groups once at build time (radians, local X). */
+  armPitch: number;
+};
+
+export class BipedMobModel {
+  readonly group = new THREE.Group();
+  private readonly headGroup = new THREE.Group();
+  private readonly legGroups: THREE.Group[] = [];
+  private readonly material: THREE.MeshBasicMaterial;
+
+  private walking = false;
+  private legPhase = 0;
+  private walkAmount = 0;
+  private idleTime = 0;
+  private lightLevel01 = 1;
+  private hurtFlashTimer = 0;
+  private dying = false;
+  private static readonly HURT_FLASH_DURATION = 0.2;
+  private static readonly HURT_TINT_STRENGTH = 0.75;
+  private static readonly HURT_RED = new THREE.Color(1, 0, 0);
+
+  constructor(private readonly spec: BipedSpec) {
+    const texture = getMobTexture(spec.texturePath);
+    this.material = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true });
+
+    this.group.add(buildBox(spec.body, spec.textureW, spec.textureH, this.material));
+
+    this.headGroup.position.set(...spec.head.pivot);
+    const headMesh = buildBox({ ...spec.head, pivot: [0, 0, 0] }, spec.textureW, spec.textureH, this.material);
+    this.headGroup.add(headMesh);
+    this.group.add(this.headGroup);
+
+    const legGeo = new THREE.BoxGeometry(...spec.leg.size);
+    applyAtlasUVs(legGeo, spec.leg.uv, spec.textureW, spec.textureH);
+    applyFaceShading(legGeo);
+    for (const pivot of spec.legPivots) {
+      const legGroup = new THREE.Group();
+      legGroup.position.set(...pivot);
+      const legMesh = new THREE.Mesh(legGeo, this.material);
+      legMesh.position.set(0, -spec.leg.size[1] / 2, 0);
+      legGroup.add(legMesh);
+      this.group.add(legGroup);
+      this.legGroups.push(legGroup);
+    }
+
+    // Arms: same shape as legs, but no per-frame swing - just a static pose
+    // (armPitch) set once here, e.g. raised overhead for a zombie.
+    const armGeo = new THREE.BoxGeometry(...spec.arm.size);
+    applyAtlasUVs(armGeo, spec.arm.uv, spec.textureW, spec.textureH);
+    applyFaceShading(armGeo);
+    for (const pivot of spec.armPivots) {
+      const armGroup = new THREE.Group();
+      armGroup.position.set(...pivot);
+      armGroup.rotation.x = spec.armPitch;
+      const armMesh = new THREE.Mesh(armGeo, this.material);
+      armMesh.position.set(0, -spec.arm.size[1] / 2, 0);
+      armGroup.add(armMesh);
+      this.group.add(armGroup);
+    }
+  }
+
+  getGroup(): THREE.Group {
+    return this.group;
+  }
+
+  setWalking(walking: boolean): void {
+    this.walking = walking;
+  }
+
+  setLightLevel(level01: number): void {
+    this.lightLevel01 = THREE.MathUtils.clamp(level01, 0, 1);
+  }
+
+  hurt(): void {
+    this.hurtFlashTimer = BipedMobModel.HURT_FLASH_DURATION;
+  }
+
+  setDying(on: boolean): void {
+    this.dying = on;
+  }
+
+  update(delta: number): void {
+    this.idleTime += delta;
+
+    const b = Math.pow(this.lightLevel01, 1.25);
+    if (this.hurtFlashTimer > 0 || this.dying) {
+      this.hurtFlashTimer = Math.max(0, this.hurtFlashTimer - delta);
+      const tinted = new THREE.Color().setScalar(b).lerp(BipedMobModel.HURT_RED, BipedMobModel.HURT_TINT_STRENGTH);
+      this.material.color.copy(tinted);
+    } else {
+      this.material.color.setScalar(b);
+    }
+
+    const target = this.walking ? 1 : 0;
+    const k = 1 - Math.exp(-EASE_RATE * delta);
+    this.walkAmount += (target - this.walkAmount) * k;
+
+    if (this.walking) {
+      this.legPhase = (this.legPhase + delta / WALK_CYCLE_DURATION) % 1;
+    }
+
+    // Legs only (order: left, right) - opposite phase, same swing as MobModel.
+    const swing = Math.sin(this.legPhase * Math.PI * 2) * LEG_SWING * this.walkAmount;
+    const order: [number, number] = [1, -1];
+    this.legGroups.forEach((leg, i) => { leg.rotation.x = swing * order[i]; });
+
+    const walkBob = Math.sin(this.legPhase * Math.PI * 4) * WALK_HEAD_BOB * this.walkAmount;
+    const idleSway = Math.sin(this.idleTime * 1.5) * IDLE_HEAD_SWAY * (1 - this.walkAmount);
+    this.headGroup.rotation.x = walkBob + idleSway;
+  }
+}

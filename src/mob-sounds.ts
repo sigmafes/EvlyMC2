@@ -29,6 +29,12 @@ const MOB_SOUNDS: Record<MobKind, Record<MobSoundEvent, SoundSpec>> = {
     idle: { relPath: 'mobs/Sheep', count: 3 },
     step: { relPath: 'mobs/Sheep_step', count: 3 },
   },
+  zombie: {
+    death: { relPath: 'mobs/Zombie_death' },
+    hurt: { relPath: 'mobs/Zombie_hurt', count: 2 },
+    idle: { relPath: 'mobs/Zombie_idle', count: 3 },
+    step: { relPath: 'mobs/Zombie_step', count: 3 },
+  },
 };
 
 export function playMobSound(soundManager: SoundManager, kind: MobKind, event: MobSoundEvent, volume = 1): void {
