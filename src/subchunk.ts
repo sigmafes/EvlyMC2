@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { BlockId, BlockMaterials } from './block';
 import { buildSubchunkGeometry, BlockReader, LightReader, WaterDistanceReader, WaterFlowReader, BlockDataReader, SubchunkRenderStats } from './mesher';
 
-export const SUBCHUNK_HEIGHT = 16;
+// 24, not 16: with CHUNK_HEIGHT=152 that's ~7 subchunks/meshes per column
+// instead of ~10 (-30% draw calls), still short enough that editing near the
+// top of one doesn't force rebuilding an oversized mesh (32 would).
+export const SUBCHUNK_HEIGHT = 24;
 
 export class Subchunk {
   readonly mesh: THREE.Mesh;

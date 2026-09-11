@@ -6,6 +6,16 @@ import { fbm2D } from './noise';
  * contract as the old bitmap-based version.
  */
 export class TerrainNoise {
+  // Terrain height went from 7 to 20 noise octaves per column once mountains
+  // and rivers landed, and sample() gets called repeatedly for the exact
+  // same (x,z) - once per surface-patch footprint cell in chunk.ts, and
+  // again at runtime from world.ts's getSurfaceHeight() (mob spawning,
+  // findSpawnPoint's up-to-512-radius ring scan). Memoizing here fixes all
+  // of those call sites at once instead of threading a cache through each
+  // one. Same deterministic (seed,x,z)->height contract, just remembered.
+  private readonly heightCache = new Map<string, number>();
+  private static readonly CACHE_LIMIT = 20000; // a few dozen chunks' worth of columns
+
   constructor(private readonly seed: number) {}
 
   /** Kept for callers that still `await TerrainNoise.load()`. */
@@ -21,6 +31,10 @@ export class TerrainNoise {
    * winding band of columns down toward WATER_LEVEL (see riverMask()).
    */
   sample(worldX: number, worldZ: number): number {
+    const key = `${worldX},${worldZ}`;
+    const cached = this.heightCache.get(key);
+    if (cached !== undefined) return cached;
+
     // Broad continent shape (large cells), redistributed to flatten plains and
     // sharpen coastlines.
     let continent = fbm2D(worldX * 0.003, worldZ * 0.003, this.seed, 4);
@@ -33,7 +47,14 @@ export class TerrainNoise {
     let mountain = this.mountainHeight(worldX, worldZ);
     mountain *= 1 - river; // don't let a ridge cancel a river cut through it
 
-    return base + mountain - river * 10;
+    const height = base + mountain - river * 10;
+    // No real LRU bookkeeping - just a size cap that resets the whole cache
+    // once hit, cheap and good enough since generation/spawn-scan access
+    // patterns are heavily localized (nearby columns get re-requested far
+    // more than distant ones ever get evicted-then-needed-again).
+    if (this.heightCache.size >= TerrainNoise.CACHE_LIMIT) this.heightCache.clear();
+    this.heightCache.set(key, height);
+    return height;
   }
 
   /**
@@ -50,6 +71,7 @@ export class TerrainNoise {
   private mountainHeight(worldX: number, worldZ: number): number {
     const maskRaw = fbm2D(worldX * 0.0015, worldZ * 0.0015, (this.seed ^ 0x0a17) | 0, 4);
     const mask = Math.max(0, (maskRaw - 0.55) / 0.45);
+    if (mask <= 0) return 0; // ~55% of the map bails here, skipping ridge's 5 octaves entirely
     const ridgeRaw = fbm2D(worldX * 0.01, worldZ * 0.01, (this.seed ^ 0x02b1) | 0, 5);
     const ridge = 1 - Math.abs(ridgeRaw * 2 - 1);
     return mask * Math.pow(ridge, 1.5) * 55;
