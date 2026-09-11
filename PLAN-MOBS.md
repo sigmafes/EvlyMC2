@@ -58,13 +58,40 @@ después (sin implementarlo ahora): `getGroup()`, `setWalking(bool)`,
 sin nada de first-person-hand ni inventory-doll ni sneak/pose especial — un mob no
 tiene esas necesidades.
 
-## Fase C — Medir los UV rects reales de cada textura
-Nada de asumir el layout vainilla de memoria: repetir el método que ya usé para el
-horno y el slot de crafteo (leer los PNG con Python, detectar los bloques de color
-sólido por flood-fill o inspección directa, anotar rects `[x0,y0,x1,y1]`) para
-`pig.png`, `cow.png` y `sheep.png` — incluida la región de lana de la oveja. Esto
-evita adivinar mal un offset y que la textura quede desalineada, mismo bug que
-arreglamos con la flecha del horno.
+## Fase C — Medir los UV rects reales de cada textura  ✅ HECHO (pig) / pendiente por fase (cow, sheep)
+Nada de asumir el layout vainilla de memoria. Los 3 PNG tienen canal alfa real (no
+todo opaco), así que primero probé detectar los rects por huecos transparentes
+(flood-fill de regiones opacas) — no funcionó: las partes están pegadas sin huecos
+reales entre sí (todo queda como un solo blob conectado), y los huecos que sí se ven
+fila por fila son irregularidades del propio dibujo (bordes redondeados de una pata,
+por ejemplo), no bordes de región UV.
+
+Lo que sí funcionó: aplicar la fórmula estándar de unfold de caja de Minecraft
+(texOffs `(u,v)` + tamaño `(dx,dy,dz)` → 6 rects fijos) y **validarla contra los
+píxeles reales** de `pig.png` en vez de confiar de memoria. Coincidió exacto:
+
+- **Head** — texOffs (0,0), tamaño 8×8×8. Fila top/bottom en `x:[8,24) y:[0,8)`
+  (confirmado pixel a pixel), fila right/front/left/back en `x:[0,32) y:[8,16)`.
+- **Body** — texOffs (28,8), tamaño 10×16×8, rotada 90° en X (se modela acostada,
+  se para con la rotación). Fila top/bottom en `x:[36,56) y:[8,16)`; fila
+  right/front/left/back en `x:[28,64) y:[16,32)` (coincide exacto con la franja
+  larga que se ve en la imagen de y=16 a y=31).
+- **Leg** (compartida por las 4 patas, solo reposicionada) — texOffs (0,16),
+  tamaño 4×6×4. Fila top/bottom en `x:[4,12) y:[16,20)`; fila
+  right/front/left/back en `x:[0,16) y:[20,26)`.
+- Rects completos (6 caras c/u) para las 3 partes quedan documentados directo en
+  el código de la Fase D (`PIG_SPEC`), no acá, para no duplicar y desincronizar.
+- Nota: hay un bloque de 8×4px sin usar en `x:[16,25) y:[16,20)` — arte suelto que
+  no corresponde a ninguna parte del modelo vainilla, lo dejo sin mapear.
+
+Para `cow.png` y `sheep.png` la misma fórmula predice bien cabeza/cuerpo a grandes
+rasgos (verificado por encima), pero `cow.png` tiene extras que la vaca vainilla no
+tiene en el template base (cuernos, ubre — se ven como bloques sueltos arriba/abajo
+del área principal) y no los voy a inventar a ojo. Lo correcto es medirlos con el
+mismo método **dentro de la Fase E/F de cada especie**, contra la textura real y
+con un render de prueba para confirmar visualmente — así no repito trabajo si algo
+no encaja, y cada fase queda con su propia verificación en vez de una tanda
+"medí las 3 de una" con menos rigor en las últimas dos.
 
 ## Fase D — Pig
 `PIG_SPEC` con las dimensiones vainilla (cabeza 4×3×3, cuerpo 10×8×6 rotado 90° para
