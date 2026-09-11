@@ -72,6 +72,7 @@ const LOOK_TURN_RATE = 2.5; // slower easing rate for an idle look-around turn
 const STEP_INTERVAL = 0.45;
 const IDLE_SOUND_MIN = 4;
 const IDLE_SOUND_MAX = 9;
+const MOB_SOUND_RADIUS = 4; // mob sounds (idle/step/hurt/death) only carry this far
 const KNOCKBACK_SPEED = 5;
 const KNOCKBACK_UP = 4;
 // Same feel as the player (player-physics.ts): velocity ramps toward the AI's
@@ -240,7 +241,7 @@ export class MobManager {
     mob.health -= amount;
 
     if (mob.health <= 0) {
-      if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'death', 0.8);
+      if (this.soundManager && this.inSoundRange(mob, fromPos)) playMobSound(this.soundManager, mob.kind, 'death', 0.8);
       mob.dying = true;
       mob.deathTimer = DEATH_SPIN_DURATION;
       mob.path = null;
@@ -249,7 +250,7 @@ export class MobManager {
       mob.model.setDying(true);
       return true;
     }
-    if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
+    if (this.soundManager && this.inSoundRange(mob, fromPos)) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
     mob.model.hurt(); // 0.2s red flash
 
     // Panic (LCE PanicGoal): forget whatever it was doing and start pathing
@@ -272,7 +273,7 @@ export class MobManager {
     return false;
   }
 
-  update(delta: number, getLight?: (x: number, y: number, z: number) => number): void {
+  update(delta: number, getLight?: (x: number, y: number, z: number) => number, listenerPos?: THREE.Vector3): void {
     // Reverse iteration: updateDeath() may splice a finished mob out mid-loop.
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const mob = this.mobs[i];
@@ -295,10 +296,17 @@ export class MobManager {
         mob.model.setLightLevel(level / 15);
       }
       mob.model.update(delta); // resolves this frame's colour (light tint, or a hurt flash on top)
-      this.updateSounds(mob, delta, moving);
+      this.updateSounds(mob, delta, moving, listenerPos);
 
       mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
     }
+  }
+
+  /** True if `pos` is within MOB_SOUND_RADIUS of `mob` (horizontal + vertical distance). No listener position given -> always audible (e.g. no player reference available). */
+  private inSoundRange(mob: Mob, pos?: THREE.Vector3): boolean {
+    if (!pos) return true;
+    const p = mob.model.getGroup().position;
+    return p.distanceTo(pos) <= MOB_SOUND_RADIUS;
   }
 
   /** Death animation (topples over its Z axis, red-tinted), then drops + a smoke burst + removal. */
@@ -322,24 +330,27 @@ export class MobManager {
     }
   }
 
-  /** Footstep while moving (grounded only) + a random ambient idle bark. */
-  private updateSounds(mob: Mob, delta: number, moving: boolean): void {
+  /** Footstep while moving (grounded only) + a random ambient idle bark - both muted beyond MOB_SOUND_RADIUS of `listenerPos`. */
+  private updateSounds(mob: Mob, delta: number, moving: boolean, listenerPos?: THREE.Vector3): void {
     if (!this.soundManager) return;
+    const audible = this.inSoundRange(mob, listenerPos);
 
     if (moving && mob.grounded) {
       mob.stepTimer -= delta;
       if (mob.stepTimer <= 0) {
         mob.stepTimer = STEP_INTERVAL;
-        playMobSound(this.soundManager, mob.kind, 'step', 0.4);
+        if (audible) playMobSound(this.soundManager, mob.kind, 'step', 0.4);
       }
     } else {
       mob.stepTimer = 0; // next step plays immediately once it starts moving again
     }
 
+    // Timers still tick down out of range, so a mob doesn't "catch up" with
+    // a burst of overdue sounds the moment the player walks back within range.
     mob.idleSoundTimer -= delta;
     if (mob.idleSoundTimer <= 0) {
       mob.idleSoundTimer = ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10;
-      playMobSound(this.soundManager, mob.kind, 'idle', 0.5);
+      if (audible) playMobSound(this.soundManager, mob.kind, 'idle', 0.5);
     }
   }
 

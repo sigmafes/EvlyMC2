@@ -28,6 +28,10 @@ export type QuadrupedLegSpec = {
 export type QuadrupedOverlaySpec = QuadrupedBoxSpec & {
   /** Extra inflation per side, in blocks (MCPE-style shell over the base box, e.g. sheep wool). */
   inflate: number;
+  /** Use a separate texture (its own atlas dims) instead of the body's - e.g. sheep wool tiling blocks/wool.png rather than sampling the skin sheet. Omit to share the body's texture/atlas as before. */
+  texturePath?: string;
+  textureW?: number;
+  textureH?: number;
 };
 
 export type QuadrupedSpec = {
@@ -127,14 +131,15 @@ export class MobModel {
     }
 
     if (spec.overlay) {
+      const overlayTexture = spec.overlay.texturePath ? getMobTexture(spec.overlay.texturePath) : texture;
       this.overlayMaterial = new THREE.MeshBasicMaterial({
-        map: texture, vertexColors: true, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
+        map: overlayTexture, vertexColors: true, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
       });
       const [w, h, d] = spec.overlay.size;
       const inflate = spec.overlay.inflate;
       const overlayMesh = buildBox(
         { ...spec.overlay, size: [w + inflate * 2, h + inflate * 2, d + inflate * 2] },
-        spec.textureW, spec.textureH, this.overlayMaterial,
+        spec.overlay.textureW ?? spec.textureW, spec.overlay.textureH ?? spec.textureH, this.overlayMaterial,
       );
       this.group.add(overlayMesh);
     }

@@ -83,7 +83,9 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.GLASS]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
   [BlockId.FURNACE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.TORCH]: { opacity: 0, emission: 15, liquid: false, cull: false, flammable: null },
-  [BlockId.WOOL]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  // Same odds as real Minecraft wool (as flammable as leaves): catches easily
+  // and burns away fast once it does.
+  [BlockId.WOOL]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: { catchOdds: 30, burnOdds: 60 } },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */

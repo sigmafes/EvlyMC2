@@ -5,19 +5,32 @@ const TEXTURE_PATH = new URL('../textures/mobs/sheep.png', import.meta.url).href
 const TEXTURE_W = 64;
 const TEXTURE_H = 32;
 
+// Wool overlay: sheep.png's body region turned out to be a plain (unshorn-
+// looking) hide, not the fluffy pattern PLAN-MOBS.md's Fase F comment below
+// assumed - the sheep read as bald. Rather than repaint sheep.png, layer the
+// same blocks/wool.png the wool block itself uses (a plain tileable pattern,
+// not a UV-mapped skin sheet) over the body as a second inflated shell, the
+// same MCPE-style overlay mechanism mob-model.ts already has for exactly
+// this (just never fed a texture of its own before now).
+const WOOL_TEXTURE_PATH = new URL('../textures/blocks/wool.png', import.meta.url).href;
+const WOOL_TEXTURE_SIZE = 16;
+const WOOL_FULL_RECT: [number, number, number, number] = [0, 0, WOOL_TEXTURE_SIZE, WOOL_TEXTURE_SIZE];
+const WOOL_UV: FaceRects = {
+  py: WOOL_FULL_RECT, ny: WOOL_FULL_RECT,
+  nx: WOOL_FULL_RECT, nz: WOOL_FULL_RECT, px: WOOL_FULL_RECT, pz: WOOL_FULL_RECT,
+};
+
 // UV rects measured directly off sheep.png's pixels (PLAN-MOBS.md Fase F), same
 // method as pig/cow: hypothesise texOffs+size, verify exact against the real
 // opaque runs.
 //
 // Finding worth calling out: unlike PLAN-MOBS.md's Fase B assumption, this
 // asset has NO separate inflated "wool" overlay layer distinct from the body -
-// the single body box's own texture already IS the wool pattern (confirmed
-// visually: the fluffy brown/white noise lives directly in the body region,
-// there's no second lighter-weight island anywhere else in the file; the
-// canvas is fully unused past x=55). So SHEEP_SPEC has no `overlay` - the
-// MobModel overlay path (built in Fase B) stays implemented but genuinely
-// unexercised by any of these three textures. Not fabricating a fake overlay
-// just to "use" it.
+// the body region is just a plain hide, no fluffy texture baked in anywhere
+// in the file (the canvas is fully unused past x=55). That made the sheep
+// look bald in-game, so SHEEP_SPEC now adds its own overlay below, sourced
+// from blocks/wool.png instead (see WOOL_UV above) rather than from this
+// texture at all.
 //
 // Box unfold layout (Minecraft's standard texOffs(u,v) + size(dx,dy,dz)):
 //   row 1 (height dz): [[skip dz] top(dx) | bottom(dx)]
@@ -82,4 +95,13 @@ export const SHEEP_SPEC: QuadrupedSpec = {
     [-LEG_INSET_X, LEG_TOP_Y, LEG_Z],  // back-left
     [LEG_INSET_X, LEG_TOP_Y, LEG_Z],   // back-right
   ],
+  overlay: {
+    texturePath: WOOL_TEXTURE_PATH,
+    textureW: WOOL_TEXTURE_SIZE,
+    textureH: WOOL_TEXTURE_SIZE,
+    size: BODY_SIZE,
+    pivot: [0, BODY_PIVOT_Y, 0],
+    uv: WOOL_UV,
+    inflate: PX(1.5),
+  },
 };

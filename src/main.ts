@@ -634,7 +634,7 @@ function animate() {
     playerHealth.tick(delta);
     droppedItems.update(delta, player.state.position, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
     furnaceManager.tick(delta);
-    mobManager.update(delta, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
+    mobManager.update(delta, (x, y, z) => lightEngine.getRawBrightness(x, y, z), player.state.position);
 
     mobSpawnTimer -= delta;
     if (mobSpawnTimer <= 0) {
