@@ -60,6 +60,9 @@ export class BlockInteraction {
   private swingTimer = 0;
   private chipTimer = 0;
 
+  private attackCooldown = 0;
+  private static readonly ATTACK_COOLDOWN = 0.4;
+
   private rightHeld = false;
   private eating = false;
   private eatTime = 0;
@@ -116,6 +119,8 @@ export class BlockInteraction {
   }
 
   update(delta: number) {
+    if (this.attackCooldown > 0) this.attackCooldown -= delta;
+
     const hit = this.raycast.castRay(
       this.camera,
       this.world.getMeshObjects(),
@@ -224,7 +229,7 @@ export class BlockInteraction {
 
   /** If a mob is the nearest thing on the crosshair (closer than any targeted block), hit it and return true. */
   private attackNearestMob(): boolean {
-    if (!this.hitTestMob) return false;
+    if (!this.hitTestMob || this.attackCooldown > 0) return false;
     const origin = new THREE.Vector3();
     const dir = new THREE.Vector3();
     this.camera.getWorldPosition(origin);
@@ -236,6 +241,7 @@ export class BlockInteraction {
       if (blockDist < mobHit.distance) return false;
     }
     this.attackMob?.(mobHit.mobId);
+    this.attackCooldown = BlockInteraction.ATTACK_COOLDOWN;
     return true;
   }
 

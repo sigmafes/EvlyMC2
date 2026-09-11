@@ -95,6 +95,10 @@ export class MobModel {
   private legPhase = 0;      // 0..1, advances only while walking
   private walkAmount = 0;    // eased 0..1 - drives swing amplitude, smooths start/stop
   private idleTime = 0;
+  private lightLevel01 = 1;
+  private hurtFlashTimer = 0;
+  private static readonly HURT_FLASH_DURATION = 0.2;
+  private static readonly HURT_TINT = new THREE.Color(1, 0.5, 0.5); // ~50% opaque red over the texture
 
   constructor(private readonly spec: QuadrupedSpec) {
     const texture = getMobTexture(spec.texturePath);
@@ -149,16 +153,29 @@ export class MobModel {
     this.walking = walking;
   }
 
-  /** Tint by world light level (0..1), matching the terrain/player shading curve. */
+  /** Tint by world light level (0..1), matching the terrain/player shading curve. Stored, not applied immediately - update() resolves the final colour so a hurt flash can't be clobbered by a setLightLevel() call later the same frame. */
   setLightLevel(level01: number): void {
-    const b = Math.pow(THREE.MathUtils.clamp(level01, 0, 1), 1.25);
-    this.material.color.setScalar(b);
-    if (this.overlayMaterial) this.overlayMaterial.color.setScalar(b);
+    this.lightLevel01 = THREE.MathUtils.clamp(level01, 0, 1);
+  }
+
+  /** Flash red for HURT_FLASH_DURATION - call when this mob takes damage. */
+  hurt(): void {
+    this.hurtFlashTimer = MobModel.HURT_FLASH_DURATION;
   }
 
   /** Advance idle/walk animation. Call once per frame. */
   update(delta: number): void {
     this.idleTime += delta;
+
+    if (this.hurtFlashTimer > 0) {
+      this.hurtFlashTimer = Math.max(0, this.hurtFlashTimer - delta);
+      this.material.color.copy(MobModel.HURT_TINT);
+      if (this.overlayMaterial) this.overlayMaterial.color.copy(MobModel.HURT_TINT);
+    } else {
+      const b = Math.pow(this.lightLevel01, 1.25);
+      this.material.color.setScalar(b);
+      if (this.overlayMaterial) this.overlayMaterial.color.setScalar(b);
+    }
 
     const target = this.walking ? 1 : 0;
     const k = 1 - Math.exp(-EASE_RATE * delta);

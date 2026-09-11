@@ -682,6 +682,7 @@ document.addEventListener('keydown', (event) => {
   if (event.code === 'KeyR' && !event.repeat) {
     dropDebug = !dropDebug;
     droppedItems.setDebug(dropDebug);
+    mobManager.setDebug(dropDebug);
   }
 });
 

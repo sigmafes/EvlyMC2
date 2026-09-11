@@ -60,6 +60,14 @@ const WANDER_PAUSE_MAX = 2.5;
 const STEP_INTERVAL = 0.45;
 const IDLE_SOUND_MIN = 4;
 const IDLE_SOUND_MAX = 9;
+const KNOCKBACK_SPEED = 5;
+const KNOCKBACK_UP = 4;
+const KNOCKBACK_DECAY = 8; // per second, exponential
+
+// Shared wireframe box geometry/material for the debug hitbox (R key) - one
+// GPU resource, scaled per mob instance, same pattern as DroppedItems' boxes.
+const hitboxGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+const hitboxMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
 
 type Mob = {
   id: number;
@@ -82,6 +90,8 @@ type Mob = {
   // Sound
   stepTimer: number;
   idleSoundTimer: number;
+  // Debug
+  box: THREE.LineSegments;
 };
 
 export type MobRaycastHit = { mobId: number; kind: MobKind; distance: number };
@@ -95,6 +105,7 @@ export type MobRaycastHit = { mobId: number; kind: MobKind; distance: number };
 export class MobManager {
   private readonly mobs: Mob[] = [];
   private nextId = 1;
+  private debug = false;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -110,6 +121,12 @@ export class MobManager {
     group.position.copy(pos);
     group.rotation.y = yaw;
     this.scene.add(group);
+
+    const box = new THREE.LineSegments(hitboxGeo, hitboxMat);
+    box.scale.set(stats.radius * 2, stats.height, stats.radius * 2);
+    box.visible = this.debug;
+    box.position.set(pos.x, pos.y + stats.height / 2, pos.z);
+    this.scene.add(box);
 
     this.mobs.push({
       id: this.nextId++,
@@ -130,7 +147,14 @@ export class MobManager {
       pauseTimer: ri(0, 20) / 10, // stagger initial wander so a group doesn't move in lockstep
       stepTimer: 0,
       idleSoundTimer: ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10,
+      box,
     });
+  }
+
+  /** Toggle the wireframe hitboxes (same key as the dropped-item debug boxes). */
+  setDebug(on: boolean): void {
+    this.debug = on;
+    for (const mob of this.mobs) mob.box.visible = on;
   }
 
   /** Nearest mob a ray from `origin` toward `dir` (normalised) hits within `maxDist`, or null. */
@@ -163,6 +187,7 @@ export class MobManager {
       return true;
     }
     if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
+    mob.model.hurt(); // 0.2s red flash
 
     // Flee straight away from the hit's source (LCE PanicGoal picks a random
     // direction biased away from the attacker - this is the simplified
@@ -172,6 +197,15 @@ export class MobManager {
     if (mob.fleeDir.lengthSq() < 1e-6) mob.fleeDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
     mob.fleeDir.normalize();
     mob.fleeTimer = FLEE_DURATION;
+
+    // Knockback: an instant shove away from the attacker plus a small hop,
+    // decaying over the next few frames (see updatePhysics) - independent of
+    // (and on top of) the flee movement that starts the same frame.
+    mob.velocity.x = mob.fleeDir.x * KNOCKBACK_SPEED;
+    mob.velocity.z = mob.fleeDir.z * KNOCKBACK_SPEED;
+    mob.velocity.y = KNOCKBACK_UP;
+    mob.grounded = false;
+
     return false;
   }
 
@@ -183,14 +217,16 @@ export class MobManager {
       const group = mob.model.getGroup();
       const moving = mob.fleeTimer > 0 || mob.wanderTimer > 0;
       mob.model.setWalking(moving);
-      mob.model.update(delta);
-      this.updateSounds(mob, delta, moving);
 
       if (getLight) {
         const p = group.position;
         const level = getLight(Math.round(p.x), Math.round(p.y + mob.height / 2), Math.round(p.z));
         mob.model.setLightLevel(level / 15);
       }
+      mob.model.update(delta); // resolves this frame's colour (light tint, or a hurt flash on top)
+      this.updateSounds(mob, delta, moving);
+
+      mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
     }
   }
 
@@ -256,18 +292,40 @@ export class MobManager {
 
     group.position.x = nextX;
     group.position.z = nextZ;
-    group.rotation.y = Math.atan2(dir.x, dir.z);
+    // Face the direction of travel: an Object3D at rotation.y=θ has its local
+    // -Z (this model's "front" - see mob-model.ts) pointing world-(-sinθ,-cosθ),
+    // so matching that to `dir` needs the negated atan2 - the un-negated form
+    // points the model's BACK the way it's walking (a moonwalk).
+    group.rotation.y = Math.atan2(-dir.x, -dir.z);
   }
 
-  /** Gravity + a simple ground snap (sample the block below, land on its top). No horizontal collision resolution beyond moveHorizontal's blocked-ahead check. */
+  /** Gravity + knockback decay + a simple ground snap (sample the block below, land on its top). No horizontal collision resolution beyond moveHorizontal's blocked-ahead check. */
   private updatePhysics(mob: Mob, delta: number): void {
     const group = mob.model.getGroup();
+
+    // Knockback: an exponentially-decaying horizontal shove, independent of
+    // the AI's own movement (moveHorizontal sets position directly, this adds
+    // a delta on top of it).
+    if (Math.abs(mob.velocity.x) > 0.01 || Math.abs(mob.velocity.z) > 0.01) {
+      group.position.x += mob.velocity.x * delta;
+      group.position.z += mob.velocity.z * delta;
+      const decay = Math.exp(-KNOCKBACK_DECAY * delta);
+      mob.velocity.x *= decay;
+      mob.velocity.z *= decay;
+    } else {
+      mob.velocity.x = 0;
+      mob.velocity.z = 0;
+    }
+
     mob.velocity.y -= GRAVITY * delta;
     const nextY = group.position.y + mob.velocity.y * delta;
 
+    // Blocks are centred on integer coordinates (span [n-0.5, n+0.5] - see
+    // chunk.ts's BlockCollider), so the ground block's top surface sits at
+    // its own index + 0.5, not +1.
     const feetBlockY = Math.floor(nextY - 0.05);
     if (mob.velocity.y <= 0 && this.isSolid(Math.round(group.position.x), feetBlockY, Math.round(group.position.z))) {
-      group.position.y = feetBlockY + 1;
+      group.position.y = feetBlockY + 0.5;
       mob.velocity.y = 0;
       mob.grounded = true;
     } else {
@@ -279,6 +337,7 @@ export class MobManager {
   private removeAt(index: number): void {
     const mob = this.mobs[index];
     this.scene.remove(mob.model.getGroup());
+    this.scene.remove(mob.box);
     this.mobs.splice(index, 1);
   }
 }
