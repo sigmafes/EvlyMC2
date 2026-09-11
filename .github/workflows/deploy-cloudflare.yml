@@ -1,0 +1,36 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cloudflare-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # CF_PAGES makes vite.config.ts build with base "/" (Cloudflare Pages
+      # serves from the domain root, unlike GitHub Pages' /EvlyMC2/ subpath).
+      - run: npm run build
+        env:
+          CF_PAGES: '1'
+
+      - uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: 7411d12bd8e20e9547a5eec1cf1c23bd
+          projectName: evlymc
+          directory: dist
