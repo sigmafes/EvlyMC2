@@ -2,6 +2,31 @@ import * as THREE from 'three';
 import { BlockId } from './block';
 import { itemShapeBoxes, type ShapeBox } from './block-shapes';
 import type { InventorySlot } from './inventory';
+import { ITEMS } from './item';
+import { buildAtlas, atlasUV, type Atlas } from './texture-atlas';
+
+const ITEM_ATLAS_COLS = 32;
+const ITEM_ATLAS_ROWS = 32; // 1024 tiles of headroom - ~47 items used today
+
+/** Shared item-icon atlas (separate from the block atlas) - keyed by texture path (e.g. "items/apple.png"), same string every ITEMS entry and every call site here already uses. */
+let itemAtlas: Atlas | null = null;
+/** The world's block atlas (built in block.ts's createBlockMaterials), reused here for hotbar/dropped-block/held-block previews instead of loading each block's texture a second time. */
+let blockAtlas: Atlas | null = null;
+
+/** Wire up both shared atlases once at startup. Call after createBlockMaterials() resolves. */
+export async function initPreviewAtlases(sharedBlockAtlas: Atlas): Promise<void> {
+  blockAtlas = sharedBlockAtlas;
+  const entries = Object.values(ITEMS).map((def) => ({ key: def.texture, url: resolveTextureUrl(def.texture) }));
+  itemAtlas = await buildAtlas(entries, ITEM_ATLAS_COLS, ITEM_ATLAS_ROWS);
+}
+
+/** "blocks/dirt.png" -> "dirt" iff that's an actual tile in the shared block atlas, else null (liquids/anything unexpected fall back to loading their own texture). */
+function blockAtlasKeyFor(path: string | undefined): string | null {
+  if (!path || !blockAtlas) return null;
+  const match = /^blocks\/(.+)\.png$/.exec(path);
+  if (!match) return null;
+  return blockAtlas.rects.has(match[1]) ? match[1] : null;
+}
 
 /**
  * Renders a small 3D isometric preview of a block into a canvas.
@@ -81,6 +106,21 @@ export function renderItemIcon(canvas: HTMLCanvasElement, texturePath: string) {
   const ctx = canvas.getContext('2d');
   if (!ctx || !texturePath) return;
   ctx.imageSmoothingEnabled = false;
+
+  // Once the shared item atlas is built, crop straight from its canvas -
+  // one already-decoded image instead of loading (and keeping in memory) a
+  // separate HTMLImageElement per item.
+  const rect = itemAtlas?.rects.get(texturePath);
+  if (itemAtlas && rect) {
+    const [x0, y0] = rect;
+    ctx.clearRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
+    ctx.drawImage(itemAtlas.canvas, x0, y0, 16, 16, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
+    return;
+  }
+
+  // Fallback for calls before initItemAtlas() resolves, or a path outside
+  // the ITEMS registry (block side/top icons also route through here in a
+  // couple of call sites) - load it individually like before the atlas.
   const img = loadImage(texturePath, () => {
     ctx.clearRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
     ctx.drawImage(img, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
@@ -96,7 +136,7 @@ export function renderItemIcon(canvas: HTMLCanvasElement, texturePath: string) {
 const ITEM_DEPTH = 1 / 16;
 const itemGeoCache = new Map<string, THREE.BufferGeometry>();
 
-function extrudeItemGeometry(img: HTMLImageElement): THREE.BufferGeometry {
+function extrudeItemGeometry(img: HTMLImageElement, uvRect?: { uMin: number; uMax: number; vMin: number; vMax: number }): THREE.BufferGeometry {
   const w = img.naturalWidth || 16;
   const h = img.naturalHeight || 16;
   const cv = document.createElement('canvas');
@@ -152,6 +192,17 @@ function extrudeItemGeometry(img: HTMLImageElement): THREE.BufferGeometry {
     }
   }
 
+  // Remap the 0..1 UVs (relative to this item's own icon) into its tile
+  // within the shared item atlas, so the material can point at the whole
+  // atlas texture instead of needing its own dedicated texture per item.
+  if (uvRect) {
+    const { uMin, uMax, vMin, vMax } = uvRect;
+    for (let i = 0; i < uv.length; i += 2) {
+      uv[i] = uMin + uv[i] * (uMax - uMin);
+      uv[i + 1] = vMin + uv[i + 1] * (vMax - vMin);
+    }
+  }
+
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
@@ -164,25 +215,34 @@ function extrudeItemGeometry(img: HTMLImageElement): THREE.BufferGeometry {
 export function buildItemMesh(texturePath: string): THREE.Group {
   const group = new THREE.Group();
   if (!texturePath) return group;
-  const tex = loadTexture(texturePath, () => {});
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.magFilter = THREE.NearestFilter;
-  tex.minFilter = THREE.NearestFilter;
+
+  // Prefer the shared item atlas texture (one GPU upload for every item)
+  // over loading this item's own dedicated texture, once the atlas is built.
+  const rect = itemAtlas?.rects.get(texturePath);
+  const uvRect = itemAtlas && rect ? atlasUV(rect, itemAtlas.atlasWidth, itemAtlas.atlasHeight) : undefined;
+  const tex = itemAtlas && rect ? itemAtlas.texture : loadTexture(texturePath, () => {});
+  if (!itemAtlas || !rect) {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+  }
   const material = new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5, side: THREE.DoubleSide });
   material.userData.baseColor = new THREE.Color(0xffffff); // for tintByLight()
 
   const attach = () => {
-    let geo = itemGeoCache.get(texturePath);
+    const cacheKey = uvRect ? `${texturePath}:atlas` : texturePath;
+    let geo = itemGeoCache.get(cacheKey);
     if (!geo) {
       const img = imageCache.get(texturePath);
       if (!img || !img.complete || !img.naturalWidth) return;
-      geo = extrudeItemGeometry(img);
-      itemGeoCache.set(texturePath, geo);
+      geo = extrudeItemGeometry(img, uvRect);
+      itemGeoCache.set(cacheKey, geo);
     }
     group.add(new THREE.Mesh(geo, material));
   };
 
-  if (itemGeoCache.has(texturePath)) attach();
+  const cacheKey = uvRect ? `${texturePath}:atlas` : texturePath;
+  if (itemGeoCache.has(cacheKey)) attach();
   else whenImageReady(texturePath, attach);
   return group;
 }
@@ -310,6 +370,71 @@ export function buildBlockMesh(slot: InventorySlot, onTextureLoad: () => void = 
     });
     group.add(new THREE.Mesh(new THREE.PlaneGeometry(1.9, 1.9), mat));
     return group;
+  }
+
+  // Fast path: side and top are the same texture (true for most ordinary
+  // blocks, and every stairs/slab/fence/wall/gate which already reuse one
+  // parent texture for both) AND that texture is one of the block atlas's
+  // tiles - use the shared atlas texture (one GPU upload for every such
+  // block) with UVs cropped to just that tile, instead of loading this
+  // block's own dedicated texture. Blocks whose top/side genuinely differ
+  // (grass, oak_log, furnace, crafting_table) fall through to the slower
+  // per-face-texture path below unchanged - the atlas still has their tiles,
+  // this just isn't worth a second material-array/UV-group rewrite for a
+  // preview mesh.
+  if (!isLiquid) {
+    const sideKey = blockAtlasKeyFor(slot.sideTexture);
+    const topKey = blockAtlasKeyFor(slot.topTexture) ?? sideKey;
+    if (sideKey && sideKey === topKey && blockAtlas) {
+      const rect = blockAtlas.rects.get(sideKey)!;
+      const { uMin, uMax, vMin, vMax } = atlasUV(rect, blockAtlas.atlasWidth, blockAtlas.atlasHeight);
+      const base = slot.previewColor ?? 0xffffff;
+      const material = new THREE.MeshBasicMaterial({ map: blockAtlas.texture, color: base });
+      material.userData.baseColor = new THREE.Color(base);
+
+      const shapeBoxes = slot.id == null ? null : itemShapeBoxes(slot.id);
+      const remapUv = (geo: THREE.BoxGeometry) => {
+        const uv = geo.attributes.uv as THREE.BufferAttribute;
+        for (let i = 0; i < uv.count; i += 1) {
+          uv.setXY(i, uMin + uv.getX(i) * (uMax - uMin), vMin + uv.getY(i) * (vMax - vMin));
+        }
+        uv.needsUpdate = true;
+      };
+
+      if (shapeBoxes) {
+        const shaped = new THREE.Group();
+        for (const box of shapeBoxes) {
+          const geo = new THREE.BoxGeometry((box.x1 - box.x0) * SIZE, (box.y1 - box.y0) * SIZE, (box.z1 - box.z0) * SIZE);
+          cropBoxUVs(geo, box); // 0..1 within the block's own texture...
+          remapUv(geo);         // ...then into its slice of the shared atlas
+          const mesh = new THREE.Mesh(geo, material);
+          mesh.position.set(
+            ((box.x0 + box.x1) / 2 - 0.5) * SIZE,
+            ((box.y0 + box.y1) / 2 - 0.5) * SIZE,
+            ((box.z0 + box.z1) / 2 - 0.5) * SIZE,
+          );
+          shaped.add(mesh);
+        }
+        shaped.rotation.y = Math.PI / 4;
+        group.add(shaped);
+        return group;
+      }
+
+      const geo = new THREE.BoxGeometry(SIZE, SIZE, SIZE);
+      remapUv(geo);
+      const cube = new THREE.Mesh(geo, material);
+      cube.rotation.y = Math.PI / 4;
+      group.add(cube);
+
+      const overlayMaterials = Array.from({ length: 6 }, (_, index) => new THREE.MeshBasicMaterial({
+        color: 0x000000, transparent: true, opacity: index === 4 ? 0.5 : index === 1 ? 0.25 : 0, depthWrite: false,
+      }));
+      const overlays = new THREE.Mesh(new THREE.BoxGeometry(1.504, 1.504, 1.504), overlayMaterials);
+      overlays.rotation.y = Math.PI / 4;
+      overlays.renderOrder = 1;
+      group.add(overlays);
+      return group;
+    }
   }
 
   const draw = onTextureLoad;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BlockId, BlockMaterials } from './block';
+import { BlockMaterials } from './block';
 import { buildSubchunkGeometry, BlockReader, LightReader, WaterDistanceReader, WaterFlowReader, BlockDataReader, SubchunkRenderStats } from './mesher';
 
 // 24, not 16: with CHUNK_HEIGHT=152 that's ~7 subchunks/meshes per column
@@ -54,40 +54,30 @@ export class Subchunk {
       this.readWaterDistance,
       this.readWaterFlow,
       this.readBlockData,
+      this.materials.atlas.rects,
+      this.materials.atlas.atlasWidth,
+      this.materials.atlas.atlasHeight,
     );
     const previousGeometry = this.mesh.geometry;
     this.mesh.geometry = geometry;
     this.stats = geometry.userData.renderStats ?? this.stats;
+    // Order must match mesher.ts's MATERIAL_* indices (MATERIAL_OPAQUE=0..MATERIAL_FIRE=9).
+    // Just 10 fixed slots now instead of one per block type - the shared
+    // atlas material (`opaque`) covers most blocks; only render states that
+    // can't share a material (transparency/tint/culling, or animated
+    // scrolling liquids/fire) get their own slot here.
     this.mesh.material = [
-      this.materials[BlockId.BEDROCK],
-      this.materials[BlockId.OAK_PLANKS],
-      this.materials[BlockId.STONE],
-      this.materials[BlockId.DIRT],
-      this.materials[BlockId.GRASS],
-      this.materials[BlockId.GLOWSTONE],
-      this.materials[BlockId.OAK_LOG],
-      this.materials[BlockId.WATER],
-      this.materials[BlockId.OAK_LEAVES],
-      this.materials[BlockId.SAND],
-      this.materials[BlockId.FIRE],
-      this.materials[BlockId.LAVA],
-      this.materials[BlockId.COBBLESTONE],
-      this.materials[BlockId.OBSIDIAN],
-      this.materials[BlockId.ICE],
-      this.materials[BlockId.COAL_ORE],
-      this.materials[BlockId.IRON_ORE],
-      this.materials[BlockId.GOLD_ORE],
-      this.materials[BlockId.DIAMOND_ORE],
-      this.materials[BlockId.EMERALD_ORE],
-      this.materials[BlockId.LAPIS_ORE],
-      this.materials[BlockId.REDSTONE_ORE],
-      this.materials[BlockId.CRAFTING_TABLE],
-      this.materials[BlockId.GLASS],
-      this.materials[BlockId.FURNACE],
-      this.materials[BlockId.TORCH],
-      this.materials[BlockId.WOOL],
-      this.materials[BlockId.GRAVEL],
-    ].flatMap((material) => Array.isArray(material) ? material : [material]);
+      this.materials.opaque,
+      this.materials.leaves,
+      this.materials.glass,
+      this.materials.ice,
+      this.materials.torch,
+      this.materials.waterStill,
+      this.materials.waterFlow,
+      this.materials.lavaStill,
+      this.materials.lavaFlow,
+      this.materials.fire,
+    ];
     previousGeometry.dispose();
   }
 

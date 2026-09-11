@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { BlockId, createBlockMaterials, isSolidBlock } from './block';
+import { initPreviewAtlases } from './block-preview';
 import { Diagnostics } from './diagnostics';
 import { BlockInteraction } from './interaction';
 import { PlayerController } from './player';
@@ -118,7 +119,8 @@ await soundManager.initialize();
 let spawnDrop: ((id: number, count: number, pos: THREE.Vector3) => void) | undefined;
 // Shared with ParticleSystem below, so break/mine chips sample the same
 // already-loaded block textures instead of loading their own copies.
-const blockMaterials = createBlockMaterials();
+const blockMaterials = await createBlockMaterials();
+await initPreviewAtlases(blockMaterials.atlas); // hotbar/dropped/held-item previews reuse the same atlases instead of loading textures a second time
 const world = new World(scene, blockMaterials, terrainNoise, worldSeed, soundManager, (id, count, pos) => spawnDrop?.(id, count, pos));
 await world.loadPersistedEdits(); // apply saved builds before any chunk is generated
 const lightEngine = new LightEngine(world);

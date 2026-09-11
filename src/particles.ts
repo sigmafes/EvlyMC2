@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import type { BlockMaterials } from './block';
+import { BlockId, type BlockMaterials, type BlockAtlasKey } from './block';
 import { ITEMS, isBlock } from './item';
 import { resolveTextureUrl } from './block-preview';
+import { resolveFace } from './mesher';
+import { atlasUV } from './texture-atlas';
 
 const MAX = 200;
 const GRAVITY = 16;
@@ -25,13 +27,16 @@ const MIN_TINT = 0.25; // never let the light tint multiply a chip all the way t
  * the bits that fly off a block while it's mined, when it breaks, and while
  * eating.
  */
+/** A chip's material plus the UV sub-rect (within that material's texture) its own crop must stay inside - the whole 0..1 texture for a dedicated texture, or just this block's tile for the shared atlas. */
+type ChipSource = { material: THREE.MeshBasicMaterial; uMin: number; uMax: number; vMin: number; vMax: number };
+
 export class ParticleSystem {
   private readonly group = new THREE.Group();
   private readonly meshes: THREE.Mesh[] = [];
   private readonly vel: THREE.Vector3[] = [];
   private readonly life: number[] = [];
   private cursor = 0;
-  private readonly materialCache = new Map<number, THREE.MeshBasicMaterial | null>();
+  private readonly materialCache = new Map<number, ChipSource | null>();
   private readonly itemLoader = new THREE.TextureLoader();
 
   constructor(private readonly blockMaterials: BlockMaterials) {
@@ -53,17 +58,62 @@ export class ParticleSystem {
     scene.add(this.group);
   }
 
-  /** The (shared, never mutated) material to render chips of a block or item id with, or null if there's no texture for it. */
-  private materialFor(id: number): THREE.MeshBasicMaterial | null {
+  /** The block material this atlas key routes through for tint/alphaTest inheritance (see resolveFace's own special-cased ids). */
+  private baseMaterialFor(atlasKey: BlockAtlasKey): THREE.MeshBasicMaterial {
+    if (atlasKey === 'oak_leaves') return this.blockMaterials.leaves;
+    if (atlasKey === 'glass') return this.blockMaterials.glass;
+    if (atlasKey === 'ice') return this.blockMaterials.ice;
+    if (atlasKey === 'torch') return this.blockMaterials.torch;
+    return this.blockMaterials.opaque;
+  }
+
+  /**
+   * The (shared, never mutated) material + UV sub-rect to render chips of a
+   * block or item id with, or null if there's no texture for it. For a block
+   * this samples its face-0 tile in the shared atlas (same tile
+   * mesher.ts's resolveFace(id, 0) would pick for that block's "primary"
+   * face) - the chip's own random crop (in spawnOne) must then stay inside
+   * that tile's rect, not the whole atlas, or it'd show a random unrelated
+   * block's texture.
+   */
+  private materialFor(id: number): ChipSource | null {
     if (this.materialCache.has(id)) return this.materialCache.get(id)!;
 
-    let source: THREE.Texture | null = null;
-    let baseMaterial: THREE.MeshBasicMaterial | undefined;
+    let result: ChipSource | null = null;
     if (isBlock(id)) {
-      const mat = (this.blockMaterials as Record<number, THREE.Material | THREE.Material[]>)[id];
-      const base = Array.isArray(mat) ? mat[0] : mat;
-      baseMaterial = base as THREE.MeshBasicMaterial | undefined;
-      source = baseMaterial?.map ?? null;
+      const { atlasKey } = resolveFace(id, 0);
+      if (atlasKey) {
+        const rect = this.blockMaterials.atlas.rects.get(atlasKey);
+        if (rect) {
+          const baseMaterial = this.baseMaterialFor(atlasKey);
+          const { uMin, uMax, vMin, vMax } = atlasUV(rect, this.blockMaterials.atlas.atlasWidth, this.blockMaterials.atlas.atlasHeight);
+          const material = new THREE.MeshBasicMaterial({
+            map: this.blockMaterials.atlas.texture,
+            vertexColors: true,
+            transparent: true,
+            // Inherit the block's own cutout threshold (leaves/glass are 0.5), so a
+            // chip cropped from a see-through part of the texture drops out cleanly
+            // instead of lingering as a murky half-transparent square.
+            alphaTest: Math.max(0.05, baseMaterial.alphaTest ?? 0),
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          });
+          // Carry over the block material's own tint. Leaves are the case that
+          // needs it: oak_leaves.png is a greyscale/indexed texture that only
+          // becomes green because its material multiplies in 0x4a8a2e, so
+          // without this its chips broke off grey. (Untinted blocks have a
+          // white colour here, a no-op.)
+          if (baseMaterial.color) material.color.copy(baseMaterial.color);
+          result = { material, uMin, uMax, vMin, vMax };
+        }
+      } else {
+        // Fire/water/lava: not minable, so this shouldn't come up in
+        // practice, but fall back to their own dedicated full texture.
+        const liquidMaterial = id === BlockId.WATER ? this.blockMaterials.waterStill : id === BlockId.LAVA ? this.blockMaterials.lavaStill : null;
+        if (liquidMaterial?.map) {
+          result = { material: liquidMaterial.clone(), uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
+        }
+      }
     } else {
       const itemTexture = ITEMS[id]?.texture;
       if (itemTexture) {
@@ -71,33 +121,19 @@ export class ParticleSystem {
         // `new URL('../textures/' + path, import.meta.url)` only globs one
         // directory level, so it silently resolved to nothing for the
         // items/ subfolder and the eating crumbs came out untextured.
-        source = this.itemLoader.load(resolveTextureUrl(itemTexture));
+        const source = this.itemLoader.load(resolveTextureUrl(itemTexture));
         source.magFilter = THREE.NearestFilter;
         source.minFilter = THREE.NearestFilter;
         source.colorSpace = THREE.SRGBColorSpace;
+        const material = new THREE.MeshBasicMaterial({
+          map: source, vertexColors: true, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide, depthWrite: false,
+        });
+        result = { material, uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
       }
     }
 
-    const material = source
-      ? new THREE.MeshBasicMaterial({
-        map: source,
-        vertexColors: true,
-        transparent: true,
-        // Inherit the block's own cutout threshold (leaves/glass are 0.5), so a
-        // chip cropped from a see-through part of the texture drops out cleanly
-        // instead of lingering as a murky half-transparent square.
-        alphaTest: Math.max(0.05, baseMaterial?.alphaTest ?? 0),
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      })
-      : null;
-    // Carry over the block material's own tint. Leaves are the case that needs
-    // it: oak_leaves.png is a greyscale/indexed texture that only becomes green
-    // because its material multiplies in 0x4a8a2e, so without this its chips
-    // broke off grey. (Untinted blocks have a white colour here, a no-op.)
-    if (material && baseMaterial?.color) material.color.copy(baseMaterial.color);
-    this.materialCache.set(id, material);
-    return material;
+    this.materialCache.set(id, result);
+    return result;
   }
 
   private spawnOne(
@@ -109,21 +145,26 @@ export class ParticleSystem {
     this.cursor = (this.cursor + 1) % MAX;
     const mesh = this.meshes[i];
 
-    const material = this.materialFor(id);
-    if (!material) {
+    const chip = this.materialFor(id);
+    if (!chip) {
       mesh.visible = false;
       this.life[i] = 0;
       return;
     }
-    mesh.material = material;
-    material.opacity = 1;
+    mesh.material = chip.material;
+    chip.material.opacity = 1;
 
     const geo = mesh.geometry as THREE.PlaneGeometry;
-    // Random small crop of the source texture (vanilla MC's own "chip" look).
-    const u0 = Math.random() * (1 - CHIP_UV_SIZE);
-    const v0 = Math.random() * (1 - CHIP_UV_SIZE);
-    const u1 = u0 + CHIP_UV_SIZE;
-    const v1 = v0 + CHIP_UV_SIZE;
+    // Random small crop of the source texture (vanilla MC's own "chip" look) -
+    // scoped to this block's own tile within the atlas (uMin..uMax/vMin..vMax),
+    // not the whole 0..1 texture, so a chip can't land on a neighbouring
+    // block's tile.
+    const uSpan = (chip.uMax - chip.uMin) * CHIP_UV_SIZE;
+    const vSpan = (chip.vMax - chip.vMin) * CHIP_UV_SIZE;
+    const u0 = chip.uMin + Math.random() * (chip.uMax - chip.uMin - uSpan);
+    const v0 = chip.vMin + Math.random() * (chip.vMax - chip.vMin - vSpan);
+    const u1 = u0 + uSpan;
+    const v1 = v0 + vSpan;
     // PlaneGeometry's default UV order: bottom-left, bottom-right, top-left, top-right.
     (geo.attributes.uv as THREE.BufferAttribute).set([u0, v0, u1, v0, u0, v1, u1, v1]);
     geo.attributes.uv.needsUpdate = true;

@@ -22,7 +22,35 @@ export type GameLoopState = {
   metrics: GameLoopMetrics;
 };
 
+const TARGET_FRAME_MS = 1000 / 60;
+const EMA_SMOOTHING = 0.1;
+
+/**
+ * Scales a per-frame work budget (chunk streaming, mesh rebuilds) by how much
+ * headroom recent frames actually had relative to 60fps, instead of a fixed
+ * number picked once and never revisited. A smoothed (EMA) frame time avoids
+ * reacting to a single jittery frame - a machine that's consistently slow
+ * gets less streaming work per frame (leaving more room for rendering), a
+ * machine with headroom gets more (loads the world faster without wasting
+ * margin it doesn't need). min/max keep it from ever hitting 0 (world never
+ * finishes loading) or going unbounded (recreates the stutter this exists to
+ * avoid).
+ */
+class FrameBudget {
+  private emaMs = TARGET_FRAME_MS;
+
+  update(lastFrameMs: number): void {
+    this.emaMs += (lastFrameMs - this.emaMs) * EMA_SMOOTHING;
+  }
+
+  scale(base: number, min: number, max: number): number {
+    const factor = TARGET_FRAME_MS / Math.max(this.emaMs, 1);
+    return Math.max(min, Math.min(max, base * factor));
+  }
+}
+
 export class GameLoop {
+  private readonly frameBudget = new FrameBudget();
   constructor(
     private readonly world: World,
     private readonly player: PlayerController,
@@ -38,6 +66,7 @@ export class GameLoop {
   update(delta: number, elapsedTime: number): GameLoopState {
     // Cap delta to prevent spiral of death
     const cappedDelta = Math.min(delta, 0.05);
+    this.frameBudget.update(delta * 1000); // delta is the PREVIOUS frame's duration (main.ts's clock.getDelta())
 
     // Player input and movement. Runs whenever the game isn't paused (Tab menu) -
     // UI overlays like the inventory only block movement input (see
@@ -48,7 +77,10 @@ export class GameLoop {
 
     // World updates
     this.world.updateLoadedChunks(this.player.state.position.x, this.player.state.position.z);
-    this.world.loadPendingChunks(3); // build queued chunks, time-budgeted
+    this.world.loadPendingChunks(
+      this.frameBudget.scale(3, 1, 6),
+      Math.round(this.frameBudget.scale(32, 8, 48)),
+    ); // build queued chunks, time-budgeted (adaptive - see FrameBudget)
     this.world.updateLeavesDecay(cappedDelta);
     this.world.updateWaterAnimation(elapsedTime);
     this.world.updateWater(cappedDelta);
@@ -66,7 +98,7 @@ export class GameLoop {
       this.player.state.position.x,
       this.player.state.position.y,
       this.player.state.position.z,
-      3, // subchunk mesh rebuilds per frame
+      Math.round(this.frameBudget.scale(3, 1, 6)), // subchunk mesh rebuilds per frame (adaptive)
     );
     let meshMs = performance.now() - meshStartedAt;
 

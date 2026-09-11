@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { BlockId, blockLightProperties, isFlammable, STATEFUL_BLOCKS } from './block';
+import { BlockId, blockLightProperties, isFlammable, STATEFUL_BLOCKS, type BlockAtlasKey } from './block';
 import type { BlockData } from './block-data';
 import { FACING_TO_FACE_INDEX } from './block-data';
 import { type ShapeBox, shapeBoxesFor, coversWholeFace, isShapedBlock, SHAPE_PARENT } from './block-shapes';
+import { atlasUV, type PixelRect } from './texture-atlas';
 
 /** A block that fire can stand on top of (used to pick floor vs wall fire). */
 function isFireGround(id: BlockId): boolean {
@@ -13,45 +14,26 @@ function isFireGround(id: BlockId): boolean {
     && id !== BlockId.OAK_LEAVES;
 }
 
-export const MATERIAL_BEDROCK = 0;
-export const MATERIAL_OAK_PLANKS = 1;
-export const MATERIAL_STONE = 2;
-export const MATERIAL_DIRT = 3;
-export const MATERIAL_GRASS_SIDE = 4;
-export const MATERIAL_GRASS_TOP = 5;
-export const MATERIAL_GRASS_BOTTOM = 6;
-export const MATERIAL_GLOWSTONE = 7;
-export const MATERIAL_OAK_LOG_SIDE = 8;
-export const MATERIAL_OAK_LOG_TOP = 9;
-export const MATERIAL_WATER_STILL = 10;
-export const MATERIAL_WATER_FLOW = 11;
-export const MATERIAL_OAK_LEAVES = 12;
-export const MATERIAL_SAND = 13;
-export const MATERIAL_FIRE = 14;
-export const MATERIAL_LAVA_STILL = 15;
-export const MATERIAL_LAVA_FLOW = 16;
-export const MATERIAL_COBBLESTONE = 17;
-export const MATERIAL_OBSIDIAN = 18;
-export const MATERIAL_ICE = 19;
-export const MATERIAL_COAL_ORE = 20;
-export const MATERIAL_IRON_ORE = 21;
-export const MATERIAL_GOLD_ORE = 22;
-export const MATERIAL_DIAMOND_ORE = 23;
-export const MATERIAL_EMERALD_ORE = 24;
-export const MATERIAL_LAPIS_ORE = 25;
-export const MATERIAL_REDSTONE_ORE = 26;
-export const MATERIAL_CRAFTING_TABLE_SIDE1 = 27;
-export const MATERIAL_CRAFTING_TABLE_SIDE2 = 28;
-export const MATERIAL_CRAFTING_TABLE_TOP = 29;
-export const MATERIAL_GLASS = 30;
-export const MATERIAL_FURNACE_SIDE = 31;
-export const MATERIAL_FURNACE_FRONT_OFF = 32;
-export const MATERIAL_FURNACE_FRONT_ON = 33;
-export const MATERIAL_FURNACE_TOP = 34;
-export const MATERIAL_TORCH = 35;
-export const MATERIAL_WOOL = 36;
-export const MATERIAL_GRAVEL = 37;
-const MATERIAL_COUNT = 38;
+// Down from 38 (one per block type) to 10: every plain block now shares one
+// atlas texture (MATERIAL_OPAQUE), differentiated by which atlas tile a face's
+// UVs point at (see resolveFace/BLOCK_ATLAS_TILES in block.ts) instead of by a
+// separate material/draw-call each. Only render states that genuinely can't
+// share a material (transparency/tint/culling: leaves, glass, ice, torch) or
+// can't fit a static atlas tile (animated scrolling liquids/fire) stay split out.
+export const MATERIAL_OPAQUE = 0;
+export const MATERIAL_LEAVES = 1;
+export const MATERIAL_GLASS = 2;
+export const MATERIAL_ICE = 3;
+export const MATERIAL_TORCH = 4;
+export const MATERIAL_WATER_STILL = 5;
+export const MATERIAL_WATER_FLOW = 6;
+export const MATERIAL_LAVA_STILL = 7;
+export const MATERIAL_LAVA_FLOW = 8;
+export const MATERIAL_FIRE = 9;
+const MATERIAL_COUNT = 10;
+
+/** Which atlas rects a face resolves to, keyed by material index (only atlas-backed materials appear here). */
+export type FaceResolution = { material: number; atlasKey?: BlockAtlasKey };
 
 export type BlockReader = (x: number, y: number, z: number) => BlockId;
 export type LightReader = (x: number, y: number, z: number) => number;
@@ -216,6 +198,7 @@ function addFireCeiling(
  */
 function addTorch(
   vertices: number[], uvs: number[], colors: number[], indices: number[],
+  uvRect: { uMin: number; uMax: number; vMin: number; vMax: number },
   wx: number, y: number, wz: number, facing: number | undefined,
 ) {
   const hw = 0.45;          // half quad width
@@ -246,7 +229,7 @@ function addTorch(
           [wx + bx, by, wz + bz + hw],
         ];
     for (const [X, Y, Z] of corners) { vertices.push(X, Y, Z); colors.push(1, 1, 1); }
-    uvs.push(0, 0, 0, 1, 1, 1, 1, 0);
+    uvs.push(uvRect.uMin, uvRect.vMin, uvRect.uMin, uvRect.vMax, uvRect.uMax, uvRect.vMax, uvRect.uMax, uvRect.vMin);
     indices.push(
       base, base + 1, base + 2, base, base + 2, base + 3,
       base, base + 2, base + 1, base, base + 3, base + 2,
@@ -258,7 +241,9 @@ function addTorch(
  * Per-face (u,v) parametrisation matching what the full-cube path produces,
  * so a sub-box samples exactly the part of the texture that the same slice of
  * a full block would have shown (a half slab gets the bottom half of the
- * texture on its sides, not a squashed copy of the whole thing).
+ * texture on its sides, not a squashed copy of the whole thing). Returned in
+ * the block's OWN local 0..1 texture space - the caller composes this with
+ * the block's atlas rect to get the real atlas-space UV.
  */
 function faceUV(faceIndex: number, x: number, y: number, z: number): [number, number] {
   switch (faceIndex) {
@@ -271,10 +256,10 @@ function faceUV(faceIndex: number, x: number, y: number, z: number): [number, nu
   }
 }
 
-/** Emits the 6 faces of one sub-box of a stair/slab, in local 0..1 cell coords. */
+/** Emits the 6 faces of one sub-box of a stair/slab/fence/wall/gate, in local 0..1 cell coords. */
 function addShapeBox(
   vertices: number[][], uvs: number[][], colors: number[][], indices: number[][],
-  material: number, box: ShapeBox, worldX: number, y: number, worldZ: number,
+  material: number, uvRect: { uMin: number; uMax: number; vMin: number; vMax: number }, box: ShapeBox, worldX: number, y: number, worldZ: number,
   readBlock: BlockReader, readLight: LightReader,
 ): number {
   const lo = [box.x0, box.y0, box.z0];
@@ -304,7 +289,7 @@ function addShapeBox(
       const lz = corner[2] === 0 ? lo[2] : hi[2];
       positionData.push(worldX - 0.5 + lx, y - 0.5 + ly, worldZ - 0.5 + lz);
       const [u, v] = faceUV(faceIndex, lx, ly, lz);
-      uvData.push(u, v);
+      uvData.push(uvRect.uMin + u * (uvRect.uMax - uvRect.uMin), uvRect.vMin + v * (uvRect.vMax - uvRect.vMin));
       // A face that stops short of the cell boundary (a slab's top, a stair's
       // riser) is lit by the air in THIS cell, not by whatever is in the next
       // one - sampling the neighbour turned a slab's top face black as soon
@@ -324,16 +309,36 @@ function addShapeBox(
   return emitted;
 }
 
-function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number = 0, data?: BlockData) {
-  // Stairs/slabs (including a doubled slab coming through the full-cube path)
-  // render with their parent block's texture.
+/**
+ * Which material a face renders with, and (for the atlas-backed materials)
+ * which named tile of the shared block atlas its UVs should point at. Same
+ * per-block/per-face logic as before the atlas (grass top/side/bottom, log
+ * axis, furnace facing+lit, crafting table sides) - it just resolves to a
+ * texture NAME now instead of a dedicated material index, since most of
+ * these blocks now share one material (MATERIAL_OPAQUE).
+ */
+export function resolveFace(id: BlockId, faceIndex: number, liquidDistance: number = 0, data?: BlockData): FaceResolution {
+  // Stairs/slabs/fences/etc (including a doubled slab coming through the
+  // full-cube path) render with their parent block's texture.
   const parent = SHAPE_PARENT[id];
-  if (parent !== undefined) return materialForFace(parent, faceIndex, liquidDistance, data);
-  if (id === BlockId.BEDROCK) return MATERIAL_BEDROCK;
-  if (id === BlockId.OAK_PLANKS) return MATERIAL_OAK_PLANKS;
-  if (id === BlockId.STONE) return MATERIAL_STONE;
-  if (id === BlockId.DIRT) return MATERIAL_DIRT;
-  if (id === BlockId.GLOWSTONE) return MATERIAL_GLOWSTONE;
+  if (parent !== undefined) return resolveFace(parent, faceIndex, liquidDistance, data);
+
+  if (id === BlockId.FIRE) return { material: MATERIAL_FIRE };
+  if (id === BlockId.WATER) return { material: liquidDistance === 0 ? MATERIAL_WATER_STILL : MATERIAL_WATER_FLOW };
+  if (id === BlockId.LAVA) return { material: liquidDistance === 0 ? MATERIAL_LAVA_STILL : MATERIAL_LAVA_FLOW };
+
+  // These need their own render state (transparency/tint/culling) so they
+  // can't share MATERIAL_OPAQUE, but still sample the shared atlas texture.
+  if (id === BlockId.OAK_LEAVES) return { material: MATERIAL_LEAVES, atlasKey: 'oak_leaves' };
+  if (id === BlockId.GLASS) return { material: MATERIAL_GLASS, atlasKey: 'glass' };
+  if (id === BlockId.ICE) return { material: MATERIAL_ICE, atlasKey: 'ice' };
+  if (id === BlockId.TORCH) return { material: MATERIAL_TORCH, atlasKey: 'torch' };
+
+  if (id === BlockId.BEDROCK) return { material: MATERIAL_OPAQUE, atlasKey: 'bedrock' };
+  if (id === BlockId.OAK_PLANKS) return { material: MATERIAL_OPAQUE, atlasKey: 'oak_planks' };
+  if (id === BlockId.STONE) return { material: MATERIAL_OPAQUE, atlasKey: 'stone' };
+  if (id === BlockId.DIRT) return { material: MATERIAL_OPAQUE, atlasKey: 'dirt' };
+  if (id === BlockId.GLOWSTONE) return { material: MATERIAL_OPAQUE, atlasKey: 'glowstone' };
   if (id === BlockId.OAK_LOG) {
     // Bark-ring end caps sit on whichever pair of faces the log's own axis
     // points along (LCE RotatedPillarTile / LogTile: axis set from the face
@@ -343,41 +348,35 @@ function materialForFace(id: BlockId, faceIndex: number, liquidDistance: number 
     const endFace = axis === 'x' ? (faceIndex === 0 || faceIndex === 1)
       : axis === 'z' ? (faceIndex === 4 || faceIndex === 5)
       : (faceIndex === 2 || faceIndex === 3);
-    return endFace ? MATERIAL_OAK_LOG_TOP : MATERIAL_OAK_LOG_SIDE;
+    return { material: MATERIAL_OPAQUE, atlasKey: endFace ? 'oak_log_top' : 'oak_log' };
   }
-  if (id === BlockId.OAK_LEAVES) return MATERIAL_OAK_LEAVES;
-  if (id === BlockId.SAND) return MATERIAL_SAND;
-  if (id === BlockId.GRAVEL) return MATERIAL_GRAVEL;
-  if (id === BlockId.FIRE) return MATERIAL_FIRE;
-  if (id === BlockId.WATER) return liquidDistance === 0 ? MATERIAL_WATER_STILL : MATERIAL_WATER_FLOW;
-  if (id === BlockId.LAVA) return liquidDistance === 0 ? MATERIAL_LAVA_STILL : MATERIAL_LAVA_FLOW;
-  if (id === BlockId.COBBLESTONE) return MATERIAL_COBBLESTONE;
-  if (id === BlockId.OBSIDIAN) return MATERIAL_OBSIDIAN;
-  if (id === BlockId.ICE) return MATERIAL_ICE;
-  if (id === BlockId.GLASS) return MATERIAL_GLASS;
-  if (id === BlockId.WOOL) return MATERIAL_WOOL;
+  if (id === BlockId.SAND) return { material: MATERIAL_OPAQUE, atlasKey: 'sand' };
+  if (id === BlockId.GRAVEL) return { material: MATERIAL_OPAQUE, atlasKey: 'gravel' };
+  if (id === BlockId.COBBLESTONE) return { material: MATERIAL_OPAQUE, atlasKey: 'cobblestone' };
+  if (id === BlockId.OBSIDIAN) return { material: MATERIAL_OPAQUE, atlasKey: 'obsidian' };
+  if (id === BlockId.WOOL) return { material: MATERIAL_OPAQUE, atlasKey: 'wool' };
   if (id === BlockId.FURNACE) {
-    if (faceIndex === 2 || faceIndex === 3) return MATERIAL_FURNACE_TOP; // top & bottom
+    if (faceIndex === 2 || faceIndex === 3) return { material: MATERIAL_OPAQUE, atlasKey: 'furnace_top' }; // top & bottom
     const front = data?.facing != null ? FACING_TO_FACE_INDEX[data.facing] : 4; // default +Z
-    if (faceIndex === front) return data?.lit ? MATERIAL_FURNACE_FRONT_ON : MATERIAL_FURNACE_FRONT_OFF;
-    return MATERIAL_FURNACE_SIDE;
+    if (faceIndex === front) return { material: MATERIAL_OPAQUE, atlasKey: data?.lit ? 'furnace_on' : 'furnace_off' };
+    return { material: MATERIAL_OPAQUE, atlasKey: 'furnace_side' };
   }
-  if (id === BlockId.COAL_ORE) return MATERIAL_COAL_ORE;
-  if (id === BlockId.IRON_ORE) return MATERIAL_IRON_ORE;
-  if (id === BlockId.GOLD_ORE) return MATERIAL_GOLD_ORE;
-  if (id === BlockId.DIAMOND_ORE) return MATERIAL_DIAMOND_ORE;
-  if (id === BlockId.EMERALD_ORE) return MATERIAL_EMERALD_ORE;
-  if (id === BlockId.LAPIS_ORE) return MATERIAL_LAPIS_ORE;
-  if (id === BlockId.REDSTONE_ORE) return MATERIAL_REDSTONE_ORE;
+  if (id === BlockId.COAL_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'coal_ore' };
+  if (id === BlockId.IRON_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'iron_ore' };
+  if (id === BlockId.GOLD_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'gold_ore' };
+  if (id === BlockId.DIAMOND_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'diamond_ore' };
+  if (id === BlockId.EMERALD_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'emerald_ore' };
+  if (id === BlockId.LAPIS_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'lapis_ore' };
+  if (id === BlockId.REDSTONE_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'redstone_ore' };
   if (id === BlockId.CRAFTING_TABLE) {
-    if (faceIndex === 2) return MATERIAL_CRAFTING_TABLE_TOP;   // +Y
-    if (faceIndex === 3) return MATERIAL_OAK_PLANKS;           // -Y (underside = planks)
+    if (faceIndex === 2) return { material: MATERIAL_OPAQUE, atlasKey: 'crafting_table_top' };  // +Y
+    if (faceIndex === 3) return { material: MATERIAL_OPAQUE, atlasKey: 'oak_planks' };            // -Y (underside = planks)
     // sides go 1,2,1,2 around: +X/-X = side1, +Z/-Z = side2
-    return faceIndex === 0 || faceIndex === 1 ? MATERIAL_CRAFTING_TABLE_SIDE1 : MATERIAL_CRAFTING_TABLE_SIDE2;
+    return { material: MATERIAL_OPAQUE, atlasKey: faceIndex === 0 || faceIndex === 1 ? 'crafting_table_side1' : 'crafting_table_side2' };
   }
-  if (faceIndex === 2) return MATERIAL_GRASS_TOP;
-  if (faceIndex === 3) return MATERIAL_GRASS_BOTTOM;
-  return MATERIAL_GRASS_SIDE;
+  if (faceIndex === 2) return { material: MATERIAL_OPAQUE, atlasKey: 'grass_top' };
+  if (faceIndex === 3) return { material: MATERIAL_OPAQUE, atlasKey: 'dirt' }; // grass's underside = dirt
+  return { material: MATERIAL_OPAQUE, atlasKey: 'grass' };
 }
 
 function getLiquidCornerHeight(
@@ -447,7 +446,11 @@ export function buildSubchunkGeometry(
   readWaterDistance: WaterDistanceReader = () => 0,
   readWaterFlow: WaterFlowReader = () => new THREE.Vector3(),
   readBlockData: BlockDataReader = () => undefined,
+  atlasRects: Map<string, PixelRect> = new Map(),
+  atlasWidth = 1,
+  atlasHeight = 1,
 ) {
+  const uvRectFor = (key: BlockAtlasKey) => atlasUV(atlasRects.get(key)!, atlasWidth, atlasHeight);
   const vertices: number[][] = Array.from({ length: MATERIAL_COUNT }, () => []);
   const uvs: number[][] = Array.from({ length: MATERIAL_COUNT }, () => []);
   const colors: number[][] = Array.from({ length: MATERIAL_COUNT }, () => []);
@@ -497,7 +500,7 @@ export function buildSubchunkGeometry(
           const facing = readBlockData(worldX, y, worldZ)?.facing;
           addTorch(
             vertices[MATERIAL_TORCH], uvs[MATERIAL_TORCH], colors[MATERIAL_TORCH], indices[MATERIAL_TORCH],
-            worldX, y, worldZ, facing,
+            uvRectFor('torch'), worldX, y, worldZ, facing,
           );
           exposedFaces += 2;
           continue;
@@ -508,10 +511,11 @@ export function buildSubchunkGeometry(
           // cube (a doubled slab falls through to the normal path).
           const boxes = shapeBoxesFor(id, worldX, y, worldZ, readBlock, readBlockData);
           if (boxes) {
-            const material = materialForFace(id, 0);
+            const { material, atlasKey } = resolveFace(id, 0);
+            const uvRect = atlasKey ? uvRectFor(atlasKey) : { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
             for (const box of boxes) {
               exposedFaces += addShapeBox(
-                vertices, uvs, colors, indices, material, box,
+                vertices, uvs, colors, indices, material, uvRect, box,
                 worldX, y, worldZ, readBlock, readLight,
               );
             }
@@ -553,7 +557,7 @@ export function buildSubchunkGeometry(
           }
 
           const liquidDistance = (isWater || isLava) ? readWaterDistance(id, worldX, y, worldZ) : 0;
-          const material = materialForFace(id, faceIndex, liquidDistance, blockData);
+          const { material, atlasKey } = resolveFace(id, faceIndex, liquidDistance, blockData);
           exposedFaces += 1;
           const positionData = vertices[material];
           const uvData = uvs[material];
@@ -583,7 +587,13 @@ export function buildSubchunkGeometry(
               * (ambientOcclusion && !isWater && !isLava ? getAmbientOcclusion(readBlock, worldX, y, worldZ, face, corner) : 1);
             colors[material].push(brightness, brightness, brightness);
           }
-          let faceUVs = [0, 0, 0, 1, 1, 1, 1, 0];
+          let faceUVs: number[];
+          if (atlasKey) {
+            const { uMin, uMax, vMin, vMax } = uvRectFor(atlasKey);
+            faceUVs = [uMin, vMin, uMin, vMax, uMax, vMax, uMax, vMin];
+          } else {
+            faceUVs = [0, 0, 0, 1, 1, 1, 1, 0]; // fire/water/lava: own dedicated full-texture materials, unchanged
+          }
           if ((isWater || isLava) && faceIndex === 2 && material === (id === BlockId.WATER ? MATERIAL_WATER_FLOW : MATERIAL_LAVA_FLOW)) {
             const flow = readWaterFlow(worldX, y, worldZ);
             if (flow.length() > 0) {
