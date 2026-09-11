@@ -97,6 +97,7 @@ export class MobModel {
   private idleTime = 0;
   private lightLevel01 = 1;
   private hurtFlashTimer = 0;
+  private dying = false;
   private static readonly HURT_FLASH_DURATION = 0.2;
   private static readonly HURT_TINT_STRENGTH = 0.75;
   private static readonly HURT_RED = new THREE.Color(1, 0, 0);
@@ -164,12 +165,17 @@ export class MobModel {
     this.hurtFlashTimer = MobModel.HURT_FLASH_DURATION;
   }
 
+  /** Keep the hurt tint on indefinitely (death spin) instead of it expiring after HURT_FLASH_DURATION. */
+  setDying(on: boolean): void {
+    this.dying = on;
+  }
+
   /** Advance idle/walk animation. Call once per frame. */
   update(delta: number): void {
     this.idleTime += delta;
 
     const b = Math.pow(this.lightLevel01, 1.25);
-    if (this.hurtFlashTimer > 0) {
+    if (this.hurtFlashTimer > 0 || this.dying) {
       this.hurtFlashTimer = Math.max(0, this.hurtFlashTimer - delta);
       // Non-emissive: tint the lit base colour toward red instead of
       // overriding it outright, so the flash still darkens in shade.

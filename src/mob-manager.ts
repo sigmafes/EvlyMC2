@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MobModel, type QuadrupedSpec } from './mob-model';
+import { BlockId } from './block';
 import { ItemId } from './item';
 import { playMobSound } from './mob-sounds';
 import type { SoundManager } from './sound-manager';
@@ -34,7 +35,7 @@ function rollDrops(kind: MobKind): DropStack[] {
       return out;
     }
     case 'sheep':
-      return [{ id: ItemId.WOOL, count: 1 }, { id: ItemId.RAW_MUTTON, count: 1 }];
+      return [{ id: BlockId.WOOL, count: 1 }, { id: ItemId.RAW_MUTTON, count: 1 }];
   }
 }
 
@@ -53,12 +54,14 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
 };
 
 const GRAVITY = 24;
+const JUMP_FORCE = 8; // matches the player's own jump impulse (player-physics.ts)
 const FLEE_DURATION = 3; // seconds, LCE PanicGoal-style
-const WANDER_PAUSE_MIN = 1;
-const WANDER_PAUSE_MAX = 2.5;
-const WANDER_RADIUS_MIN = 3;
-const WANDER_RADIUS_MAX = 6;
-const FLEE_RADIUS_MIN = 5;
+const WANDER_RADIUS = 5; // "un bloque aleatorio en un radio de 5 bloques"
+const WANDER_INTERVAL_MIN = 8; // "se moverán cada 8-12s"
+const WANDER_INTERVAL_MAX = 12;
+const LOOK_DURATION_MIN = 0.4; // brief look-around turn before setting off to wander
+const LOOK_DURATION_MAX = 1.0;
+const FLEE_RADIUS_MIN = 4; // "correrán hacia un bloque aleatorio en un radio de 8 bloques"
 const FLEE_RADIUS_MAX = 8;
 const FLEE_REPATH_CONE = Math.PI / 2; // random point within +-90 deg of "away from the attacker"
 const WAYPOINT_REACH_DIST = 0.3;
@@ -69,6 +72,10 @@ const IDLE_SOUND_MAX = 9;
 const KNOCKBACK_SPEED = 5;
 const KNOCKBACK_UP = 4;
 const KNOCKBACK_DECAY = 8; // per second, exponential
+const WATER_BUOYANCY = 18; // upward accel while submerged, LCE-ish "float up" feel
+const WATER_RISE_SPEED = 2.2; // cap on how fast a mob bobs upward
+const WATER_RECHECK_INTERVAL = 1; // how often a swimming mob looks for shore
+const DEATH_SPIN_DURATION = 0.45; // seconds to turn 90 deg left before vanishing
 
 // Shared wireframe box geometry/material for the debug hitbox (R key) - one
 // GPU resource, scaled per mob instance, same pattern as DroppedItems' boxes.
@@ -93,7 +100,15 @@ type Mob = {
   fleeDir: THREE.Vector3; // unit vector away from the last thing that hurt this mob
   path: PathPoint[] | null;
   pathIndex: number;
-  pauseTimer: number; // >0 while idling with no path, counts down
+  decisionTimer: number; // seconds until the next wander decision (8-12s cadence)
+  lookTimer: number; // >0 while turning to a random heading before setting off
+  lookTargetYaw: number;
+  inWater: boolean;
+  waterCheckTimer: number;
+  // Death
+  dying: boolean;
+  deathTimer: number;
+  deathStartYaw: number;
   // Sound
   stepTimer: number;
   idleSoundTimer: number;
@@ -104,10 +119,11 @@ type Mob = {
 export type MobRaycastHit = { mobId: number; kind: MobKind; distance: number };
 
 /**
- * Fase H+: mobs with real (if simple) AI - wander when idle, flee in a
- * straight line away from whatever last hurt them - plus health, death and
- * drops. Still no pathfinding/obstacle avoidance (a blocked mob just picks a
- * new direction sooner) and no persistence.
+ * Fase H+: mobs with real (if simple) AI - wander a random reachable block
+ * every 8-12s (with a brief look-around first), flee to a random reachable
+ * block when hurt, float and seek shore if they end up in water, jump over
+ * 1-block obstacles, and play a short death spin + smoke poof on death - plus
+ * health, combat knockback and drops.
  */
 export class MobManager {
   private readonly mobs: Mob[] = [];
@@ -119,6 +135,8 @@ export class MobManager {
     private readonly isSolid: (x: number, y: number, z: number) => boolean,
     private readonly onDrop?: (id: number, count: number, pos: THREE.Vector3) => void,
     private readonly soundManager?: SoundManager,
+    private readonly isWater?: (x: number, y: number, z: number) => boolean,
+    private readonly onDeath?: (pos: THREE.Vector3) => void,
   ) {}
 
   spawn(kind: MobKind, spec: QuadrupedSpec, pos: THREE.Vector3, yaw: number): void {
@@ -152,7 +170,14 @@ export class MobManager {
       fleeDir: new THREE.Vector3(),
       path: null,
       pathIndex: 0,
-      pauseTimer: ri(0, 20) / 10, // stagger initial wander so a group doesn't move in lockstep
+      decisionTimer: ri(0, 120) / 10, // stagger initial wander so a group doesn't move in lockstep
+      lookTimer: 0,
+      lookTargetYaw: yaw,
+      inWater: false,
+      waterCheckTimer: 0,
+      dying: false,
+      deathTimer: 0,
+      deathStartYaw: yaw,
       stepTimer: 0,
       idleSoundTimer: ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10,
       box,
@@ -169,6 +194,7 @@ export class MobManager {
   raycastMobs(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): MobRaycastHit | null {
     let best: MobRaycastHit | null = null;
     for (const mob of this.mobs) {
+      if (mob.dying) continue;
       const center = mob.model.getGroup().position.clone();
       center.y += mob.height / 2;
       const hit = raySphereDistance(origin, dir, center, mob.radius);
@@ -179,27 +205,30 @@ export class MobManager {
     return best;
   }
 
-  /** Apply damage; on death, spawns drops and removes the mob. Returns true if it died. */
+  /** Apply damage; on death, starts the death-spin animation (drops/removal happen once it finishes). Returns true if it died. */
   damage(mobId: number, amount: number, fromPos: THREE.Vector3): boolean {
     const index = this.mobs.findIndex((m) => m.id === mobId);
     if (index === -1) return false;
     const mob = this.mobs[index];
+    if (mob.dying) return false;
     mob.health -= amount;
 
     if (mob.health <= 0) {
       if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'death', 0.8);
-      const pos = mob.model.getGroup().position.clone();
-      pos.y += mob.height / 2;
-      for (const drop of rollDrops(mob.kind)) this.onDrop?.(drop.id, drop.count, pos);
-      this.removeAt(index);
+      mob.dying = true;
+      mob.deathTimer = DEATH_SPIN_DURATION;
+      mob.deathStartYaw = mob.facingYaw;
+      mob.path = null;
+      mob.velocity.x = 0;
+      mob.velocity.z = 0;
+      mob.model.setDying(true);
       return true;
     }
     if (this.soundManager) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
     mob.model.hurt(); // 0.2s red flash
 
     // Panic (LCE PanicGoal): forget whatever it was doing and start pathing
-    // to random points biased away from the attacker for a few seconds - see
-    // pickFleeTarget(), called from updateAI() once `path` is cleared here.
+    // to a random reachable point biased away from the attacker.
     const pos = mob.model.getGroup().position;
     mob.fleeDir.set(pos.x - fromPos.x, 0, pos.z - fromPos.z);
     if (mob.fleeDir.lengthSq() < 1e-6) mob.fleeDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
@@ -219,7 +248,15 @@ export class MobManager {
   }
 
   update(delta: number, getLight?: (x: number, y: number, z: number) => number): void {
-    for (const mob of this.mobs) {
+    // Reverse iteration: updateDeath() may splice a finished mob out mid-loop.
+    for (let i = this.mobs.length - 1; i >= 0; i--) {
+      const mob = this.mobs[i];
+
+      if (mob.dying) {
+        this.updateDeath(mob, delta, i);
+        continue;
+      }
+
       this.updateAI(mob, delta);
       this.updatePhysics(mob, delta);
 
@@ -236,6 +273,27 @@ export class MobManager {
       this.updateSounds(mob, delta, moving);
 
       mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
+    }
+  }
+
+  /** Death spin (turn 90 deg left while red-tinted), then drops + a smoke burst + removal. */
+  private updateDeath(mob: Mob, delta: number, index: number): void {
+    this.updatePhysics(mob, delta); // still falls/lands, just no AI movement
+    mob.model.setWalking(false);
+    mob.model.update(delta);
+
+    mob.deathTimer -= delta;
+    const t = Math.min(1, 1 - Math.max(mob.deathTimer, 0) / DEATH_SPIN_DURATION);
+    const group = mob.model.getGroup();
+    group.rotation.y = mob.deathStartYaw + (Math.PI / 2) * t;
+    mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
+
+    if (mob.deathTimer <= 0) {
+      const pos = group.position.clone();
+      pos.y += mob.height / 2;
+      for (const drop of rollDrops(mob.kind)) this.onDrop?.(drop.id, drop.count, pos);
+      this.onDeath?.(pos);
+      this.removeAt(index);
     }
   }
 
@@ -268,32 +326,59 @@ export class MobManager {
       return;
     }
 
+    // In water: mostly avoided by wander/flee (findPath only lays a ground
+    // node on solid, non-submerged footing), but a mob can still end up here
+    // by falling in - float and beeline for the nearest dry footing.
+    if (mob.inWater) {
+      mob.waterCheckTimer -= delta;
+      if ((!mob.path || mob.pathIndex >= mob.path.length) && mob.waterCheckTimer <= 0) {
+        mob.waterCheckTimer = WATER_RECHECK_INTERVAL;
+        this.trySwimToShore(mob);
+      }
+      if (mob.path) this.followPath(mob, mob.walkSpeed, delta);
+      return;
+    }
+
     if (mob.path && mob.pathIndex < mob.path.length) {
       this.followPath(mob, mob.walkSpeed, delta);
       return;
     }
 
-    mob.pauseTimer -= delta;
-    if (mob.pauseTimer <= 0) {
-      this.pickWanderTarget(mob);
-      if (!mob.path) mob.pauseTimer = 0.5; // nowhere reachable found - try again shortly
+    if (mob.lookTimer > 0) {
+      mob.lookTimer -= delta;
+      this.easeYawTo(mob, mob.lookTargetYaw, delta);
+      if (mob.lookTimer <= 0) this.pickWanderTarget(mob);
+      return;
+    }
+
+    mob.decisionTimer -= delta;
+    if (mob.decisionTimer <= 0) {
+      // Look toward a random heading first, then (once that finishes) path
+      // off toward the wander target - see the lookTimer branch above.
+      mob.lookTimer = LOOK_DURATION_MIN + Math.random() * (LOOK_DURATION_MAX - LOOK_DURATION_MIN);
+      mob.lookTargetYaw = Math.random() * Math.PI * 2 - Math.PI;
     }
   }
 
-  /** Path::A* (mob-pathfinding.ts) to a random reachable point a few blocks away. */
+  /** Path::A* (mob-pathfinding.ts) to a random reachable point within WANDER_RADIUS blocks. */
   private pickWanderTarget(mob: Mob): void {
     const pos = mob.model.getGroup().position;
     const angle = Math.random() * Math.PI * 2;
-    const radius = WANDER_RADIUS_MIN + Math.random() * (WANDER_RADIUS_MAX - WANDER_RADIUS_MIN);
+    const radius = 2 + Math.random() * (WANDER_RADIUS - 2);
     const path = findPath(this.isSolid, pos, pos.x + Math.sin(angle) * radius, pos.z + Math.cos(angle) * radius);
-    mob.path = path;
-    mob.pathIndex = path ? 1 : 0; // path[0] is the mob's own current cell
+    if (path) {
+      mob.path = path;
+      mob.pathIndex = 1; // path[0] is the mob's own current cell
+    } else {
+      mob.path = null;
+      mob.decisionTimer = 1; // nowhere reachable - try again shortly
+    }
   }
 
   /**
-   * LCE/loro PanicGoal-style: a random reachable point biased away from
-   * whatever last hurt this mob (not a rigid straight line), re-picked
-   * whenever the current escape path runs out while still panicking.
+   * LCE/loro PanicGoal-style: a random reachable point within FLEE_RADIUS,
+   * biased away from whatever last hurt this mob, re-picked whenever the
+   * current escape path runs out while still panicking.
    */
   private pickFleeTarget(mob: Mob): void {
     const pos = mob.model.getGroup().position;
@@ -314,6 +399,33 @@ export class MobManager {
     }
   }
 
+  /** Scans a handful of random nearby spots for dry, standable footing and heads straight there. */
+  private trySwimToShore(mob: Mob): void {
+    if (!this.isWater) return;
+    const pos = mob.model.getGroup().position;
+    for (let i = 0; i < 8; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 3 + Math.random() * 3;
+      const gx = pos.x + Math.sin(angle) * radius;
+      const gz = pos.z + Math.cos(angle) * radius;
+      const gxr = Math.round(gx);
+      const gzr = Math.round(gz);
+      for (let dy = 2; dy >= -2; dy--) {
+        const by = Math.round(pos.y) + dy;
+        if (
+          this.isSolid(gxr, by, gzr) &&
+          !this.isWater(gxr, by, gzr) &&
+          !this.isSolid(gxr, by + 1, gzr) &&
+          !this.isSolid(gxr, by + 2, gzr)
+        ) {
+          mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: gx, y: by + 0.5, z: gz }];
+          mob.pathIndex = 1;
+          return;
+        }
+      }
+    }
+  }
+
   /** Steps `mob` toward its current path waypoint, advancing to the next one once close enough. */
   private followPath(mob: Mob, speed: number, delta: number): void {
     if (!mob.path || mob.pathIndex >= mob.path.length) return;
@@ -326,14 +438,20 @@ export class MobManager {
       mob.pathIndex++;
       if (mob.pathIndex >= mob.path.length) {
         mob.path = null;
-        mob.pauseTimer = ri(WANDER_PAUSE_MIN * 10, WANDER_PAUSE_MAX * 10) / 10;
+        mob.decisionTimer = ri(WANDER_INTERVAL_MIN * 10, WANDER_INTERVAL_MAX * 10) / 10;
       }
       return;
     }
     this.moveHorizontal(mob, dx / dist, dz / dist, speed, delta);
   }
 
-  /** Moves `mob` by (dirX,dirZ) (normalised) at `speed`, resolving collisions per-axis (so it can slide along a wall) using its actual hitbox instead of a single point - and eases its facing yaw toward the direction of travel instead of snapping. */
+  /**
+   * Moves `mob` by (dirX,dirZ) (normalised) at `speed`, resolving collisions
+   * per-axis (so it can slide along a wall) using its actual hitbox instead
+   * of a single point. If an axis is blocked at foot height but clear one
+   * block up, hops over it (auto-step) instead of just stopping. Eases its
+   * facing yaw toward the direction of travel instead of snapping.
+   */
   private moveHorizontal(mob: Mob, dirX: number, dirZ: number, speed: number, delta: number): void {
     const group = mob.model.getGroup();
     const step = speed * delta;
@@ -343,6 +461,9 @@ export class MobManager {
     const tryX = group.position.x + dirX * step;
     if (!this.overlapsSolid(tryX, y, group.position.z, mob.radius, mob.height)) {
       group.position.x = tryX;
+    } else if (mob.grounded && !this.overlapsSolid(tryX, y + 1, group.position.z, mob.radius, mob.height)) {
+      mob.velocity.y = JUMP_FORCE;
+      mob.grounded = false;
     } else {
       blocked = true;
     }
@@ -350,6 +471,9 @@ export class MobManager {
     const tryZ = group.position.z + dirZ * step;
     if (!this.overlapsSolid(group.position.x, y, tryZ, mob.radius, mob.height)) {
       group.position.z = tryZ;
+    } else if (mob.grounded && !this.overlapsSolid(group.position.x, y + 1, tryZ, mob.radius, mob.height)) {
+      mob.velocity.y = JUMP_FORCE;
+      mob.grounded = false;
     } else {
       blocked = true;
     }
@@ -359,20 +483,22 @@ export class MobManager {
       // changed under it) - drop the path and take a short beat before
       // re-deciding, instead of grinding against the wall every frame.
       mob.path = null;
-      mob.pauseTimer = 0.3;
+      mob.decisionTimer = 0.3;
     }
 
     // Object3D at rotation.y=θ has local -Z (this model's "front" - see
     // mob-model.ts) pointing world (-sinθ,-cosθ), so the target yaw is the
     // negated atan2 - the un-negated form points the model's BACK the way
-    // it's walking (a moonwalk). Eased instead of snapped so turning reads
-    // as an actual turn, not an instant flip, now that pathfinding changes
-    // direction more often than the old straight-line wander did.
-    const targetYaw = Math.atan2(-dirX, -dirZ);
+    // it's walking (a moonwalk).
+    this.easeYawTo(mob, Math.atan2(-dirX, -dirZ), delta);
+  }
+
+  /** Eases `mob`'s facing yaw toward `targetYaw` by the shortest angular path and applies it to the model. */
+  private easeYawTo(mob: Mob, targetYaw: number, delta: number): void {
     let deltaYaw = targetYaw - mob.facingYaw;
     deltaYaw = ((deltaYaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
     mob.facingYaw += deltaYaw * Math.min(1, TURN_RATE * delta);
-    group.rotation.y = mob.facingYaw;
+    mob.model.getGroup().rotation.y = mob.facingYaw;
   }
 
   /** Does mob's hitbox (a `radius`-wide, `height`-tall column centred on x,z with feet at feetY) overlap any solid block? */
@@ -390,22 +516,41 @@ export class MobManager {
     return false;
   }
 
-  /** Gravity + knockback decay + a simple ground snap (sample the block below, land on its top). */
+  /** Gravity/buoyancy + knockback decay + a simple ground snap (sample the block below, land on its top). */
   private updatePhysics(mob: Mob, delta: number): void {
     const group = mob.model.getGroup();
 
-    // Knockback: an exponentially-decaying horizontal shove, independent of
-    // the AI's own movement (moveHorizontal sets position directly, this adds
-    // a delta on top of it).
+    // Knockback: an exponentially-decaying horizontal shove, resolved
+    // per-axis against solid blocks (previously applied unconditionally,
+    // which let a hit mob get knocked straight through a wall).
     if (Math.abs(mob.velocity.x) > 0.01 || Math.abs(mob.velocity.z) > 0.01) {
-      group.position.x += mob.velocity.x * delta;
-      group.position.z += mob.velocity.z * delta;
+      const y = group.position.y;
+      const tryX = group.position.x + mob.velocity.x * delta;
+      if (!this.overlapsSolid(tryX, y, group.position.z, mob.radius, mob.height)) group.position.x = tryX;
+      else mob.velocity.x = 0;
+      const tryZ = group.position.z + mob.velocity.z * delta;
+      if (!this.overlapsSolid(group.position.x, y, tryZ, mob.radius, mob.height)) group.position.z = tryZ;
+      else mob.velocity.z = 0;
       const decay = Math.exp(-KNOCKBACK_DECAY * delta);
       mob.velocity.x *= decay;
       mob.velocity.z *= decay;
     } else {
       mob.velocity.x = 0;
       mob.velocity.z = 0;
+    }
+
+    const feetX = Math.round(group.position.x);
+    const feetZ = Math.round(group.position.z);
+    const feetBlockYNow = Math.round(group.position.y);
+    mob.inWater = !!this.isWater && (this.isWater(feetX, feetBlockYNow, feetZ) || this.isWater(feetX, feetBlockYNow + 1, feetZ));
+
+    if (mob.inWater) {
+      // Float toward the surface instead of sinking, and skip the normal
+      // ground-snap while submerged.
+      mob.velocity.y = Math.min(mob.velocity.y + WATER_BUOYANCY * delta, WATER_RISE_SPEED);
+      group.position.y += mob.velocity.y * delta;
+      mob.grounded = false;
+      return;
     }
 
     mob.velocity.y -= GRAVITY * delta;

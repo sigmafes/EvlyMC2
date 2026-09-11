@@ -28,6 +28,7 @@ export enum BlockId {
   GLASS = 24,
   FURNACE = 25,
   TORCH = 26,
+  WOOL = 27,
 }
 
 export type VoxelBlock = {
@@ -82,6 +83,7 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.GLASS]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
   [BlockId.FURNACE]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.TORCH]: { opacity: 0, emission: 15, liquid: false, cull: false, flammable: null },
+  [BlockId.WOOL]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -161,8 +163,9 @@ export function createBlockMaterials(): BlockMaterials {
   const furnaceOn = loader.load(new URL('../textures/blocks/furnace_on.png', import.meta.url).href);
   const furnaceTop = loader.load(new URL('../textures/blocks/furnace_top.png', import.meta.url).href);
   const torch = loader.load(new URL('../textures/blocks/torch.png', import.meta.url).href);
+  const wool = loader.load(new URL('../textures/blocks/wool.png', import.meta.url).href);
 
-  for (const texture of [bedrock, oakPlanks, stone, dirt, grassTop, grassSide, glowstone, oakLog, oakLogTop, oakLeaves, sand, fireAtlas, cobblestone, obsidian, ice, coalOre, ironOre, goldOre, diamondOre, emeraldOre, lapisOre, redstoneOre, craftingTableSide1, craftingTableSide2, craftingTableTop, glass, furnaceSide, furnaceOff, furnaceOn, furnaceTop, torch]) {
+  for (const texture of [bedrock, oakPlanks, stone, dirt, grassTop, grassSide, glowstone, oakLog, oakLogTop, oakLeaves, sand, fireAtlas, cobblestone, obsidian, ice, coalOre, ironOre, goldOre, diamondOre, emeraldOre, lapisOre, redstoneOre, craftingTableSide1, craftingTableSide2, craftingTableTop, glass, furnaceSide, furnaceOff, furnaceOn, furnaceTop, torch, wool]) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.magFilter = THREE.NearestFilter;
     texture.minFilter = THREE.NearestFilter;
@@ -294,6 +297,7 @@ export function createBlockMaterials(): BlockMaterials {
       side: THREE.DoubleSide,
       vertexColors: true,
     }),
+    [BlockId.WOOL]: new THREE.MeshBasicMaterial({ map: wool, vertexColors: true }),
   };
 
   materials.updateWaterAnimation = (time: number) => {

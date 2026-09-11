@@ -32,7 +32,6 @@ export const ItemId = {
   RAW_MUTTON: 117,
   COOKED_MUTTON: 118,
   LEATHER: 119,
-  WOOL: 135,
 
   WOODEN_PICKAXE: 120,
   STONE_PICKAXE: 121,
@@ -84,7 +83,6 @@ export const ITEMS: Record<number, ItemDef> = {
   [ItemId.RAW_MUTTON]: { name: 'Raw Mutton', texture: 'items/raw_sheep.png', maxStack: 64, food: 1 },
   [ItemId.COOKED_MUTTON]: { name: 'Cooked Mutton', texture: 'items/cooked_sheep.png', maxStack: 64, food: 3 },
   [ItemId.LEATHER]: MAT('Leather', 'items/leather.png'),
-  [ItemId.WOOL]: MAT('Wool', 'blocks/wool.png'),
 
   [ItemId.WOODEN_PICKAXE]: TOOL('Wooden Pickaxe', 'items/wooden_pickaxe.png'),
   [ItemId.STONE_PICKAXE]: TOOL('Stone Pickaxe', 'items/stone_pickaxe.png'),

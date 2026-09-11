@@ -32,6 +32,7 @@ export const blockSounds: Record<BlockId, BlockSoundSet> = {
   [BlockId.GLASS]: { hit: 'stone_hit', dig: 'glass_dig', mine: 'stone_mining', place: 'stone_dig' },
   [BlockId.FURNACE]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
   [BlockId.TORCH]: { hit: 'wood_hit', dig: 'wood_dig', mine: 'wood_mining' },
+  [BlockId.WOOL]: { hit: 'wool_dig', dig: 'wool_dig', mine: 'wool_dig', place: 'wool_dig' },
 };
 
 export function getBlockSound(blockId: BlockId, soundType: BlockSoundType): string | undefined {

@@ -16,6 +16,7 @@ import { PauseMenu } from './pause-menu';
 import { Inventory } from './inventory';
 import { Hud } from './hud';
 import { ParticleSystem } from './particles';
+import { SmokeParticles } from './smoke-particles';
 import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { DroppedItems } from './dropped-items';
@@ -201,6 +202,8 @@ pauseMenu.setViewBob(menuSettings.viewBob);
 
 const particles = new ParticleSystem();
 particles.attachToScene(scene);
+const smokeParticles = new SmokeParticles();
+smokeParticles.attachToScene(scene);
 
 // mobManager is constructed later (needs `world`/`spawnDrop`); same
 // indirection pattern as spawnDrop/applyButtonOpacity above.
@@ -304,6 +307,8 @@ const mobManager = new MobManager(
   (x, y, z) => isSolidBlock(world.getBlock(x, y, z)),
   (id, count, pos) => spawnDrop?.(id, count, pos),
   soundManager,
+  (x, y, z) => world.getBlock(x, y, z) === BlockId.WATER,
+  (pos) => smokeParticles.burst(pos),
 );
 hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);
 attackMobFn = (mobId) => {
@@ -632,6 +637,7 @@ function animate() {
   debugOverlay.update();
   interaction.update(delta);
   particles.update(delta);
+  smokeParticles.update(delta);
   blockInspector.update();
   furnaceUI.update();
   chat.update(delta);
