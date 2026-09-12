@@ -521,6 +521,7 @@ chat.registerCommand('summon', (args) => {
 // lighting - only actually lighting the area (raw light > 3) stops them.
 const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep'];
 const RESPAWN_COOLDOWN = 30; // seconds, individual per slot
+const AMBIENT_SPAWN_MIN_RADIUS = 10; // animals/surface hostiles: stay out of the player's immediate view so they don't visibly pop in
 const CAVE_SPAWN_RADIUS = 10; // fixed, not a range - "si o si en el radio 10"
 const CAVE_LIGHT_MAX = 3; // raw light level a cave column must be at/under to qualify
 const SURFACE_LIGHT_MAX = 4; // sky exposure a night surface column must be at/under (day/night-cycle.ts's nightSkyDarken=11 floors an exposed column at 15-11)
@@ -562,10 +563,10 @@ function isValidHostileCaveColumn(x: number, y: number, z: number): boolean {
 /** Random point within the player's currently-loaded chunks (view radius), for animals/surface hostiles. */
 function trySpawnAnimal(): number | null {
   const p = player.state.position;
-  const maxRadius = world.viewRadius * CHUNK_SIZE;
+  const maxRadius = Math.max(AMBIENT_SPAWN_MIN_RADIUS + 1, world.viewRadius * CHUNK_SIZE);
   for (let attempt = 0; attempt < 6; attempt++) {
     const angle = Math.random() * Math.PI * 2;
-    const radius = Math.random() * maxRadius;
+    const radius = AMBIENT_SPAWN_MIN_RADIUS + Math.random() * (maxRadius - AMBIENT_SPAWN_MIN_RADIUS);
     const gx = Math.round(p.x + Math.sin(angle) * radius);
     const gz = Math.round(p.z + Math.cos(angle) * radius);
     const gy = world.getSurfaceHeight(gx, gz);
@@ -578,10 +579,10 @@ function trySpawnAnimal(): number | null {
 
 function trySpawnSurfaceHostile(): number | null {
   const p = player.state.position;
-  const maxRadius = world.viewRadius * CHUNK_SIZE;
+  const maxRadius = Math.max(AMBIENT_SPAWN_MIN_RADIUS + 1, world.viewRadius * CHUNK_SIZE);
   for (let attempt = 0; attempt < 6; attempt++) {
     const angle = Math.random() * Math.PI * 2;
-    const radius = Math.random() * maxRadius;
+    const radius = AMBIENT_SPAWN_MIN_RADIUS + Math.random() * (maxRadius - AMBIENT_SPAWN_MIN_RADIUS);
     const gx = Math.round(p.x + Math.sin(angle) * radius);
     const gz = Math.round(p.z + Math.cos(angle) * radius);
     const gy = world.getSurfaceHeight(gx, gz);
@@ -637,6 +638,15 @@ function updateSpawnSlots(delta: number): void {
   for (const slot of surfaceHostileSlots) updateSpawnSlot(slot, delta, isNight, trySpawnSurfaceHostile);
   for (const slot of caveHostileSlots) updateSpawnSlot(slot, delta, true, trySpawnCaveHostile);
 }
+
+chat.registerCommand('mobstatus', () => {
+  const describe = (slots: SpawnSlot[]) =>
+    slots.map((s) => (s.mobId !== null ? `#${s.mobId}` : s.cooldown > 0 ? `cd ${s.cooldown.toFixed(0)}s` : 'ready')).join(', ');
+  chat.system(`Animals (day): ${describe(animalSlots)}`);
+  chat.system(`Surface hostiles (night): ${describe(surfaceHostileSlots)}`);
+  chat.system(`Cave hostiles (any time): ${describe(caveHostileSlots)}`);
+  return `isNight=${dayNightCycle.isNight()} viewRadius=${world.viewRadius} chunks`;
+});
 
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 chat.registerCommand('give', (args) => {
