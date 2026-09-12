@@ -594,6 +594,15 @@ export class Inventory {
       const src = this.slotSourceByEl.get(slotEl)!;
       if (this.readSlot(src).id === null) return; // touch, but nothing here to grab
     }
+    // Without this, a fast swipe across slot elements can let the browser
+    // hand the gesture off to native scroll/pan mid-drag (even with
+    // touch-action: none on the slots), which cuts off pointermove delivery
+    // and makes the drag feel like it only registers discrete "fixed" taps.
+    // Capturing the pointer keeps every subsequent move routed to whatever
+    // we register it on, regardless of which element the finger is over.
+    if (event.pointerType !== 'mouse') {
+      (event.target as Element).setPointerCapture(event.pointerId);
+    }
     this.paint = { down: true, committed: false, startEl: slotEl, seen: new Set() };
   };
 
