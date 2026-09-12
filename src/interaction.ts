@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { BlockId, isInteractive, isOrientable, isToggleable } from './block';
-import { facingTowardPlayer } from './block-data';
+import { BlockId, isInteractive, isToggleable } from './block';
 import { isBlock, foodValue, ItemId } from './item';
 import { getDrops } from './drops';
-import { isSlab, isStairs, shapeBoxesFor } from './block-shapes';
-import { Raycast, type RaycastHit } from './raycast';
+import { isSlab, shapeBoxesFor } from './block-shapes';
+import { USE_HANDLERS, applyPlacementSetup } from './block-placement-rules';
+import { Raycast } from './raycast';
 import { BlockHighlight } from './block-highlight';
 import { BlockPlacer } from './block-placer';
 import { BreakOverlay } from './break-overlay';
@@ -169,19 +169,6 @@ export class BlockInteraction {
     } else {
       this.swingTimer = 0;
     }
-  }
-
-  /**
-   * Which half of the cell a stair/slab placed from this click should occupy.
-   * LCE StairTile::getPlacedOnFaceDataValue: clicking the underside of a
-   * block, or the upper half of a side face, puts the piece up top.
-   */
-  private placedHalfIsTop(hit: RaycastHit): 'top' | 'bottom' {
-    const n = hit.intersection.face?.normal;
-    if (n && n.y > 0.5) return 'bottom';
-    if (n && n.y < -0.5) return 'top';
-    const clickY = hit.intersection.point.y - (hit.blockPosition.y - 0.5);
-    return clickY > 0.5 ? 'top' : 'bottom';
   }
 
   /** World brightness 0..1 at (rounded) `p`, for shading particles/overlay. */
@@ -437,17 +424,11 @@ export class BlockInteraction {
       return;
     }
 
-    // Flint and Steel: ignite the air cell in front of the clicked face
-    // instead of placing a block - LCE FlintAndSteelItem::useOn.
-    if (this.selectedItemId === ItemId.FLINT_AND_STEEL) {
-      const firePos = hit.blockPosition.clone().add(hit.intersection.face.normal).round();
-      if (this.world.getBlock(firePos.x, firePos.y, firePos.z) === BlockId.AIR) {
-        this.world.add(firePos.x, firePos.y, firePos.z, BlockId.FIRE);
-        this.onSwing?.();
-        this.onToolUse?.(1);
-        const sound = getBlockSound(BlockId.FIRE, 'place') ?? getBlockSound(BlockId.FIRE, 'dig');
-        if (sound && this.soundManager) this.soundManager.playSound(sound);
-      }
+    // Item-specific right-click behaviour (flint & steel, ...) tried before
+    // the generic interact/toggle/place flow below.
+    if (this.selectedItemId != null && USE_HANDLERS[this.selectedItemId]?.({
+      world: this.world, hit, onSwing: this.onSwing, onToolUse: this.onToolUse, soundManager: this.soundManager,
+    })) {
       return;
     }
 
@@ -496,41 +477,8 @@ export class BlockInteraction {
       const placedBlockId = this.selectedBlock;
       this.onSwing?.();
       this.onPlace?.();
-      if (placedAt && placedBlockId != null && isOrientable(placedBlockId)) {
-        // Orientable block (furnace): its front (off) face looks at the player.
-        const p = placedAt as THREE.Vector3;
-        this.world.setBlockData(p.x, p.y, p.z, { facing: facingTowardPlayer(this.player.state.yaw) });
-      }
-      if (placedAt && placedBlockId != null && (isStairs(placedBlockId) || isSlab(placedBlockId))) {
-        const p = placedAt as THREE.Vector3;
-        const half = this.placedHalfIsTop(hit);
-        if (isStairs(placedBlockId)) {
-          // LCE StairTile::setPlacedBy - stairs ascend the way the player is
-          // looking, so you walk up them going forward.
-          const away = facingTowardPlayer(this.player.state.yaw);
-          this.world.setBlockData(p.x, p.y, p.z, { facing: ((away + 2) & 3) as 0 | 1 | 2 | 3, half });
-        } else {
-          this.world.setBlockData(p.x, p.y, p.z, { half });
-        }
-      }
-      if (placedAt && placedBlockId === BlockId.OAK_LOG) {
-        // LCE RotatedPillarTile::setPlacedOnFaceDataValue - a log's bark
-        // rings run along whichever axis the clicked face points on, so a
-        // log placed against a side face lies on its side instead of always
-        // standing up.
-        const p = placedAt as THREE.Vector3;
-        const n = hit.intersection.face.normal;
-        const axis = Math.abs(n.x) > 0.5 ? 'x' : Math.abs(n.z) > 0.5 ? 'z' : 'y';
-        this.world.setBlockData(p.x, p.y, p.z, { axis });
-      }
-      if (placedAt && placedBlockId === BlockId.TORCH) {
-        // Side face -> wall torch leaning along the face normal; top face -> floor torch.
-        const p = placedAt as THREE.Vector3;
-        const n = hit.intersection.face.normal;
-        if (Math.abs(n.y) < 0.5) {
-          const facing = n.x > 0.5 ? 1 : n.x < -0.5 ? 3 : n.z > 0.5 ? 0 : 2;
-          this.world.setBlockData(p.x, p.y, p.z, { facing });
-        }
+      if (placedAt && placedBlockId != null) {
+        applyPlacementSetup({ world: this.world, player: this.player, hit, placedPos: placedAt }, placedBlockId);
       }
       if (placedBlockId) {
         const sound = getBlockSound(placedBlockId, 'place') ?? getBlockSound(placedBlockId, 'dig');
