@@ -550,10 +550,16 @@ function isValidHostileSurfaceColumn(x: number, gy: number, z: number): boolean 
   return lightEngine.getSkyExposure(x, gy + 1, z) <= SURFACE_LIGHT_MAX;
 }
 
-/** Underground: standable column, dim enough (raw light <= CAVE_LIGHT_MAX - a nearby torch pushes it over and blocks the spawn). */
+/**
+ * Underground: standable column, dim enough (raw light <= CAVE_LIGHT_MAX - a
+ * nearby torch pushes it over and blocks the spawn). Depth is judged relative
+ * to the LOCAL surface height (baked into how the caller picks `y`, always a
+ * few blocks under that column's own terrain), not the world's absolute
+ * WATER_LEVEL - a cave cut into a mountain at y=100 is just as "underground"
+ * as one at y=40, even though 100 >= WATER_LEVEL (63).
+ */
 function isValidHostileCaveColumn(x: number, y: number, z: number): boolean {
   if (!world.isChunkLoaded(x, z)) return false;
-  if (y >= WATER_LEVEL) return false;
   if (!isSolidBlock(world.getBlock(x, y, z))) return false;
   if (isSolidBlock(world.getBlock(x, y + 1, z)) || isSolidBlock(world.getBlock(x, y + 2, z))) return false;
   if (world.getBlock(x, y + 1, z) === BlockId.WATER || world.getBlock(x, y + 2, z) === BlockId.WATER) return false;
@@ -601,7 +607,7 @@ function trySpawnCaveHostile(): number | null {
     if (!world.isChunkLoaded(gx, gz)) continue;
     const surfaceY = world.getSurfaceHeight(gx, gz);
     const gy = Math.max(1, Math.min(surfaceY - 3, Math.round(p.y) + Math.round((Math.random() - 0.5) * 16)));
-    if (gy >= WATER_LEVEL || !isValidHostileCaveColumn(gx, gy, gz)) continue;
+    if (!isValidHostileCaveColumn(gx, gy, gz)) continue;
     return mobManager.spawn('zombie', ZOMBIE_SPEC, new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
   }
   return null;
