@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BlockId } from './block';
 import type { World } from './world';
+import { withinFluidSimRadius } from './fluid-sim-radius';
 
 export type WaterNode = {
   x: number;
@@ -101,14 +102,14 @@ export class WaterEngine {
     this.timeSinceLastTick = this.tickInterval;
   }
 
-  update(delta: number): boolean {
+  update(delta: number, playerX?: number, playerZ?: number): boolean {
     this.timeSinceLastTick += delta;
     if (this.timeSinceLastTick < this.tickInterval) return false;
     this.timeSinceLastTick = 0;
-    return this.tick();
+    return this.tick(playerX, playerZ);
   }
 
-  private tick(): boolean {
+  private tick(playerX?: number, playerZ?: number): boolean {
     // 0. Purge derived (infinite) sources that no longer qualify. Cascades inward
     //    over ticks as the outer ones lose their block.
     for (const dk of [...this.derivedSources]) {
@@ -136,9 +137,23 @@ export class WaterEngine {
       }
     }
 
-    // 2. Compute the full target distribution from the remaining sources.
-    const target = this.computeTargetWater();
+    // 2. Compute the full target distribution from the remaining sources
+    //    within simulation range.
+    const target = this.computeTargetWater(playerX, playerZ);
     let changed = false;
+
+    // 2b. Freeze anything currently outside simulation range exactly as it
+    //     is: copied into `target` unchanged so drain (3) leaves it alone
+    //     (it's "still present") and spread (4) skips it (already there).
+    //     It picks back up on its own the next tick it's back in range,
+    //     since it'll then be recomputed by computeTargetWater() instead.
+    if (playerX !== undefined && playerZ !== undefined) {
+      for (const [key, node] of this.currentWater) {
+        if (!target.has(key) && !withinFluidSimRadius(node.x, node.z, playerX, playerZ)) {
+          target.set(key, node);
+        }
+      }
+    }
 
     // 3. Drain: liquid in the world that is no longer in `target` and has lost its
     //    upstream parent (cuts off source -> downstream).
@@ -202,12 +217,18 @@ export class WaterEngine {
     return changed;
   }
 
-  private computeTargetWater(): Map<string, WaterNode> {
+  private computeTargetWater(playerX?: number, playerZ?: number): Map<string, WaterNode> {
     const target = new Map<string, WaterNode>();
     if (this.sources.size === 0) return target;
 
     const queue: Array<{ x: number; y: number; z: number; distance: number }> = [];
     for (const s of this.sources.values()) {
+      // Out-of-range sources don't seed the flood-fill at all - this is what
+      // actually saves the work (the BFS below, not the cheap map lookups in
+      // tick()'s steps 0/1). tick()'s frozen-carryover then keeps their
+      // already-placed blocks untouched instead of draining them for "not
+      // being in target".
+      if (!withinFluidSimRadius(s.x, s.z, playerX, playerZ)) continue;
       target.set(this.key(s.x, s.y, s.z), { x: s.x, y: s.y, z: s.z, distance: 0, isSource: true });
       queue.push({ x: s.x, y: s.y, z: s.z, distance: 0 });
     }

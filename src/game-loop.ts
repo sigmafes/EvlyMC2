@@ -83,8 +83,8 @@ export class GameLoop {
     ); // build queued chunks, time-budgeted (adaptive - see FrameBudget)
     this.world.updateLeavesDecay(cappedDelta);
     this.world.updateWaterAnimation(elapsedTime);
-    this.world.updateWater(cappedDelta);
-    this.world.updateFire(cappedDelta);
+    this.world.updateWater(cappedDelta, this.player.state.position.x, this.player.state.position.z);
+    this.world.updateFire(cappedDelta, this.player.state.position.x, this.player.state.position.z);
 
     // Light updates
     const lightStartedAt = performance.now();

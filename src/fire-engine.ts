@@ -2,6 +2,7 @@ import { BlockId, blockLightProperties, isFlammable } from './block';
 import { CHUNK_HEIGHT } from './chunk';
 import type { World } from './world';
 import type { WaterEngine } from './water-engine';
+import { withinFluidSimRadius } from './fluid-sim-radius';
 
 const NEIGHBORS_6: readonly [number, number, number][] = [
   [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
@@ -38,19 +39,20 @@ export class FireEngine {
     this.fires.delete(key(x, y, z));
   }
 
-  update(delta: number, lava?: WaterEngine): boolean {
+  update(delta: number, lava?: WaterEngine, playerX?: number, playerZ?: number): boolean {
     this.timeSinceTick += delta;
     if (this.timeSinceTick < this.tickInterval) return false;
     this.timeSinceTick = 0;
-    return this.tick(lava);
+    return this.tick(lava, playerX, playerZ);
   }
 
-  private tick(lava?: WaterEngine): boolean {
+  private tick(lava?: WaterEngine, playerX?: number, playerZ?: number): boolean {
     let changed = false;
 
     // --- Lava ignites nearby flammable blocks (LCE LiquidTileStatic::tick). ---
     if (lava) {
       for (const c of lava.cells()) {
+        if (!withinFluidSimRadius(c.x, c.z, playerX, playerZ)) continue;
         if (Math.random() < 0.7) continue; // not every lava cell every tick
         if (this.igniteFromLava(c.x, c.y, c.z)) changed = true;
       }
@@ -59,6 +61,9 @@ export class FireEngine {
     // --- Fire tick (LCE FireTile::tick). Snapshot so we can mutate the map. ---
     for (const [k, age0] of [...this.fires.entries()]) {
       const [x, y, z] = k.split(',').map(Number);
+      // Frozen while out of simulation range - left burning exactly as-is,
+      // no aging/spreading/burnout, until the player is close enough again.
+      if (!withinFluidSimRadius(x, z, playerX, playerZ)) continue;
       if (this.world.getBlock(x, y, z) !== BlockId.FIRE) {
         this.fires.delete(k);
         continue;

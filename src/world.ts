@@ -240,14 +240,14 @@ export class World {
     this.fireEngine = fireEngine;
   }
 
-  updateWater(delta: number) {
-    const waterChanged = this.waterEngine?.update(delta) ?? false;
-    const lavaChanged = this.lavaEngine?.update(delta) ?? false;
+  updateWater(delta: number, playerX?: number, playerZ?: number) {
+    const waterChanged = this.waterEngine?.update(delta, playerX, playerZ) ?? false;
+    const lavaChanged = this.lavaEngine?.update(delta, playerX, playerZ) ?? false;
     return waterChanged || lavaChanged;
   }
 
-  updateFire(delta: number) {
-    return this.fireEngine?.update(delta, this.lavaEngine) ?? false;
+  updateFire(delta: number, playerX?: number, playerZ?: number) {
+    return this.fireEngine?.update(delta, this.lavaEngine, playerX, playerZ) ?? false;
   }
 
   setBlock(x: number, y: number, z: number, id: BlockId) {
