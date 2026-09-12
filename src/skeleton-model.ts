@@ -5,9 +5,16 @@ const TEXTURE_PATH = new URL('../textures/mobs/skeleton.png', import.meta.url).h
 const TEXTURE_W = 64;
 const TEXTURE_H = 32;
 
-// skeleton.png is the same classic 64x32 humanoid layout as zombie.png (every
-// classic-format mob skin shares the same texOffs formula/box sizes - only the
-// painted pixels differ) - same UV rects as zombie-model.ts's, reused as-is.
+// skeleton.png's head/body share the same classic 64x32 humanoid texOffs as
+// zombie.png (both inherit HumanoidModel's defaults, per LCE ZombieModel.cpp
+// having no _init override) - those two rects are identical to zombie-model.ts's.
+// The limbs are NOT the same, though: LCE SkeletonModel.cpp's own _init()
+// overrides arm0/arm1/leg0/leg1 with addBox(-1,y,-1, 2,12,2, g) - a 2x12x2
+// box (half the width/depth of the humanoid default 4x12x4) at the same
+// texOffs as the zombie's arms/legs (40,16) and (0,16). Copying the zombie's
+// 4px-wide UV rects here mapped half of each face onto blank/transparent
+// texture space (the "puffy and see-through limbs" bug) - these rects are
+// the same texOffs formula worked out for a 2x12x2 box instead of 4x12x4.
 const HEAD_UV: FaceRects = {
   py: [8, 0, 15, 7], ny: [16, 0, 23, 7],
   px: [0, 8, 7, 15], nz: [8, 8, 15, 15], nx: [16, 8, 23, 15], pz: [24, 8, 31, 15],
@@ -16,13 +23,15 @@ const BODY_UV: FaceRects = {
   py: [20, 16, 27, 19], ny: [28, 16, 35, 19],
   px: [16, 20, 19, 31], nz: [20, 20, 27, 31], nx: [28, 20, 31, 31], pz: [32, 20, 39, 31],
 };
+// texOffs(0,16), box 2x12x2 (LCE SkeletonModel::_init leg0/leg1).
 const LEG_UV: FaceRects = {
-  py: [4, 16, 7, 19], ny: [8, 16, 11, 19],
-  px: [0, 20, 3, 31], nz: [4, 20, 7, 31], nx: [8, 20, 11, 31], pz: [12, 20, 15, 31],
+  py: [2, 16, 3, 17], ny: [4, 16, 5, 17],
+  px: [0, 18, 1, 29], nz: [2, 18, 3, 29], nx: [4, 18, 5, 29], pz: [6, 18, 7, 29],
 };
+// texOffs(40,16), box 2x12x2 (LCE SkeletonModel::_init arm0/arm1).
 const ARM_UV: FaceRects = {
-  py: [44, 16, 47, 19], ny: [48, 16, 51, 19],
-  px: [40, 20, 43, 31], nz: [44, 20, 47, 31], nx: [48, 20, 51, 31], pz: [52, 20, 55, 31],
+  py: [42, 16, 43, 17], ny: [44, 16, 45, 17],
+  px: [40, 18, 41, 29], nz: [42, 18, 43, 29], nx: [44, 18, 45, 29], pz: [46, 18, 47, 29],
 };
 
 // Pixels -> blocks at 16px/block, same convention as zombie/pig/cow/sheep.
@@ -30,8 +39,9 @@ const PX = (n: number) => n / 16;
 
 const HEAD_SIZE: [number, number, number] = [PX(8), PX(8), PX(8)];
 const BODY_SIZE: [number, number, number] = [PX(8), PX(12), PX(4)];
-const LEG_SIZE: [number, number, number] = [PX(4), PX(12), PX(4)];
-const ARM_SIZE: [number, number, number] = [PX(4), PX(12), PX(4)];
+// Thin bone limbs (LCE: 2x12x2, half the width/depth of the zombie's 4x12x4).
+const LEG_SIZE: [number, number, number] = [PX(2), PX(12), PX(2)];
+const ARM_SIZE: [number, number, number] = [PX(2), PX(12), PX(2)];
 
 const LEG_TOP_Y = LEG_SIZE[1];                        // ground -> hip
 const BODY_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] / 2;    // hip -> torso centre
