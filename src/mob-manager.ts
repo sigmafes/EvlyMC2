@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { MobModel, BipedMobModel, type QuadrupedSpec, type BipedSpec } from './mob-model';
-import { BlockId } from './block';
-import { ItemId } from './item';
 import { playMobSound } from './mob-sounds';
 import type { SoundManager } from './sound-manager';
-import { findPath, type PathPoint } from './mob-pathfinding';
+import type { PathPoint } from './mob-pathfinding';
+import { rollDrops } from './mob-drops';
+import { overlapsSolid, tryEscapeStuck, updatePhysics } from './mob-physics';
+import { updateAI, type MobAiDeps } from './mob-ai';
 
 export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie';
 export type MobSpec = QuadrupedSpec | BipedSpec;
@@ -24,46 +25,7 @@ export function isHostileKind(kind: MobKind): boolean {
   return HOSTILE_KINDS.includes(kind);
 }
 
-type DropStack = { id: number; count: number };
-
 const ri = (min: number, max: number) => min + Math.floor(Math.random() * (max - min + 1));
-
-/**
- * Drop tables (exact ranges as specified): cow gives 0-2 raw beef + 0-1
- * leather, pig gives 0-2 raw porkchop, sheep gives a flat 1 wool + 1 raw
- * mutton. Rolled independently per item, same "may give nothing" pattern as
- * getDrops() in drops.ts.
- */
-function rollDrops(kind: MobKind): DropStack[] {
-  switch (kind) {
-    case 'cow': {
-      const out: DropStack[] = [];
-      const beef = ri(0, 2);
-      if (beef > 0) out.push({ id: ItemId.RAW_BEEF, count: beef });
-      const leather = ri(0, 1);
-      if (leather > 0) out.push({ id: ItemId.LEATHER, count: leather });
-      return out;
-    }
-    case 'pig': {
-      const out: DropStack[] = [];
-      const pork = ri(0, 2);
-      if (pork > 0) out.push({ id: ItemId.RAW_PORKCHOP, count: pork });
-      return out;
-    }
-    case 'sheep':
-      return [{ id: BlockId.WOOL, count: 1 }, { id: ItemId.RAW_MUTTON, count: 1 }];
-    case 'zombie': {
-      const out: DropStack[] = [];
-      const flesh = ri(0, 2);
-      if (flesh > 0) out.push({ id: ItemId.ROTTEN_FLESH, count: flesh });
-      if (Math.random() < 0.005) {
-        const rare = [ItemId.FLINT, ItemId.FEATHER, ItemId.POTATO, ItemId.CARROT, ItemId.IRON_INGOT];
-        out.push({ id: rare[Math.floor(Math.random() * rare.length)], count: 1 });
-      }
-      return out;
-    }
-  }
-}
 
 /**
  * Per-species stats, ballpark-matched to LCE (Minecraft Legacy Console
@@ -81,54 +43,16 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
   zombie: { maxHealth: 20, walkSpeed: 2.3, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
 };
 
-const CHASE_RADIUS = 16;         // blocks - zombie notices/keeps chasing the player within this range
-const CHASE_REPATH_INTERVAL = 1; // seconds between chase path re-plans
-const ATTACK_RANGE = 1.8;        // blocks, centre-to-centre (a bit past melee-adjacent so it doesn't need to be pixel-perfect on top of the player)
-const LEAP_RANGE = 4;            // blocks, horizontal - close enough to attempt a leap up toward a player standing above
-const LEAP_MIN_HEIGHT_DIFF = 1.2; // blocks - player has to be genuinely above, not just on a half-slab-ish bump
-const LEAP_UP_FORCE = 11;        // higher arc than JUMP_FORCE (8) - clears ~2.5 blocks instead of ~1.3
-const ATTACK_INTERVAL = 1;       // seconds between hits while in range
-const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
-const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY), same as animals - widening this would plan climbs it can't execute
-const ZOMBIE_STEP_DOWN = 3;      // a zombie will drop off a 3-block ledge chasing the player; gravity handles the descent, no jump needed
 const BURN_DAMAGE_INTERVAL = 1;  // seconds between sunlight-burn ticks
 const BURN_DAMAGE = 1;
 const SKY_SCAN_MAX_Y = 156;      // above chunk.ts's CHUNK_HEIGHT (152) - a column open all the way up here really has no roof
-
-const GRAVITY = 24;
-const JUMP_FORCE = 8; // matches the player's own jump impulse (player-physics.ts)
-const FLEE_DURATION = 3; // seconds, LCE PanicGoal-style
-const WANDER_RADIUS_MIN = 6; // "de minimo 6 bloques"
-const WANDER_RADIUS_MAX = 12; // "un bloque aleatorio en un radio de 12 bloques"
-const WANDER_INTERVAL_MIN = 8; // "se moverán cada 8-12s"
-const WANDER_INTERVAL_MAX = 12;
-const IDLE_LOOK_INTERVAL = 4; // "girar para mirar cada 4s si están quietos"
-const LOOK_DURATION_MIN = 1.2; // slower look-around turn than a walking turn
-const LOOK_DURATION_MAX = 2.0;
-const FLEE_RADIUS_MIN = 4; // "correrán hacia un bloque aleatorio en un radio de 8 bloques"
-const FLEE_RADIUS_MAX = 8;
-const FLEE_REPATH_CONE = Math.PI / 2; // random point within +-90 deg of "away from the attacker"
-const WAYPOINT_REACH_DIST = 0.3;
-const TURN_RATE = 10; // yaw-easing rate while walking; higher = snappier turning
-const LOOK_TURN_RATE = 2.5; // slower easing rate for an idle look-around turn
 const STEP_INTERVAL = 0.45;
 const IDLE_SOUND_MIN = 4;
 const IDLE_SOUND_MAX = 9;
 const MOB_SOUND_RADIUS = 4; // mob sounds (idle/step/hurt/death) only carry this far
 const KNOCKBACK_SPEED = 5;
 const KNOCKBACK_UP = 4;
-// Same feel as the player (player-physics.ts): velocity ramps toward the AI's
-// target speed instead of snapping to it, and decays via friction instead of
-// stopping dead - so a mob accelerates, and skids/drifts when it turns or
-// stops, the same way the player does. Knockback is just an impulse added to
-// the same velocity, so it blends into (or gets overridden by) that ramp
-// instead of needing its own separate decay.
-const MOB_ACCELERATION = 35;
-const MOB_FRICTION = 15;
-const MOB_AIR_ACCEL_MULT = 0.15; // much less control while airborne, matches the player
-const WATER_BUOYANCY = 18; // upward accel while submerged, LCE-ish "float up" feel
-const WATER_RISE_SPEED = 2.2; // cap on how fast a mob bobs upward
-const WATER_RECHECK_INTERVAL = 1; // how often a swimming mob looks for shore
+const FLEE_DURATION = 3; // seconds, LCE PanicGoal-style - starts here (damage()), ticked down and re-picked by mob-ai.ts's updateAI
 const DEATH_SPIN_DURATION = 0.75; // seconds toppling over its Z axis before vanishing
 
 // Shared wireframe box geometry/material for the debug hitbox (R key) - one
@@ -136,7 +60,7 @@ const DEATH_SPIN_DURATION = 0.75; // seconds toppling over its Z axis before van
 const hitboxGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
 const hitboxMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
 
-type Mob = {
+export type Mob = {
   id: number;
   kind: MobKind;
   model: AnyMobModel;
@@ -202,7 +126,12 @@ export class MobManager {
     private readonly onAttackPlayer?: (damage: number, fromPos: THREE.Vector3) => void,
     /** Player position, for hostile mobs to detect/chase - undefined disables chasing entirely. */
     private readonly getPlayerPos?: () => THREE.Vector3,
-  ) {}
+  ) {
+    this.aiDeps = { isSolid, isWater, onAttackPlayer, getPlayerPos };
+  }
+
+  /** Bundled for updateAI() (mob-ai.ts) - built once since the underlying callbacks never change. */
+  private readonly aiDeps: MobAiDeps;
 
   spawn(kind: MobKind, spec: MobSpec, pos: THREE.Vector3, yaw: number): number {
     const stats = MOB_STATS[kind];
@@ -385,9 +314,9 @@ export class MobManager {
         continue;
       }
 
-      this.tryEscapeStuck(mob);
-      this.updateAI(mob, delta);
-      this.updatePhysics(mob, delta);
+      tryEscapeStuck(mob, this.isSolid);
+      updateAI(mob, delta, this.aiDeps);
+      updatePhysics(mob, delta, this.isSolid, this.isWater);
       if (mob.kind === 'zombie' && getSkyExposure) this.updateBurn(mob, delta, getSkyExposure);
       if (mob.dying) continue; // burn just killed it this frame - death handled next tick
 
@@ -458,7 +387,7 @@ export class MobManager {
 
   /** Death animation (topples over its Z axis, red-tinted), then drops + a smoke burst + removal. */
   private updateDeath(mob: Mob, delta: number, index: number): void {
-    this.updatePhysics(mob, delta); // still falls/lands, just no AI movement
+    updatePhysics(mob, delta, this.isSolid, this.isWater); // still falls/lands, just no AI movement
     mob.model.setWalking(false);
     mob.model.update(delta);
 
@@ -498,410 +427,6 @@ export class MobManager {
     if (mob.idleSoundTimer <= 0) {
       mob.idleSoundTimer = ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10;
       if (audible) playMobSound(this.soundManager, mob.kind, 'idle', 0.5);
-    }
-  }
-
-  private updateAI(mob: Mob, delta: number): void {
-    if (isHostileKind(mob.kind) && this.updateHostileAI(mob, delta)) return;
-
-    if (mob.fleeTimer > 0) {
-      mob.fleeTimer -= delta;
-      if (!mob.path || mob.pathIndex >= mob.path.length) this.pickFleeTarget(mob);
-      this.followPath(mob, mob.walkSpeed * mob.fleeSpeedMult, delta);
-      return;
-    }
-
-    // In water: mostly avoided by wander/flee (findPath only lays a ground
-    // node on solid, non-submerged footing), but a mob can still end up here
-    // by falling in - float and beeline for the nearest dry footing.
-    if (mob.inWater) {
-      mob.waterCheckTimer -= delta;
-      if ((!mob.path || mob.pathIndex >= mob.path.length) && mob.waterCheckTimer <= 0) {
-        mob.waterCheckTimer = WATER_RECHECK_INTERVAL;
-        this.trySwimToShore(mob);
-      }
-      if (mob.path) this.followPath(mob, mob.walkSpeed, delta);
-      else this.applyGroundFriction(mob, delta);
-      return;
-    }
-
-    if (mob.path && mob.pathIndex < mob.path.length) {
-      this.followPath(mob, mob.walkSpeed, delta);
-      return;
-    }
-
-    // Idle: no path to walk, so friction bleeds off any residual velocity
-    // (knockback, or momentum from having just arrived). Two independent
-    // timers also run while stationary - a periodic look-around turn every
-    // IDLE_LOOK_INTERVAL seconds, and the WANDER_INTERVAL_MIN..MAX cadence
-    // that picks the next place to walk to.
-    this.applyGroundFriction(mob, delta);
-    if (mob.lookTimer > 0) {
-      mob.lookTimer -= delta;
-      this.easeYawTo(mob, mob.lookTargetYaw, delta, LOOK_TURN_RATE);
-    }
-    mob.idleLookTimer -= delta;
-    if (mob.idleLookTimer <= 0) {
-      mob.idleLookTimer = IDLE_LOOK_INTERVAL;
-      mob.lookTimer = LOOK_DURATION_MIN + Math.random() * (LOOK_DURATION_MAX - LOOK_DURATION_MIN);
-      mob.lookTargetYaw = Math.random() * Math.PI * 2 - Math.PI;
-    }
-
-    mob.decisionTimer -= delta;
-    if (mob.decisionTimer <= 0) this.pickWanderTarget(mob);
-  }
-
-  /**
-   * Hostile targeting (zombie): while the player is within CHASE_RADIUS,
-   * chase and melee them, re-pathing every CHASE_REPATH_INTERVAL; returns
-   * true to tell updateAI() this frame's movement is already handled. Once
-   * the player leaves range, returns false so the mob falls through to the
-   * exact same wander/idle-look behaviour animals use (per the design:
-   * hostile idle == animal idle).
-   */
-  private updateHostileAI(mob: Mob, delta: number): boolean {
-    const playerPos = this.getPlayerPos?.();
-    const pos = mob.model.getGroup().position;
-    if (!playerPos) {
-      mob.chasing = false;
-      mob.attackTimer = 0;
-      return false;
-    }
-
-    // Horizontal distance only: playerPos is the player's EYE position (see
-    // main.ts spawn/attack wiring), roughly 1.6 blocks above their feet, so a
-    // 3D distanceTo() here made a zombie standing right next to the player
-    // read as ~1.6+ blocks away and never enter ATTACK_RANGE - the bug behind
-    // "the zombie doesn't attack". Horizontal distance is what actually
-    // matters for melee reach; a generous vertical gate below just keeps a
-    // zombie on a completely different floor from "reaching through" it.
-    const dx = playerPos.x - pos.x;
-    const dz = playerPos.z - pos.z;
-    const dy = playerPos.y - pos.y;
-    const dist = Math.hypot(dx, dz);
-    if (dist > CHASE_RADIUS || Math.abs(dy) > CHASE_RADIUS) {
-      mob.chasing = false;
-      mob.attackTimer = 0;
-      return false;
-    }
-    mob.chasing = true;
-
-    if (dist <= ATTACK_RANGE && Math.abs(dy) <= mob.height + 1) {
-      mob.path = null;
-      this.applyGroundFriction(mob, delta);
-      this.easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
-      mob.attackTimer -= delta;
-      if (mob.attackTimer <= 0) {
-        mob.attackTimer = ATTACK_INTERVAL;
-        this.onAttackPlayer?.(ZOMBIE_ATTACK_DAMAGE, pos.clone());
-      }
-      return true;
-    }
-
-    // Leap: the player is above and close but the normal walk/step-up limits
-    // (ZOMBIE_STEP_UP=1) can't close that gap - e.g. player standing over a
-    // hole in a cave ceiling, or up on a ledge. Throw the mob upward and
-    // toward the player instead of just walking into the wall underneath
-    // them; updatePhysics's own collision still governs whether it actually
-    // clears the gap, this just gives it a much bigger arc to try with.
-    if (mob.grounded && dy >= LEAP_MIN_HEIGHT_DIFF && dist <= LEAP_RANGE) {
-      mob.path = null;
-      const dirLen = Math.max(dist, 0.001);
-      this.moveHorizontal(mob, dx / dirLen, dz / dirLen, mob.walkSpeed, delta);
-      mob.velocity.y = LEAP_UP_FORCE;
-      mob.grounded = false;
-      return true;
-    }
-
-    mob.attackTimer = 0;
-    mob.chaseRepathTimer -= delta;
-    if (!mob.path || mob.pathIndex >= mob.path.length || mob.chaseRepathTimer <= 0) {
-      mob.chaseRepathTimer = CHASE_REPATH_INTERVAL;
-      const path = findPath(this.isSolid, pos, playerPos.x, playerPos.z, 150, ZOMBIE_STEP_UP, ZOMBIE_STEP_DOWN);
-      if (path) {
-        mob.path = path;
-        mob.pathIndex = 1;
-      } else {
-        // No graph path (e.g. the zombie itself fell into a pit deeper than
-        // ZOMBIE_STEP_UP/DOWN can bridge) - walk straight at the player anyway.
-        // updatePhysics's collision + auto-step jump still runs on this raw
-        // movement, so it can climb out through any ledge/step A* missed,
-        // the same "boxed in" fallback pickFleeTarget already uses.
-        mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: playerPos.x, y: pos.y, z: playerPos.z }];
-        mob.pathIndex = 1;
-      }
-    }
-    if (mob.path) this.followPath(mob, mob.walkSpeed, delta);
-    else this.applyGroundFriction(mob, delta);
-    return true;
-  }
-
-  /**
-   * Path::A* (mob-pathfinding.ts) to a random reachable point within
-   * WANDER_RADIUS_MIN..MAX blocks. When A* finds nothing at all - most
-   * commonly a mob that fell into a hole deeper than a single jump can
-   * bridge in the graph search - walk straight toward that random point
-   * anyway instead of standing still forever. That raw movement still goes
-   * through updatePhysics's collision + auto-step jump, so it keeps
-   * bumping/hopping against whatever's blocking it each time this gets
-   * re-picked, which is enough to climb out of a shallow (~1 block) pit or
-   * over a step the graph search missed, even though it can't guarantee an
-   * escape from a hole deeper than a mob can physically jump.
-   */
-  private pickWanderTarget(mob: Mob): void {
-    const pos = mob.model.getGroup().position;
-    const angle = Math.random() * Math.PI * 2;
-    const radius = WANDER_RADIUS_MIN + Math.random() * (WANDER_RADIUS_MAX - WANDER_RADIUS_MIN);
-    const goalX = pos.x + Math.sin(angle) * radius;
-    const goalZ = pos.z + Math.cos(angle) * radius;
-    const path = findPath(this.isSolid, pos, goalX, goalZ);
-    if (path) {
-      mob.path = path;
-      mob.pathIndex = 1; // path[0] is the mob's own current cell
-    } else {
-      mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: goalX, y: pos.y, z: goalZ }];
-      mob.pathIndex = 1;
-    }
-  }
-
-  /**
-   * LCE/loro PanicGoal-style: a random reachable point within FLEE_RADIUS,
-   * biased away from whatever last hurt this mob, re-picked whenever the
-   * current escape path runs out while still panicking.
-   */
-  private pickFleeTarget(mob: Mob): void {
-    const pos = mob.model.getGroup().position;
-    const baseAngle = Math.atan2(mob.fleeDir.x, mob.fleeDir.z);
-    const angle = baseAngle + (Math.random() - 0.5) * FLEE_REPATH_CONE;
-    const radius = FLEE_RADIUS_MIN + Math.random() * (FLEE_RADIUS_MAX - FLEE_RADIUS_MIN);
-    const goalX = pos.x + Math.sin(angle) * radius;
-    const goalZ = pos.z + Math.cos(angle) * radius;
-    const path = findPath(this.isSolid, pos, goalX, goalZ);
-    if (path) {
-      mob.path = path;
-      mob.pathIndex = 1;
-    } else {
-      // Boxed in / nothing reachable - shuffle directly away for a moment
-      // rather than standing still and panicking in place.
-      mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: pos.x + mob.fleeDir.x * 2, y: pos.y, z: pos.z + mob.fleeDir.z * 2 }];
-      mob.pathIndex = 1;
-    }
-  }
-
-  /** Scans a handful of random nearby spots for dry, standable footing and heads straight there. */
-  private trySwimToShore(mob: Mob): void {
-    if (!this.isWater) return;
-    const pos = mob.model.getGroup().position;
-    for (let i = 0; i < 8; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const radius = 3 + Math.random() * 3;
-      const gx = pos.x + Math.sin(angle) * radius;
-      const gz = pos.z + Math.cos(angle) * radius;
-      const gxr = Math.round(gx);
-      const gzr = Math.round(gz);
-      for (let dy = 2; dy >= -2; dy--) {
-        const by = Math.round(pos.y) + dy;
-        if (
-          this.isSolid(gxr, by, gzr) &&
-          !this.isWater(gxr, by, gzr) &&
-          !this.isSolid(gxr, by + 1, gzr) &&
-          !this.isSolid(gxr, by + 2, gzr)
-        ) {
-          mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: gx, y: by + 0.5, z: gz }];
-          mob.pathIndex = 1;
-          return;
-        }
-      }
-    }
-  }
-
-  /** Steps `mob` toward its current path waypoint, advancing to the next one once close enough. */
-  private followPath(mob: Mob, speed: number, delta: number): void {
-    if (!mob.path || mob.pathIndex >= mob.path.length) return;
-    const group = mob.model.getGroup();
-    const wp = mob.path[mob.pathIndex];
-    const dx = wp.x - group.position.x;
-    const dz = wp.z - group.position.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist < WAYPOINT_REACH_DIST) {
-      mob.pathIndex++;
-      if (mob.pathIndex >= mob.path.length) {
-        mob.path = null;
-        mob.decisionTimer = ri(WANDER_INTERVAL_MIN * 10, WANDER_INTERVAL_MAX * 10) / 10;
-      }
-      return;
-    }
-    this.moveHorizontal(mob, dx / dist, dz / dist, speed, delta);
-  }
-
-  /**
-   * Ramps `mob.velocity`.x/z toward (dirX,dirZ)*speed - same acceleration
-   * curve as the player (moveTowards, capped by MOB_ACCELERATION*delta, with
-   * reduced air control) instead of snapping straight to it, so a mob picks
-   * up speed and skids/drifts when it changes direction. The actual position
-   * integration, collision and auto-step jumping happen once for all of a
-   * mob's horizontal velocity (AI movement AND any leftover knockback) in
-   * updatePhysics. Also eases the facing yaw toward the direction of travel.
-   */
-  private moveHorizontal(mob: Mob, dirX: number, dirZ: number, speed: number, delta: number): void {
-    const accel = MOB_ACCELERATION * (mob.grounded ? 1 : MOB_AIR_ACCEL_MULT);
-    const maxStep = accel * delta;
-    mob.velocity.x = this.moveTowards(mob.velocity.x, dirX * speed, maxStep);
-    mob.velocity.z = this.moveTowards(mob.velocity.z, dirZ * speed, maxStep);
-
-    // Object3D at rotation.y=θ has local -Z (this model's "front" - see
-    // mob-model.ts) pointing world (-sinθ,-cosθ), so the target yaw is the
-    // negated atan2 - the un-negated form points the model's BACK the way
-    // it's walking (a moonwalk).
-    this.easeYawTo(mob, Math.atan2(-dirX, -dirZ), delta, TURN_RATE);
-  }
-
-  /** Decays `mob.velocity`.x/z toward 0 (ground friction) - called instead of moveHorizontal whenever the AI has nowhere to walk to right now. */
-  private applyGroundFriction(mob: Mob, delta: number): void {
-    const frictionFactor = Math.max(0, 1 - MOB_FRICTION * delta);
-    mob.velocity.x *= frictionFactor;
-    mob.velocity.z *= frictionFactor;
-  }
-
-  /** Move a value toward a target by at most maxStep - linear, frame-rate independent, never overshoots. */
-  private moveTowards(current: number, target: number, maxStep: number): number {
-    const diff = target - current;
-    if (Math.abs(diff) <= maxStep) return target;
-    return current + Math.sign(diff) * maxStep;
-  }
-
-  /** Eases `mob`'s facing yaw toward `targetYaw` by the shortest angular path at `rate` and applies it to the model. */
-  private easeYawTo(mob: Mob, targetYaw: number, delta: number, rate: number): void {
-    let deltaYaw = targetYaw - mob.facingYaw;
-    deltaYaw = ((deltaYaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-    mob.facingYaw += deltaYaw * Math.min(1, rate * delta);
-    mob.model.getGroup().rotation.y = mob.facingYaw;
-  }
-
-  /** Does mob's hitbox (a `radius`-wide, `height`-tall column centred on x,z with feet at feetY) overlap any solid block? */
-  private overlapsSolid(x: number, feetY: number, z: number, radius: number, height: number): boolean {
-    const x0 = Math.round(x - radius), x1 = Math.round(x + radius);
-    const z0 = Math.round(z - radius), z1 = Math.round(z + radius);
-    const y0 = Math.round(feetY + 0.05), y1 = Math.round(feetY + height - 0.05);
-    for (let bx = x0; bx <= x1; bx++) {
-      for (let bz = z0; bz <= z1; bz++) {
-        for (let by = y0; by <= y1; by++) {
-          if (this.isSolid(bx, by, bz)) return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  /**
-   * A cave-hostile spawn point is only checked at its exact centre column, so
-   * an edge-case (a spawn candidate found valid a frame before terrain around
-   * it finished settling, or just an unlucky pocket) can still leave a mob
-   * embedded in solid terrain, stuck in place with nowhere for the AI to walk
-   * it out to. Mirrors the player's own isEmbedded/tryEscapeStuck
-   * (player-physics.ts): scan straight up for the first clear 2-block gap and
-   * teleport there, zeroing velocity, instead of leaving it wedged forever.
-   */
-  private tryEscapeStuck(mob: Mob): boolean {
-    const group = mob.model.getGroup();
-    if (!this.overlapsSolid(group.position.x, group.position.y, group.position.z, mob.radius, mob.height)) return false;
-    const x = Math.round(group.position.x);
-    const z = Math.round(group.position.z);
-    const startY = Math.floor(group.position.y);
-    const MAX_SCAN = 256;
-    for (let y = startY; y < startY + MAX_SCAN; y += 1) {
-      if (!this.isSolid(x, y, z) && !this.isSolid(x, y + 1, z)) {
-        group.position.set(x, y + 0.5, z);
-        mob.velocity.set(0, 0, 0);
-        mob.grounded = false;
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Integrates `mob.velocity` for one frame: horizontal (whatever combination
-   * of AI-ramped movement, ground/air friction and knockback moveHorizontal /
-   * applyGroundFriction / damage() left in velocity.x/z) resolved per-axis
-   * against collision with auto-step jumping, then gravity/buoyancy and a
-   * ground snap (sample the block below, land on its top) for velocity.y.
-   */
-  private updatePhysics(mob: Mob, delta: number): void {
-    const group = mob.model.getGroup();
-    const y = group.position.y;
-
-    if (Math.abs(mob.velocity.x) > 0.001 || Math.abs(mob.velocity.z) > 0.001) {
-      // Only a block that's still solid one step higher counts as "truly
-      // stuck" - a block that's merely solid at foot height but clear above
-      // is jumped instead. While airborne mid-jump (grounded false), a
-      // horizontal block is expected for the frame or two before the arc
-      // clears it, so it must NOT abandon the path - that was the bug where a
-      // mob would hop in place forever: each jump attempt still found itself
-      // blocked the very next frame (still mid-arc) and immediately threw
-      // the path away before it ever got the chance to clear the obstacle.
-      let stuckGrounded = false;
-
-      const tryX = group.position.x + mob.velocity.x * delta;
-      if (!this.overlapsSolid(tryX, y, group.position.z, mob.radius, mob.height)) {
-        group.position.x = tryX;
-      } else if (mob.grounded && !this.overlapsSolid(tryX, y + 1, group.position.z, mob.radius, mob.height)) {
-        mob.velocity.y = JUMP_FORCE;
-        mob.grounded = false;
-      } else {
-        mob.velocity.x = 0;
-        if (mob.grounded) stuckGrounded = true;
-      }
-
-      const tryZ = group.position.z + mob.velocity.z * delta;
-      if (!this.overlapsSolid(group.position.x, y, tryZ, mob.radius, mob.height)) {
-        group.position.z = tryZ;
-      } else if (mob.grounded && !this.overlapsSolid(group.position.x, y + 1, tryZ, mob.radius, mob.height)) {
-        mob.velocity.y = JUMP_FORCE;
-        mob.grounded = false;
-      } else {
-        mob.velocity.z = 0;
-        if (mob.grounded) stuckGrounded = true;
-      }
-
-      if (stuckGrounded && mob.path) {
-        // Genuinely blocked on solid ground with no step to hop -
-        // pathfinding missed it, or the world changed under it. Drop the
-        // path and take a short beat before re-deciding, instead of
-        // grinding against the wall every frame.
-        mob.path = null;
-        mob.decisionTimer = 0.3;
-      }
-    }
-
-    const feetX = Math.round(group.position.x);
-    const feetZ = Math.round(group.position.z);
-    const feetBlockYNow = Math.round(group.position.y);
-    mob.inWater = !!this.isWater && (this.isWater(feetX, feetBlockYNow, feetZ) || this.isWater(feetX, feetBlockYNow + 1, feetZ));
-
-    if (mob.inWater) {
-      // Float toward the surface instead of sinking, and skip the normal
-      // ground-snap while submerged.
-      mob.velocity.y = Math.min(mob.velocity.y + WATER_BUOYANCY * delta, WATER_RISE_SPEED);
-      group.position.y += mob.velocity.y * delta;
-      mob.grounded = false;
-      return;
-    }
-
-    mob.velocity.y -= GRAVITY * delta;
-    const nextY = group.position.y + mob.velocity.y * delta;
-
-    // Blocks are centred on integer coordinates (span [n-0.5, n+0.5] - see
-    // chunk.ts's BlockCollider), so the ground block's top surface sits at
-    // its own index + 0.5, not +1.
-    const feetBlockY = Math.floor(nextY - 0.05);
-    if (mob.velocity.y <= 0 && this.isSolid(Math.round(group.position.x), feetBlockY, Math.round(group.position.z))) {
-      group.position.y = feetBlockY + 0.5;
-      mob.velocity.y = 0;
-      mob.grounded = true;
-    } else {
-      group.position.y = nextY;
-      mob.grounded = false;
     }
   }
 
