@@ -201,7 +201,7 @@ export class MobManager {
     private readonly getPlayerPos?: () => THREE.Vector3,
   ) {}
 
-  spawn(kind: MobKind, spec: MobSpec, pos: THREE.Vector3, yaw: number): void {
+  spawn(kind: MobKind, spec: MobSpec, pos: THREE.Vector3, yaw: number): number {
     const stats = MOB_STATS[kind];
     const model: AnyMobModel = kind === 'zombie' ? new BipedMobModel(spec as BipedSpec) : new MobModel(spec as QuadrupedSpec);
     const group = model.getGroup();
@@ -215,8 +215,9 @@ export class MobManager {
     box.position.set(pos.x, pos.y + stats.height / 2, pos.z);
     this.scene.add(box);
 
+    const id = this.nextId++;
     this.mobs.push({
-      id: this.nextId++,
+      id,
       kind,
       model,
       velocity: new THREE.Vector3(),
@@ -249,6 +250,24 @@ export class MobManager {
       idleSoundTimer: ri(IDLE_SOUND_MIN * 10, IDLE_SOUND_MAX * 10) / 10,
       box,
     });
+    return id;
+  }
+
+  /** True if a mob with this id is still alive (dying ones included - not gone until removeAt). */
+  isAlive(id: number): boolean {
+    return this.mobs.some((m) => m.id === id);
+  }
+
+  /** Current world position of a mob by id, or null if it's gone. */
+  getPosition(id: number): THREE.Vector3 | null {
+    const mob = this.mobs.find((m) => m.id === id);
+    return mob ? mob.model.getGroup().position : null;
+  }
+
+  /** Silent despawn (no drops, no death animation) - for a mob that wandered into an unloaded chunk. */
+  forceRemove(id: number): void {
+    const index = this.mobs.findIndex((m) => m.id === id);
+    if (index >= 0) this.removeAt(index);
   }
 
   /** Toggle the wireframe hitboxes (same key as the dropped-item debug boxes). */

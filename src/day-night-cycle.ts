@@ -48,6 +48,11 @@ export class DayNightCycle {
     return this.lastCycleTime;
   }
 
+  /** True from halfway through dusk to halfway through dawn - drives day-only/night-only mob spawning. */
+  isNight(): boolean {
+    return this.lastSkyDarken > this.nightSkyDarken / 2;
+  }
+
   /** Restore a saved cycle position (call before the first update, elapsed ~= 0). */
   restoreTime(cycleTime: number) {
     this.timeOffset = ((cycleTime % this.cycleLength) + this.cycleLength) % this.cycleLength;

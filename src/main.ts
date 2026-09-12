@@ -22,12 +22,12 @@ import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { DroppedItems } from './dropped-items';
 import { FurnaceManager } from './furnace';
-import { MobManager, isHostileKind, type MobKind, type MobSpec } from './mob-manager';
+import { MobManager, type MobKind, type MobSpec } from './mob-manager';
 import { PIG_SPEC } from './pig-model';
 import { COW_SPEC } from './cow-model';
 import { SHEEP_SPEC } from './sheep-model';
 import { ZOMBIE_SPEC } from './zombie-model';
-import { WATER_LEVEL } from './chunk';
+import { WATER_LEVEL, CHUNK_SIZE } from './chunk';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
@@ -325,8 +325,6 @@ const mobManager = new MobManager(
   (x, y, z) => world.getBlock(x, y, z) === BlockId.WATER,
   (pos) => {
     smokeParticles.burst(pos);
-    mobSpawnBlockTimer = MOB_SPAWN_DEATH_COOLDOWN; // no new ambient spawns for a while after a death/despawn
-    hostileSpawnBlockTimer = HOSTILE_SPAWN_DEATH_COOLDOWN;
   },
   (damage, fromPos) => {
     playerHealth.damage(damage, { cause: 'generic' });
@@ -513,20 +511,24 @@ chat.registerCommand('summon', (args) => {
   return `Summoned a ${kind}.`;
 });
 
-// --- Ambient mob spawning: passive mobs (pig/cow/sheep) appear on their own
-// on grass near the player, in small herds - LCE-style groups of 2-4, not
-// one at a time. No biome system yet, so any grass column qualifies.
+// --- Mob spawning: three fixed-size populations, each 4 independent "slots".
+// Each slot holds at most one mob id; when that mob dies or wanders outside
+// the currently-loaded chunks, the slot goes on its own 30s cooldown before
+// trying to fill again. No global caps/timers - with render distance always
+// kept low this is simple and cheap (12 slots, checked once a frame), and it
+// guarantees the player always finds hostiles in a dark cave, since cave
+// slots always try to spawn within a fixed 10-block radius regardless of
+// lighting - only actually lighting the area (raw light > 3) stops them.
 const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep'];
-const MOB_SPAWN_INTERVAL_MIN = 8;
-const MOB_SPAWN_INTERVAL_MAX = 15;
-const MOB_SPAWN_MIN_RADIUS = 14; // outside the player's immediate view, so herds don't pop in visibly
-const MOB_SPAWN_MAX_RADIUS = 36;
-const MOB_SPAWN_GROUP_JITTER = 4; // blocks a group member can land from the group's anchor point
-const MOB_SPAWN_GLOBAL_CAP = 9; // total live mobs before spawning stops entirely
-const MOB_SPAWN_LOCAL_CAP = 8; // live mobs within MOB_SPAWN_MAX_RADIUS of the player before spawning pauses nearby
-const MOB_SPAWN_DEATH_COOLDOWN = 60; // seconds spawning pauses for after a mob dies/despawns
-let mobSpawnTimer = MOB_SPAWN_INTERVAL_MIN + Math.random() * (MOB_SPAWN_INTERVAL_MAX - MOB_SPAWN_INTERVAL_MIN);
-let mobSpawnBlockTimer = 0; // >0 while the post-death cooldown is active
+const RESPAWN_COOLDOWN = 30; // seconds, individual per slot
+const CAVE_SPAWN_RADIUS = 10; // fixed, not a range - "si o si en el radio 10"
+const CAVE_LIGHT_MAX = 3; // raw light level a cave column must be at/under to qualify
+const SURFACE_LIGHT_MAX = 4; // sky exposure a night surface column must be at/under (day/night-cycle.ts's nightSkyDarken=11 floors an exposed column at 15-11)
+
+type SpawnSlot = { mobId: number | null; cooldown: number };
+const animalSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
+const surfaceHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
+const caveHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
 
 /** True if (x,gy,z) is generated grass with two clear blocks above - a valid spot for a passive mob to stand. */
 function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
@@ -534,64 +536,6 @@ function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
   if (world.getBlock(x, gy, z) !== BlockId.GRASS) return false;
   return !isSolidBlock(world.getBlock(x, gy + 1, z)) && !isSolidBlock(world.getBlock(x, gy + 2, z));
 }
-
-function tryNaturalMobSpawn(): void {
-  if (mobSpawnBlockTimer > 0) return; // still cooling down after the last death/despawn
-  // Both caps must only count passive mobs - mobManager.count/countNear are
-  // unfiltered (every live mob, any kind), so without excluding zombies here
-  // a healthy hostile population (their own cap allows up to 8 surface + 12
-  // underground) alone clears MOB_SPAWN_GLOBAL_CAP and permanently blocks
-  // animal spawning regardless of how few animals are actually nearby -
-  // tryHostileMobSpawn() already scopes its own caps with isHostileKind for
-  // exactly this reason, this just needed the same treatment.
-  const isPassiveMob = (m: { kind: MobKind }) => !isHostileKind(m.kind);
-  if (mobManager.countAll(isPassiveMob) >= MOB_SPAWN_GLOBAL_CAP) return;
-  const p = player.state.position;
-  if (mobManager.countNear(p, MOB_SPAWN_MAX_RADIUS, isPassiveMob) >= MOB_SPAWN_LOCAL_CAP) return;
-
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const angle = Math.random() * Math.PI * 2;
-    const radius = MOB_SPAWN_MIN_RADIUS + Math.random() * (MOB_SPAWN_MAX_RADIUS - MOB_SPAWN_MIN_RADIUS);
-    const gx = Math.round(p.x + Math.sin(angle) * radius);
-    const gz = Math.round(p.z + Math.cos(angle) * radius);
-    if (!world.isChunkLoaded(gx, gz)) continue;
-    const gy = world.getSurfaceHeight(gx, gz);
-    if (!isValidMobSpawnColumn(gx, gy, gz)) continue;
-
-    const kind = MOB_KINDS[Math.floor(Math.random() * MOB_KINDS.length)];
-    const spec = MOB_SPECS[kind];
-    const groupSize = 2 + Math.floor(Math.random() * 3); // 2-4
-    for (let i = 0; i < groupSize; i++) {
-      const jx = gx + Math.round((Math.random() - 0.5) * MOB_SPAWN_GROUP_JITTER * 2);
-      const jz = gz + Math.round((Math.random() - 0.5) * MOB_SPAWN_GROUP_JITTER * 2);
-      const jy = world.getSurfaceHeight(jx, jz);
-      if (!isValidMobSpawnColumn(jx, jy, jz)) continue; // skip this one member rather than the whole group
-      mobManager.spawn(kind, spec, new THREE.Vector3(jx, jy + 0.5, jz), Math.random() * Math.PI * 2 - Math.PI);
-    }
-    return;
-  }
-}
-
-// --- Hostile mob spawning (zombie): its own caps/cooldown, separate from the
-// passive-mob system above, since the two shouldn't compete for the same
-// budget. Surface spawns only at night (sky exposure at its minimum, not
-// necessarily 0 - see LightEngine.getSkyExposure); underground spawns any
-// time the column is fully dark (raw brightness 0 - a nearby torch still
-// blocks it, unlike the sunlight-only surface check).
-// The pool tryHostileMobSpawn() picks from - kept separate from
-// isHostileKind() (mob-manager.ts), which is the "is this mob one of the
-// hostile kinds" check used for the surface/underground count filters below.
-const HOSTILE_SPAWN_POOL: MobKind[] = ['zombie'];
-const HOSTILE_SPAWN_INTERVAL_MIN = 6;
-const HOSTILE_SPAWN_INTERVAL_MAX = 12;
-const HOSTILE_SPAWN_MIN_RADIUS = 14;
-const HOSTILE_SPAWN_MAX_RADIUS = 36;
-const HOSTILE_SURFACE_CAP = 8;
-const HOSTILE_UNDERGROUND_CAP = 12;
-const HOSTILE_SPAWN_DEATH_COOLDOWN = 60;
-const NIGHT_SKY_EXPOSURE_MAX = 4; // day/night-cycle.ts's nightSkyDarken=11 floors an exposed column at 15-11
-let hostileSpawnTimer = HOSTILE_SPAWN_INTERVAL_MIN + Math.random() * (HOSTILE_SPAWN_INTERVAL_MAX - HOSTILE_SPAWN_INTERVAL_MIN);
-let hostileSpawnBlockTimer = 0;
 
 /** Surface: dark enough (night, not just shaded), solid dry footing, at/above water level, not standing in water. */
 function isValidHostileSurfaceColumn(x: number, gy: number, z: number): boolean {
@@ -602,55 +546,96 @@ function isValidHostileSurfaceColumn(x: number, gy: number, z: number): boolean 
   if (!isSolidBlock(ground)) return false;
   if (isSolidBlock(world.getBlock(x, gy + 1, z)) || isSolidBlock(world.getBlock(x, gy + 2, z))) return false;
   if (world.getBlock(x, gy + 1, z) === BlockId.WATER || world.getBlock(x, gy + 2, z) === BlockId.WATER) return false;
-  return lightEngine.getSkyExposure(x, gy + 1, z) <= NIGHT_SKY_EXPOSURE_MAX;
+  return lightEngine.getSkyExposure(x, gy + 1, z) <= SURFACE_LIGHT_MAX;
 }
 
-/** Underground: any fully-dark (raw brightness 0, torches included) standable column below water level. */
+/** Underground: standable column, dim enough (raw light <= CAVE_LIGHT_MAX - a nearby torch pushes it over and blocks the spawn). */
 function isValidHostileCaveColumn(x: number, y: number, z: number): boolean {
   if (!world.isChunkLoaded(x, z)) return false;
   if (y >= WATER_LEVEL) return false;
   if (!isSolidBlock(world.getBlock(x, y, z))) return false;
   if (isSolidBlock(world.getBlock(x, y + 1, z)) || isSolidBlock(world.getBlock(x, y + 2, z))) return false;
   if (world.getBlock(x, y + 1, z) === BlockId.WATER || world.getBlock(x, y + 2, z) === BlockId.WATER) return false;
-  return lightEngine.getRawBrightness(x, y + 1, z) === 0;
+  return lightEngine.getRawBrightness(x, y + 1, z) <= CAVE_LIGHT_MAX;
 }
 
-function tryHostileMobSpawn(): void {
-  if (hostileSpawnBlockTimer > 0) return;
+/** Random point within the player's currently-loaded chunks (view radius), for animals/surface hostiles. */
+function trySpawnAnimal(): number | null {
   const p = player.state.position;
-  const isSurfaceMob = (m: { kind: MobKind; pos: THREE.Vector3 }) => isHostileKind(m.kind) && m.pos.y >= WATER_LEVEL;
-  const isCaveMob = (m: { kind: MobKind; pos: THREE.Vector3 }) => isHostileKind(m.kind) && m.pos.y < WATER_LEVEL;
-
-  for (let attempt = 0; attempt < 8; attempt++) {
+  const maxRadius = world.viewRadius * CHUNK_SIZE;
+  for (let attempt = 0; attempt < 6; attempt++) {
     const angle = Math.random() * Math.PI * 2;
-    const radius = HOSTILE_SPAWN_MIN_RADIUS + Math.random() * (HOSTILE_SPAWN_MAX_RADIUS - HOSTILE_SPAWN_MIN_RADIUS);
+    const radius = Math.random() * maxRadius;
     const gx = Math.round(p.x + Math.sin(angle) * radius);
     const gz = Math.round(p.z + Math.cos(angle) * radius);
+    const gy = world.getSurfaceHeight(gx, gz);
+    if (!isValidMobSpawnColumn(gx, gy, gz)) continue;
+    const kind = MOB_KINDS[Math.floor(Math.random() * MOB_KINDS.length)];
+    return mobManager.spawn(kind, MOB_SPECS[kind], new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
+  }
+  return null;
+}
+
+function trySpawnSurfaceHostile(): number | null {
+  const p = player.state.position;
+  const maxRadius = world.viewRadius * CHUNK_SIZE;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.random() * maxRadius;
+    const gx = Math.round(p.x + Math.sin(angle) * radius);
+    const gz = Math.round(p.z + Math.cos(angle) * radius);
+    const gy = world.getSurfaceHeight(gx, gz);
+    if (gy < WATER_LEVEL || !isValidHostileSurfaceColumn(gx, gy, gz)) continue;
+    return mobManager.spawn('zombie', ZOMBIE_SPEC, new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
+  }
+  return null;
+}
+
+function trySpawnCaveHostile(): number | null {
+  const p = player.state.position;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const angle = Math.random() * Math.PI * 2;
+    const gx = Math.round(p.x + Math.sin(angle) * CAVE_SPAWN_RADIUS);
+    const gz = Math.round(p.z + Math.cos(angle) * CAVE_SPAWN_RADIUS);
     if (!world.isChunkLoaded(gx, gz)) continue;
-
-    // Roughly half the attempts try the surface column, half a random cave
-    // depth near the player's own height - simple approximation of "anywhere
-    // dark underground" without a real cave-position scanner.
-    const trySurface = Math.random() < 0.5;
-    if (trySurface) {
-      const gy = world.getSurfaceHeight(gx, gz);
-      if (gy < WATER_LEVEL || !isValidHostileSurfaceColumn(gx, gy, gz)) continue;
-      if (mobManager.countAll(isSurfaceMob) >= HOSTILE_SURFACE_CAP) continue;
-      if (mobManager.countNear(p, HOSTILE_SPAWN_MAX_RADIUS, isSurfaceMob) >= HOSTILE_SURFACE_CAP) continue;
-      const kind = HOSTILE_SPAWN_POOL[Math.floor(Math.random() * HOSTILE_SPAWN_POOL.length)];
-      mobManager.spawn(kind, MOB_SPECS[kind], new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
-      return;
-    }
-
     const surfaceY = world.getSurfaceHeight(gx, gz);
     const gy = Math.max(1, Math.min(surfaceY - 3, Math.round(p.y) + Math.round((Math.random() - 0.5) * 16)));
     if (gy >= WATER_LEVEL || !isValidHostileCaveColumn(gx, gy, gz)) continue;
-    if (mobManager.countAll(isCaveMob) >= HOSTILE_UNDERGROUND_CAP) continue;
-    if (mobManager.countNear(p, HOSTILE_SPAWN_MAX_RADIUS, isCaveMob) >= HOSTILE_UNDERGROUND_CAP) continue;
-    const kind = HOSTILE_SPAWN_POOL[Math.floor(Math.random() * HOSTILE_SPAWN_POOL.length)];
-    mobManager.spawn(kind, MOB_SPECS[kind], new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
+    return mobManager.spawn('zombie', ZOMBIE_SPEC, new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
+  }
+  return null;
+}
+
+/** Frees a slot whose mob died or left the loaded area, ticks its cooldown, and tries a fresh spawn once ready. */
+function updateSpawnSlot(slot: SpawnSlot, delta: number, condition: boolean, trySpawn: () => number | null): void {
+  if (slot.mobId !== null) {
+    if (!mobManager.isAlive(slot.mobId)) {
+      slot.mobId = null;
+      slot.cooldown = RESPAWN_COOLDOWN;
+      return;
+    }
+    const pos = mobManager.getPosition(slot.mobId);
+    if (pos && !world.isChunkLoaded(Math.round(pos.x), Math.round(pos.z))) {
+      mobManager.forceRemove(slot.mobId);
+      slot.mobId = null;
+      slot.cooldown = RESPAWN_COOLDOWN;
+    }
     return;
   }
+  if (slot.cooldown > 0) {
+    slot.cooldown -= delta;
+    return;
+  }
+  if (!condition) return;
+  slot.mobId = trySpawn();
+}
+
+function updateSpawnSlots(delta: number): void {
+  const isDay = !dayNightCycle.isNight();
+  const isNight = dayNightCycle.isNight();
+  for (const slot of animalSlots) updateSpawnSlot(slot, delta, isDay, trySpawnAnimal);
+  for (const slot of surfaceHostileSlots) updateSpawnSlot(slot, delta, isNight, trySpawnSurfaceHostile);
+  for (const slot of caveHostileSlots) updateSpawnSlot(slot, delta, true, trySpawnCaveHostile);
 }
 
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
@@ -768,19 +753,7 @@ function animate() {
       (x, y, z) => lightEngine.getSkyExposure(x, y, z),
     );
 
-    if (mobSpawnBlockTimer > 0) mobSpawnBlockTimer -= delta;
-    mobSpawnTimer -= delta;
-    if (mobSpawnTimer <= 0) {
-      mobSpawnTimer = MOB_SPAWN_INTERVAL_MIN + Math.random() * (MOB_SPAWN_INTERVAL_MAX - MOB_SPAWN_INTERVAL_MIN);
-      tryNaturalMobSpawn();
-    }
-
-    if (hostileSpawnBlockTimer > 0) hostileSpawnBlockTimer -= delta;
-    hostileSpawnTimer -= delta;
-    if (hostileSpawnTimer <= 0) {
-      hostileSpawnTimer = HOSTILE_SPAWN_INTERVAL_MIN + Math.random() * (HOSTILE_SPAWN_INTERVAL_MAX - HOSTILE_SPAWN_INTERVAL_MIN);
-      tryHostileMobSpawn();
-    }
+    updateSpawnSlots(delta);
 
     if (player.consumeWaterEntry()) soundManager.playRandom('player/Water_splash', 2, 0.5);
 
