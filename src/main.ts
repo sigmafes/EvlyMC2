@@ -23,6 +23,8 @@ import { WorldMusic } from './world-music';
 import { DroppedItems } from './dropped-items';
 import { FurnaceManager } from './furnace';
 import { MobManager } from './mob-manager';
+import { ArrowProjectiles, powerToSpeed } from './arrow-projectiles';
+import { ItemId } from './item';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
@@ -200,6 +202,8 @@ smokeParticles.attachToScene(scene);
 // indirection pattern as spawnDrop/applyButtonOpacity above.
 let hitTestMob: ((origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) => { mobId: number; distance: number } | null) | undefined;
 let attackMobFn: ((mobId: number, damage: number) => void) | undefined;
+let hasArrowsFn: (() => boolean) | undefined;
+let shootBowFn: ((power: number) => void) | undefined;
 const interaction = new BlockInteraction(
   canvas, camera, world, player, soundManager, pauseMenu,
   () => { hand.swing(); playerModel.swingArm(); },
@@ -233,6 +237,8 @@ const interaction = new BlockInteraction(
   (amount) => {
     if (inventory.damageSelected(amount)) soundManager.playOne('player/break', 0.8);
   },
+  () => hasArrowsFn?.() ?? false,
+  (power) => shootBowFn?.(power),
 );
 interaction.attachHighlight(scene);
 
@@ -300,6 +306,20 @@ const furnaceManager = new FurnaceManager(world);
 const PLAYER_KNOCKBACK_SPEED = 5;
 const PLAYER_KNOCKBACK_UP = 4;
 
+// Shared by any hostile-mob damage source (zombie melee, skeleton arrows):
+// applies the hit, syncs the HUD heart bar (not automatic - a zombie hit
+// landing was otherwise invisible on the HUD despite the value updating
+// fine), and shoves the player away from wherever the hit came from (same
+// feel as the knockback a hit mob already gets, KNOCKBACK_SPEED/UP in
+// mob-manager.ts).
+function hurtPlayerFromMob(damage: number, fromPos: THREE.Vector3): void {
+  playerHealth.damage(damage, { cause: 'generic' });
+  hud.setHealth(playerHealth.current);
+  const dx = player.state.position.x - fromPos.x;
+  const dz = player.state.position.z - fromPos.z;
+  player.applyKnockback(dx, dz, PLAYER_KNOCKBACK_SPEED, PLAYER_KNOCKBACK_UP);
+}
+
 // Mobs (PLAN-MOBS.md): models + wander/flee AI, health and drops - see
 // mob-manager.ts. Spawned in via /summon for now, nothing places them on its own.
 const mobManager = new MobManager(
@@ -311,26 +331,43 @@ const mobManager = new MobManager(
   (pos) => {
     smokeParticles.burst(pos);
   },
-  (damage, fromPos) => {
-    playerHealth.damage(damage, { cause: 'generic' });
-    // Every other damage source (fall/fire/lava, see the game loop below)
-    // syncs the HUD heart bar right after calling playerHealth.damage() -
-    // it isn't automatic, so skipping this made a zombie hit invisible on
-    // the HUD even though the health value itself was being reduced fine.
-    hud.setHealth(playerHealth.current);
-    // Knockback (same shove-away-from-the-attacker feel MobManager already
-    // gives a hit mob, KNOCKBACK_SPEED/KNOCKBACK_UP in mob-manager.ts) - a
-    // zombie hit landing was otherwise silent, no push, unlike every other
-    // source of player damage having some physical feedback.
-    const dx = player.state.position.x - fromPos.x;
-    const dz = player.state.position.z - fromPos.z;
-    player.applyKnockback(dx, dz, PLAYER_KNOCKBACK_SPEED, PLAYER_KNOCKBACK_UP);
-  },
+  hurtPlayerFromMob,
   () => player.state.position,
+  (fromPos, targetPos) => {
+    // Skeleton's fixed LCE shot power (ArrowAttackGoal: 1.60), same
+    // power->speed scale as the player's own bow (arrow-projectiles.ts).
+    const dir = targetPos.clone().sub(fromPos);
+    const dist = dir.length();
+    if (dist < 1e-6) return;
+    dir.normalize().multiplyScalar(powerToSpeed(1.6));
+    arrowProjectiles.spawn(fromPos, dir, { fromPlayer: false });
+  },
 );
 hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);
 attackMobFn = (mobId, damage) => {
   mobManager.damage(mobId, damage, player.state.position);
+};
+
+const arrowProjectiles = new ArrowProjectiles({
+  scene,
+  isSolid: (x, y, z) => isSolidBlock(world.getBlock(x, y, z)),
+  mobManager,
+  getPlayerPos: () => player.state.position,
+  onHitPlayer: hurtPlayerFromMob,
+  collect: (slot) => inventory.addItem(slot),
+  onPickup: () => soundManager.playOne('player/Pop', 0.4),
+  soundManager,
+  getLight: (x, y, z) => lightEngine.getRawBrightness(x, y, z),
+});
+hasArrowsFn = () => inventory.countItem(ItemId.ARROW) > 0;
+shootBowFn = (power) => {
+  if (!inventory.removeItem(ItemId.ARROW, 1)) return;
+  if (inventory.damageSelected(1)) soundManager.playOne('player/break', 0.8);
+  const dir = camera.getWorldDirection(new THREE.Vector3());
+  const from = player.state.position.clone().addScaledVector(dir, 0.5);
+  dir.multiplyScalar(powerToSpeed(power * 2));
+  arrowProjectiles.spawn(from, dir, { fromPlayer: true, crit: power >= 1 });
+  soundManager.playOne('items/Bow_shoot', 0.9);
 };
 
 // --- Health & death ---
@@ -529,6 +566,7 @@ function animate() {
     );
 
     mobSpawning.update(delta);
+    arrowProjectiles.update(delta);
 
     if (player.consumeWaterEntry()) soundManager.playRandom('player/Water_splash', 2, 0.5);
 

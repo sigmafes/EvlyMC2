@@ -7,8 +7,13 @@ import { rollDrops } from './mob-drops';
 import { overlapsSolid, tryEscapeStuck, updatePhysics } from './mob-physics';
 import { updateAI, type MobAiDeps } from './mob-ai';
 
-export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie';
+export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie' | 'skeleton';
 export type MobSpec = QuadrupedSpec | BipedSpec;
+
+/** Biped mobs (rendered/animated via BipedMobModel) - zombie and skeleton today. */
+function isBipedKind(kind: MobKind): boolean {
+  return kind === 'zombie' || kind === 'skeleton';
+}
 
 /** Common surface both MobModel (quadruped) and BipedMobModel (zombie) expose - all MobManager needs. */
 type AnyMobModel = {
@@ -20,7 +25,7 @@ type AnyMobModel = {
   update(delta: number): void;
 };
 
-const HOSTILE_KINDS: MobKind[] = ['zombie'];
+const HOSTILE_KINDS: MobKind[] = ['zombie', 'skeleton'];
 export function isHostileKind(kind: MobKind): boolean {
   return HOSTILE_KINDS.includes(kind);
 }
@@ -41,6 +46,9 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
   sheep: { maxHealth: 8, walkSpeed: 2.0, fleeSpeedMult: 1.6, radius: 0.45, height: 1.3 },
   // LCE zombie: 20 HP (10 hearts). No flee behaviour, fleeSpeedMult unused.
   zombie: { maxHealth: 20, walkSpeed: 2.3, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
+  // LCE skeleton: 20 HP, runSpeed 0.25 (a bit slower than the zombie's 0.3-ish
+  // equivalent) - it mostly stands and shoots rather than closing distance.
+  skeleton: { maxHealth: 20, walkSpeed: 2.0, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
 };
 
 const BURN_DAMAGE_INTERVAL = 1;  // seconds between sunlight-burn ticks
@@ -88,7 +96,10 @@ export type Mob = {
   chasing: boolean;
   chaseRepathTimer: number;
   attackTimer: number;
-  // Sunlight burn (zombie): ticks damage while exposed, independent of combat.
+  // Ranged hostile AI (skeleton): seconds of continuous line-of-sight on the
+  // target, accumulated toward RANGED_SIGHT_REQUIRED before the first shot.
+  rangedSeeTimer: number;
+  // Sunlight burn (zombie/skeleton): ticks damage while exposed, independent of combat.
   burning: boolean;
   burnTimer: number;
   // Death
@@ -126,8 +137,10 @@ export class MobManager {
     private readonly onAttackPlayer?: (damage: number, fromPos: THREE.Vector3) => void,
     /** Player position, for hostile mobs to detect/chase - undefined disables chasing entirely. */
     private readonly getPlayerPos?: () => THREE.Vector3,
+    /** Ranged hostile mobs (skeleton) fire an arrow instead of a direct hit - the actual projectile is spawned by whoever provides this (main.ts's arrow-projectiles). */
+    private readonly onShootArrow?: (fromPos: THREE.Vector3, targetPos: THREE.Vector3) => void,
   ) {
-    this.aiDeps = { isSolid, isWater, onAttackPlayer, getPlayerPos };
+    this.aiDeps = { isSolid, isWater, onAttackPlayer, getPlayerPos, onShootArrow };
   }
 
   /** Bundled for updateAI() (mob-ai.ts) - built once since the underlying callbacks never change. */
@@ -135,7 +148,7 @@ export class MobManager {
 
   spawn(kind: MobKind, spec: MobSpec, pos: THREE.Vector3, yaw: number): number {
     const stats = MOB_STATS[kind];
-    const model: AnyMobModel = kind === 'zombie' ? new BipedMobModel(spec as BipedSpec) : new MobModel(spec as QuadrupedSpec);
+    const model: AnyMobModel = isBipedKind(kind) ? new BipedMobModel(spec as BipedSpec) : new MobModel(spec as QuadrupedSpec);
     const group = model.getGroup();
     group.position.copy(pos);
     group.rotation.y = yaw;
@@ -174,6 +187,7 @@ export class MobManager {
       chasing: false,
       chaseRepathTimer: 0,
       attackTimer: 0,
+      rangedSeeTimer: 0,
       burning: false,
       burnTimer: 0,
       dying: false,
@@ -317,7 +331,7 @@ export class MobManager {
       tryEscapeStuck(mob, this.isSolid);
       updateAI(mob, delta, this.aiDeps);
       updatePhysics(mob, delta, this.isSolid, this.isWater);
-      if (mob.kind === 'zombie' && getSkyExposure) this.updateBurn(mob, delta, getSkyExposure);
+      if ((mob.kind === 'zombie' || mob.kind === 'skeleton') && getSkyExposure) this.updateBurn(mob, delta, getSkyExposure);
       if (mob.dying) continue; // burn just killed it this frame - death handled next tick
 
       const group = mob.model.getGroup();

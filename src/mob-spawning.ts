@@ -10,8 +10,11 @@ import { PIG_SPEC } from './pig-model';
 import { COW_SPEC } from './cow-model';
 import { SHEEP_SPEC } from './sheep-model';
 import { ZOMBIE_SPEC } from './zombie-model';
+import { SKELETON_SPEC } from './skeleton-model';
 
-export const MOB_SPECS: Record<MobKind, MobSpec> = { pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC };
+export const MOB_SPECS: Record<MobKind, MobSpec> = {
+  pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC, skeleton: SKELETON_SPEC,
+};
 
 // --- Mob spawning: three fixed-size populations (6 animals, 6 surface
 // hostiles, 4 cave hostiles), each with independent "slots". Each slot holds
@@ -23,6 +26,7 @@ export const MOB_SPECS: Record<MobKind, MobSpec> = { pig: PIG_SPEC, cow: COW_SPE
 // below); cave hostiles always try a fixed 10-block radius regardless of
 // lighting - only actually lighting the area (raw light > 3) stops them.
 const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep'];
+const HOSTILE_SPAWN_KINDS: MobKind[] = ['zombie', 'skeleton'];
 const RESPAWN_COOLDOWN = 30; // seconds, individual per slot
 const AMBIENT_SPAWN_MIN_RADIUS = 10; // animals/surface hostiles: stay out of the player's immediate view so they don't visibly pop in
 // Animals/surface hostiles spawn within a fixed 3x3-chunk area centred on the
@@ -117,7 +121,8 @@ export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
       const gz = Math.round(p.z + Math.cos(angle) * radius);
       const gy = world.getSurfaceHeight(gx, gz);
       if (gy < WATER_LEVEL || !isValidHostileSurfaceColumn(gx, gy, gz)) continue;
-      return mobManager.spawn('zombie', ZOMBIE_SPEC, new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
+      const kind = HOSTILE_SPAWN_KINDS[Math.floor(Math.random() * HOSTILE_SPAWN_KINDS.length)];
+      return mobManager.spawn(kind, MOB_SPECS[kind], new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
     }
     return null;
   }
@@ -132,7 +137,8 @@ export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
       const surfaceY = world.getSurfaceHeight(gx, gz);
       const gy = Math.max(1, Math.min(surfaceY - 3, Math.round(p.y) + Math.round((Math.random() - 0.5) * 16)));
       if (!isValidHostileCaveColumn(gx, gy, gz)) continue;
-      return mobManager.spawn('zombie', ZOMBIE_SPEC, new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
+      const kind = HOSTILE_SPAWN_KINDS[Math.floor(Math.random() * HOSTILE_SPAWN_KINDS.length)];
+      return mobManager.spawn(kind, MOB_SPECS[kind], new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
     }
     return null;
   }

@@ -35,6 +35,12 @@ const MOB_SOUNDS: Record<MobKind, Record<MobSoundEvent, SoundSpec>> = {
     idle: { relPath: 'mobs/Zombie_idle', count: 3 },
     step: { relPath: 'mobs/Zombie_step', count: 3 },
   },
+  skeleton: {
+    death: { relPath: 'mobs/Skeleton_death' },
+    hurt: { relPath: 'mobs/Skeleton_hurt', count: 3 },
+    idle: { relPath: 'mobs/Skeleton_idle', count: 3 },
+    step: { relPath: 'mobs/Skeleton_step', count: 3 },
+  },
 };
 
 export function playMobSound(soundManager: SoundManager, kind: MobKind, event: MobSoundEvent, volume = 1): void {

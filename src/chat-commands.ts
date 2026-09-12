@@ -69,7 +69,7 @@ export function registerGameChatCommands(chat: Chat, deps: ChatCommandDeps): voi
   chat.registerCommand('summon', (args) => {
     const kind = (args[0] ?? '').toLowerCase() as MobKind;
     const spec = MOB_SPECS[kind];
-    if (!spec) return 'Usage: /summon <pig|cow|sheep|zombie>';
+    if (!spec) return 'Usage: /summon <pig|cow|sheep|zombie|skeleton>';
 
     // A few blocks in front of the player, facing back toward them; forward
     // direction matches PlayerController's own yaw convention. state.position

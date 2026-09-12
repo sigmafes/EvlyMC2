@@ -40,5 +40,14 @@ export function rollDrops(kind: MobKind): DropStack[] {
       }
       return out;
     }
+    case 'skeleton': {
+      // LCE Skeleton::dropDeathLoot: random(3) of each, independently rolled.
+      const out: DropStack[] = [];
+      const arrows = ri(0, 2);
+      if (arrows > 0) out.push({ id: ItemId.ARROW, count: arrows });
+      const bones = ri(0, 2);
+      if (bones > 0) out.push({ id: ItemId.BONE, count: bones });
+      return out;
+    }
   }
 }

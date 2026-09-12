@@ -41,6 +41,9 @@ const CHIP_INTERVAL = 0.18;    // dig particles + tick sound this often while mi
 const EAT_DURATION = 1.6;      // seconds to finish eating (LCE: 32 ticks)
 const EAT_TICK = 0.175;        // chew sound + crumb particles this often while eating (twice per old tick)
 
+const BOW_MAX_DRAW = 1.0;      // seconds to fully draw (LCE MAX_DRAW_DURATION = 20 ticks = 1s)
+const BOW_MIN_POWER = 0.1;     // below this, releasing does nothing (LCE BowItem::releaseUsing)
+
 /** The 6 face neighbours, for sampling the light that actually falls on a block. */
 const NEIGHBOR_OFFSETS: [number, number, number][] = [
   [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
@@ -75,6 +78,9 @@ export class BlockInteraction {
   private eatTime = 0;
   private eatTickTimer = 0;
 
+  private drawingBow = false;
+  private bowDrawTime = 0;
+
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly camera: THREE.Camera,
@@ -98,6 +104,10 @@ export class BlockInteraction {
     private readonly attackMob?: (mobId: number, damage: number) => void,
     /** Spend uses on the held tool; the callback reports back whether it broke. */
     private readonly onToolUse?: (amount: number) => void,
+    /** True if the player has at least one arrow to fire - gates starting a bow draw. */
+    private readonly hasArrows?: () => boolean,
+    /** Bow released with enough draw to fire: `power` 0..1 (LCE's post-curve draw strength). Consuming the arrow/durability is the caller's job. */
+    private readonly onShootBow?: (power: number) => void,
   ) {
     this.raycast = new Raycast(4);
     this.highlight = new BlockHighlight();
@@ -119,7 +129,7 @@ export class BlockInteraction {
   /** Enable the mobile input path (no pointer lock). */
   setTouchActive(active: boolean) {
     this.touchActive = active;
-    if (!active) { this.leftHeld = false; this.rightHeld = false; this.cancelMining(); this.cancelEating(); }
+    if (!active) { this.leftHeld = false; this.rightHeld = false; this.cancelMining(); this.cancelEating(); this.cancelDrawingBow(); }
   }
 
   attachHighlight(scene: THREE.Scene) {
@@ -154,6 +164,7 @@ export class BlockInteraction {
 
     this.updateMining(delta);
     this.updateEating(delta);
+    this.updateDrawingBow(delta);
     this.updateAttackSwing(delta);
   }
 
@@ -243,6 +254,46 @@ export class BlockInteraction {
       this.onEatProgress?.(0);
       this.onEat?.(heal);
     }
+  }
+
+  // --- Bow -----------------------------------------------------------------
+
+  private startDrawingBow() {
+    if (this.drawingBow) return;
+    if (this.hasArrows && !this.hasArrows()) return;
+    this.drawingBow = true;
+    this.bowDrawTime = 0;
+  }
+
+  /** Stops the draw without firing - lost focus, GUI opened, item changed. */
+  private cancelDrawingBow() {
+    if (!this.drawingBow) return;
+    this.drawingBow = false;
+    this.bowDrawTime = 0;
+  }
+
+  private updateDrawingBow(delta: number): void {
+    if (!this.drawingBow) return;
+    if (this.selectedItemId !== ItemId.BOW || !this.engaged) {
+      this.cancelDrawingBow();
+      return;
+    }
+    this.bowDrawTime += delta;
+  }
+
+  /**
+   * LCE BowItem::releaseUsing: pow = timeHeld/MAX_DRAW_DURATION, smoothed by
+   * `(pow^2 + pow*2) / 3`, clamped to [0,1] - below BOW_MIN_POWER the release
+   * is too quick to count as a shot at all.
+   */
+  private releaseBow() {
+    if (!this.drawingBow) return;
+    this.drawingBow = false;
+    let pow = THREE.MathUtils.clamp(this.bowDrawTime / BOW_MAX_DRAW, 0, 1);
+    pow = (pow * pow + pow * 2) / 3;
+    this.bowDrawTime = 0;
+    if (pow < BOW_MIN_POWER) return;
+    this.onShootBow?.(Math.min(pow, 1));
   }
 
   getTargetBlock() {
@@ -392,6 +443,12 @@ export class BlockInteraction {
 
   /** Right-click / touch-tap: eat, open an interactive block, or place. */
   private useHeld() {
+    // Holding a bow: start the draw instead of placing / interacting.
+    if (this.selectedItemId === ItemId.BOW) {
+      this.startDrawingBow();
+      return;
+    }
+
     // Holding a food item: start eating instead of placing / interacting.
     if (foodValue(this.selectedItemId) > 0 && (!this.canEat || this.canEat())) {
       this.startEating();
@@ -523,13 +580,16 @@ export class BlockInteraction {
       if (button === 2) {
         this.rightHeld = false;
         this.cancelEating();
+        this.releaseBow();
         return;
       }
       if (button !== 0) return;
     } else {
-      // blur / pointerlock exit: release everything.
+      // blur / pointerlock exit: release everything, but don't let a lost-focus
+      // moment fire off a shot - cancel the draw instead of releasing it.
       this.rightHeld = false;
       this.cancelEating();
+      this.cancelDrawingBow();
     }
     this.leftHeld = false;
     this.cancelMining();

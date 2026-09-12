@@ -233,6 +233,30 @@ export class Inventory {
     return this.tryAdd(item);
   }
 
+  /** Total count of `id` currently held across every slot (e.g. "does the player have arrows"). */
+  countItem(id: number): number {
+    let total = 0;
+    for (let i = 0; i < TOTAL_SLOTS; i++) {
+      if (slots[i].id === id) total += slots[i].count ?? 1;
+    }
+    return total;
+  }
+
+  /** Remove up to `count` of `id`, taking from whichever slots have it first. Returns false (no-op) if there wasn't enough. */
+  removeItem(id: number, count: number): boolean {
+    if (this.countItem(id) < count) return false;
+    let left = count;
+    for (let i = 0; i < TOTAL_SLOTS && left > 0; i++) {
+      const s = slots[i];
+      if (s.id !== id) continue;
+      const take = Math.min(s.count ?? 1, left);
+      const next = (s.count ?? 1) - take;
+      this.setSlot(i, next > 0 ? { ...s, count: next } : null);
+      left -= take;
+    }
+    return true;
+  }
+
   /**
    * Remove the selected hotbar stack (or just one from it) so it can be thrown
    * into the world. Returns what was removed, or null if the slot was empty.

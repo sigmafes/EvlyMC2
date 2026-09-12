@@ -1,6 +1,6 @@
 import { ItemId } from './item';
 
-export type ToolKind = 'pickaxe' | 'axe' | 'shovel' | 'sword' | 'flintAndSteel';
+export type ToolKind = 'pickaxe' | 'axe' | 'shovel' | 'sword' | 'flintAndSteel' | 'bow';
 
 /** LCE `Item::Tier(level, uses, speed, damage, enchantmentValue)`. */
 export type Tier = { level: number; uses: number; speed: number };
@@ -16,6 +16,8 @@ export const TIER_GOLD: Tier = { level: 0, uses: 32, speed: 12 };
 // Flint and Steel uses (LCE FlintAndSteelItem: setMaxDamage(64)) - not a
 // digger tool, so `speed`/`level` are irrelevant and left at 0.
 const TIER_FLINT_AND_STEEL: Tier = { level: 0, uses: 64, speed: 0 };
+// Bow uses (LCE BowItem: setMaxDamage(384)) - not a digger tool either.
+const TIER_BOW: Tier = { level: 0, uses: 384, speed: 0 };
 
 export type ToolSpec = { kind: ToolKind; tier: Tier };
 
@@ -56,6 +58,7 @@ const SPECS: Record<number, ToolSpec> = {
   [ItemId.DIAMOND_SWORD]: { kind: 'sword', tier: TIER_DIAMOND },
 
   [ItemId.FLINT_AND_STEEL]: { kind: 'flintAndSteel', tier: TIER_FLINT_AND_STEEL },
+  [ItemId.BOW]: { kind: 'bow', tier: TIER_BOW },
 };
 
 /** Attack damage dealt to a mob by the currently held item - a sword's tier damage, or the bare-hand default. */

@@ -15,6 +15,13 @@ const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
 const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY), same as animals - widening this would plan climbs it can't execute
 const ZOMBIE_STEP_DOWN = 3;      // a zombie will drop off a 3-block ledge chasing the player; gravity handles the descent, no jump needed
 
+const RANGED_ATTACK_RADIUS = 10;      // blocks - LCE ArrowAttackGoal attackRadiusSqr (skeleton)
+const RANGED_ATTACK_INTERVAL = 3;     // seconds between shots (LCE TICKS_PER_SECOND * 3)
+const RANGED_SIGHT_REQUIRED = 1;      // seconds of continuous line-of-sight required before the first shot (LCE seeTime >= 20 ticks)
+const RANGED_STEP_UP = 1;
+const RANGED_STEP_DOWN = 3;
+const LOS_SAMPLE_STEP = 0.5;          // blocks between line-of-sight samples
+
 const WANDER_RADIUS_MIN = 6; // "de minimo 6 bloques"
 const WANDER_RADIUS_MAX = 12; // "un bloque aleatorio en un radio de 12 bloques"
 const IDLE_LOOK_INTERVAL = 4; // "girar para mirar cada 4s si están quietos"
@@ -33,10 +40,16 @@ export type MobAiDeps = {
   onAttackPlayer?: (damage: number, fromPos: THREE.Vector3) => void;
   /** Player position, for hostile mobs to detect/chase - undefined disables chasing entirely. */
   getPlayerPos?: () => THREE.Vector3;
+  /** Ranged hostile mobs (skeleton) fire an arrow through this instead of a direct hit. */
+  onShootArrow?: (fromPos: THREE.Vector3, targetPos: THREE.Vector3) => void;
 };
 
 export function updateAI(mob: Mob, delta: number, deps: MobAiDeps): void {
-  if (isHostileKind(mob.kind) && updateHostileAI(mob, delta, deps)) return;
+  if (mob.kind === 'skeleton') {
+    if (updateRangedHostileAI(mob, delta, deps)) return;
+  } else if (isHostileKind(mob.kind) && updateHostileAI(mob, delta, deps)) {
+    return;
+  }
 
   if (mob.fleeTimer > 0) {
     mob.fleeTimer -= delta;
@@ -161,6 +174,84 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
       // updatePhysics's collision + auto-step jump still runs on this raw
       // movement, so it can climb out through any ledge/step A* missed,
       // the same "boxed in" fallback pickFleeTarget already uses.
+      mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: playerPos.x, y: pos.y, z: playerPos.z }];
+      mob.pathIndex = 1;
+    }
+  }
+  if (mob.path) followPath(mob, mob.walkSpeed, delta);
+  else applyGroundFriction(mob, delta);
+  return true;
+}
+
+/** Samples points along the segment from `from` to `to`, `isSolid` at any of them blocks the view. */
+function hasLineOfSight(isSolid: IsSolidFn, from: THREE.Vector3, to: THREE.Vector3): boolean {
+  const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const steps = Math.max(1, Math.ceil(dist / LOS_SAMPLE_STEP));
+  for (let i = 1; i < steps; i += 1) {
+    const t = i / steps;
+    if (isSolid(Math.round(from.x + dx * t), Math.round(from.y + dy * t), Math.round(from.z + dz * t))) return false;
+  }
+  return true;
+}
+
+/**
+ * Ranged hostile targeting (skeleton, ported from LCE ArrowAttackGoal): while
+ * the player is within CHASE_RADIUS, close the distance until inside
+ * RANGED_ATTACK_RADIUS; once there and having held continuous line-of-sight
+ * for RANGED_SIGHT_REQUIRED, stop and fire every RANGED_ATTACK_INTERVAL
+ * instead of a direct melee hit - the actual arrow entity is spawned by
+ * whoever provides `onShootArrow` (main.ts's arrow-projectiles), this only
+ * decides when to shoot. Same true/false contract as updateHostileAI().
+ */
+function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
+  const playerPos = deps.getPlayerPos?.();
+  const pos = mob.model.getGroup().position;
+  if (!playerPos) {
+    mob.chasing = false;
+    mob.attackTimer = 0;
+    mob.rangedSeeTimer = 0;
+    return false;
+  }
+
+  const dx = playerPos.x - pos.x;
+  const dz = playerPos.z - pos.z;
+  const dy = playerPos.y - pos.y;
+  const dist = Math.hypot(dx, dz);
+  if (dist > CHASE_RADIUS || Math.abs(dy) > CHASE_RADIUS) {
+    mob.chasing = false;
+    mob.attackTimer = 0;
+    mob.rangedSeeTimer = 0;
+    return false;
+  }
+  mob.chasing = true;
+
+  const eyePos = new THREE.Vector3(pos.x, pos.y + mob.height * 0.85, pos.z);
+  const canSee = hasLineOfSight(deps.isSolid, eyePos, playerPos);
+  mob.rangedSeeTimer = canSee ? mob.rangedSeeTimer + delta : 0;
+
+  if (dist <= RANGED_ATTACK_RADIUS && canSee && mob.rangedSeeTimer >= RANGED_SIGHT_REQUIRED) {
+    mob.path = null;
+    applyGroundFriction(mob, delta);
+    easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
+    mob.attackTimer -= delta;
+    if (mob.attackTimer <= 0) {
+      mob.attackTimer = RANGED_ATTACK_INTERVAL;
+      deps.onShootArrow?.(pos.clone(), playerPos.clone());
+    }
+    return true;
+  }
+
+  // Still out of range, out of sight, or building up the sight timer - close in.
+  mob.attackTimer = 0;
+  mob.chaseRepathTimer -= delta;
+  if (!mob.path || mob.pathIndex >= mob.path.length || mob.chaseRepathTimer <= 0) {
+    mob.chaseRepathTimer = CHASE_REPATH_INTERVAL;
+    const path = findPath(deps.isSolid, pos, playerPos.x, playerPos.z, 150, RANGED_STEP_UP, RANGED_STEP_DOWN);
+    if (path) {
+      mob.path = path;
+      mob.pathIndex = 1;
+    } else {
       mob.path = [{ x: pos.x, y: pos.y, z: pos.z }, { x: playerPos.x, y: pos.y, z: playerPos.z }];
       mob.pathIndex = 1;
     }

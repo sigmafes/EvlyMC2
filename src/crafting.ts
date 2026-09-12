@@ -10,6 +10,7 @@ export type Recipe = ShapelessRecipe | ShapedRecipe;
 const P = BlockId.OAK_PLANKS;
 const S = ItemId.STICK;
 const C = BlockId.COBBLESTONE;
+const T = ItemId.STRING;
 const _ = null;
 
 /** Pickaxe / axe (both mirrors) / shovel from a single material `m`. */
@@ -63,6 +64,10 @@ export const RECIPES: Recipe[] = [
   { kind: 'shaped', pattern: [[ItemId.FLINT], [S], [ItemId.FEATHER]], out: { id: ItemId.ARROW, count: 4 } },
   // Flint and Steel: iron ingot + flint on the opposite diagonal (vanilla recipe).
   { kind: 'shaped', pattern: [[ItemId.IRON_INGOT, _], [_, ItemId.FLINT]], out: { id: ItemId.FLINT_AND_STEEL, count: 1 } },
+  // Bow: sticks in a "C" shape, string filling the vertical gaps (vanilla recipe,
+  // both mirrors like the axe recipes above).
+  { kind: 'shaped', pattern: [[_, S, T], [S, _, T], [_, S, T]], out: { id: ItemId.BOW, count: 1 } },
+  { kind: 'shaped', pattern: [[T, S, _], [T, _, S], [T, S, _]], out: { id: ItemId.BOW, count: 1 } },
 
   // Fence: planks-stick-planks x2 rows -> 3 (vanilla recipe).
   { kind: 'shaped', pattern: [[P, S, P], [P, S, P]], out: { id: BlockId.OAK_FENCE, count: 3 } },

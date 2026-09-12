@@ -62,6 +62,9 @@ export const ItemId = {
   POTATO: 144,
   CARROT: 145,
   ARROW: 146,
+  BOW: 147,
+  STRING: 148,
+  BONE: 149,
 } as const;
 export type ItemId = (typeof ItemId)[keyof typeof ItemId];
 
@@ -127,6 +130,9 @@ export const ITEMS: Record<number, ItemDef> = {
   [ItemId.POTATO]: { name: 'Potato', texture: 'items/potato.png', maxStack: 64, food: 1 },
   [ItemId.CARROT]: { name: 'Carrot', texture: 'items/carrot.png', maxStack: 64, food: 2 },
   [ItemId.ARROW]: MAT('Arrow', 'items/arrow.png'),
+  [ItemId.BOW]: TOOL('Bow', 'items/bow.png'),
+  [ItemId.STRING]: MAT('String', 'items/string.png'),
+  [ItemId.BONE]: MAT('Bone', 'items/bone.png'),
 };
 
 /** A slot id is a "block" (renders as a 3D cube) when it's in the BlockId range. */
