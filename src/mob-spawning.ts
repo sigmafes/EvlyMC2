@@ -13,17 +13,23 @@ import { ZOMBIE_SPEC } from './zombie-model';
 
 export const MOB_SPECS: Record<MobKind, MobSpec> = { pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC };
 
-// --- Mob spawning: three fixed-size populations, each 4 independent "slots".
-// Each slot holds at most one mob id; when that mob dies or wanders outside
-// the currently-loaded chunks, the slot goes on its own 30s cooldown before
-// trying to fill again. No global caps/timers - with render distance always
-// kept low this is simple and cheap (12 slots, checked once a frame), and it
-// guarantees the player always finds hostiles in a dark cave, since cave
-// slots always try to spawn within a fixed 10-block radius regardless of
+// --- Mob spawning: three fixed-size populations (6 animals, 6 surface
+// hostiles, 4 cave hostiles), each with independent "slots". Each slot holds
+// at most one mob id; when that mob dies or wanders outside the currently-
+// loaded chunks, the slot goes on its own 30s cooldown before trying to fill
+// again. No global caps/timers - cheap either way (16 slots, checked once a
+// frame). Animals/surface hostiles spawn within a fixed 3x3-chunk area
+// centred on the player, independent of render distance (SPAWN_AREA_RADIUS_BLOCKS
+// below); cave hostiles always try a fixed 10-block radius regardless of
 // lighting - only actually lighting the area (raw light > 3) stops them.
 const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep'];
 const RESPAWN_COOLDOWN = 30; // seconds, individual per slot
 const AMBIENT_SPAWN_MIN_RADIUS = 10; // animals/surface hostiles: stay out of the player's immediate view so they don't visibly pop in
+// Animals/surface hostiles spawn within a fixed 3x3-chunk area centred on the
+// player, independent of render distance - a low render distance shouldn't
+// shrink their spawn area, and a high one shouldn't let them pop in far out
+// of sight either.
+const SPAWN_AREA_RADIUS_BLOCKS = Math.floor(CHUNK_SIZE * 1.5); // half-width of a 3x3 chunk block
 const CAVE_SPAWN_RADIUS = 10; // fixed, not a range - "si o si en el radio 10"
 const CAVE_LIGHT_MAX = 3; // raw light level a cave column must be at/under to qualify
 const SURFACE_LIGHT_MAX = 4; // sky exposure a night surface column must be at/under (day/night-cycle.ts's nightSkyDarken=11 floors an exposed column at 15-11)
@@ -47,8 +53,8 @@ export type MobSpawning = {
 export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
   const { world, player, mobManager, dayNightCycle, lightEngine } = deps;
 
-  const animalSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
-  const surfaceHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
+  const animalSlots: SpawnSlot[] = Array.from({ length: 6 }, () => ({ mobId: null, cooldown: 0 }));
+  const surfaceHostileSlots: SpawnSlot[] = Array.from({ length: 6 }, () => ({ mobId: null, cooldown: 0 }));
   const caveHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
 
   /** True if (x,gy,z) is generated grass with two clear blocks above - a valid spot for a passive mob to stand. */
@@ -89,10 +95,9 @@ export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
   /** Random point within the player's currently-loaded chunks (view radius), for animals/surface hostiles. */
   function trySpawnAnimal(): number | null {
     const p = player.state.position;
-    const maxRadius = Math.max(AMBIENT_SPAWN_MIN_RADIUS + 1, world.viewRadius * CHUNK_SIZE);
     for (let attempt = 0; attempt < 6; attempt++) {
       const angle = Math.random() * Math.PI * 2;
-      const radius = AMBIENT_SPAWN_MIN_RADIUS + Math.random() * (maxRadius - AMBIENT_SPAWN_MIN_RADIUS);
+      const radius = AMBIENT_SPAWN_MIN_RADIUS + Math.random() * (SPAWN_AREA_RADIUS_BLOCKS - AMBIENT_SPAWN_MIN_RADIUS);
       const gx = Math.round(p.x + Math.sin(angle) * radius);
       const gz = Math.round(p.z + Math.cos(angle) * radius);
       const gy = world.getSurfaceHeight(gx, gz);
@@ -105,10 +110,9 @@ export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
 
   function trySpawnSurfaceHostile(): number | null {
     const p = player.state.position;
-    const maxRadius = Math.max(AMBIENT_SPAWN_MIN_RADIUS + 1, world.viewRadius * CHUNK_SIZE);
     for (let attempt = 0; attempt < 6; attempt++) {
       const angle = Math.random() * Math.PI * 2;
-      const radius = AMBIENT_SPAWN_MIN_RADIUS + Math.random() * (maxRadius - AMBIENT_SPAWN_MIN_RADIUS);
+      const radius = AMBIENT_SPAWN_MIN_RADIUS + Math.random() * (SPAWN_AREA_RADIUS_BLOCKS - AMBIENT_SPAWN_MIN_RADIUS);
       const gx = Math.round(p.x + Math.sin(angle) * radius);
       const gz = Math.round(p.z + Math.cos(angle) * radius);
       const gy = world.getSurfaceHeight(gx, gz);
