@@ -22,27 +22,18 @@ import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { DroppedItems } from './dropped-items';
 import { FurnaceManager } from './furnace';
-import { MobManager, type MobKind, type MobSpec } from './mob-manager';
-import { PIG_SPEC } from './pig-model';
-import { COW_SPEC } from './cow-model';
-import { SHEEP_SPEC } from './sheep-model';
-import { ZOMBIE_SPEC } from './zombie-model';
-import { WATER_LEVEL, CHUNK_SIZE } from './chunk';
+import { MobManager } from './mob-manager';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
 import { PlayerHealth } from './player-health';
 import { loadPlayerSave, savePlayerSave } from './player-store';
 import { playClick } from './ui-sound';
-import { BLOCK_CATALOG } from './creative-palette';
-import { ITEMS, maxStackOf } from './item';
 import { CraftingTableUI } from './crafting-table-ui';
 import { FurnaceUI } from './furnace-ui';
 import { TouchControls } from './touch-controls';
-import { lockPointer, isTouchDevice } from './is-touch';
-import { capturePanorama, downloadPanoramaZip } from './panorama';
+import { lockPointer } from './is-touch';
 import { keepFullscreenOnGesture, linkPwaManifest } from './fullscreen';
-import { makeStack } from './item-stack';
 import { DayNightCycle } from './day-night-cycle';
 import { SkyRenderer } from './sky-renderer';
 import { Chat } from './chat';
@@ -54,6 +45,9 @@ import { playIntro } from './intro';
 import { loadSettings } from './settings';
 import { activeWorld } from './worlds';
 import { waitForAccessGate } from './access-gate';
+import { createMobSpawning } from './mob-spawning';
+import { registerGameChatCommands } from './chat-commands';
+import { viewportSize, fitInventoryPanels, createApplyViewport, makeFloatingPanelDraggable } from './ui-layout';
 
 // Closed-beta key screen: blocks here, before anything else (intro included)
 // runs, until a valid name+key pair is submitted (or this browser already
@@ -81,15 +75,6 @@ camera.rotation.order = 'YXZ';
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-/** The actually-visible viewport. On mobile innerHeight lags the toolbar
- *  show/hide, so prefer visualViewport when it is available. */
-function viewportSize() {
-  const vv = window.visualViewport;
-  return {
-    w: Math.max(1, Math.round(vv?.width ?? window.innerWidth)),
-    h: Math.max(1, Math.round(vv?.height ?? window.innerHeight)),
-  };
-}
 {
   const { w, h } = viewportSize();
   // updateStyle=false: the CSS (#game-canvas fills #game-shell @ 100dvh) owns
@@ -461,236 +446,10 @@ const skyRenderer = new SkyRenderer(scene, camera);
 
 const chat = new Chat({ canvas, onOpenChange: (open) => player.setMovementLocked(open) });
 chat.cheatsEnabled = activeWorld()?.cheats ?? false;
-const TIME_PHASES = ['day', 'night', 'sunset', 'sunrise'] as const;
-chat.registerCommand('time', (args) => {
-  if (args[0] === 'set' && (TIME_PHASES as readonly string[]).includes(args[1])) {
-    dayNightCycle.setPhase(args[1] as (typeof TIME_PHASES)[number]);
-    return `Set the time to ${args[1]}`;
-  }
-  return 'Usage: /time set day|night|sunset|sunrise';
-});
-chat.registerCommand('seed', () => `World seed: ${worldSeed}`);
 
-let panoramaInFlight = false;
-chat.registerCommand('panorama', () => {
-  if (isTouchDevice()) return 'The /panorama command is not available on Android.';
-  if (panoramaInFlight) return 'Already capturing a panorama...';
-  panoramaInFlight = true;
-  const capturePos = camera.position.clone();
-  capturePanorama(renderer, scene, capturePos)
-    .then((blob) => {
-      downloadPanoramaZip(blob);
-      chat.system('Panorama saved.');
-    })
-    .catch((err) => chat.system(`Panorama capture failed: ${(err as Error).message}`))
-    .finally(() => { panoramaInFlight = false; });
-  return 'Capturing 360° panorama...';
-});
+const mobSpawning = createMobSpawning({ world, player, mobManager, dayNightCycle, lightEngine });
+registerGameChatCommands(chat, { player, mobManager, dayNightCycle, worldSeed, renderer, scene, camera, inventory, mobSpawning });
 
-chat.registerCommand('fly', () => {
-  const enabled = !player.flyEnabled;
-  player.setFlyEnabled(enabled);
-  return enabled
-    ? 'Flight enabled. Double-tap jump to fly, hold jump to ascend, sneak to descend.'
-    : 'Flight disabled.';
-});
-
-const MOB_SPECS: Record<MobKind, MobSpec> = { pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC };
-chat.registerCommand('summon', (args) => {
-  const kind = (args[0] ?? '').toLowerCase() as MobKind;
-  const spec = MOB_SPECS[kind];
-  if (!spec) return 'Usage: /summon <pig|cow|sheep|zombie>';
-
-  // A few blocks in front of the player, facing back toward them; forward
-  // direction matches PlayerController's own yaw convention. state.position
-  // is eye height, so drop back down to ground level for the mob's origin.
-  const dir = new THREE.Vector3(-Math.sin(player.state.yaw), 0, -Math.cos(player.state.yaw));
-  const pos = player.state.position.clone().addScaledVector(dir, 3);
-  pos.y -= 1.62;
-  mobManager.spawn(kind, spec, pos, player.state.yaw + Math.PI);
-  return `Summoned a ${kind}.`;
-});
-
-// --- Mob spawning: three fixed-size populations, each 4 independent "slots".
-// Each slot holds at most one mob id; when that mob dies or wanders outside
-// the currently-loaded chunks, the slot goes on its own 30s cooldown before
-// trying to fill again. No global caps/timers - with render distance always
-// kept low this is simple and cheap (12 slots, checked once a frame), and it
-// guarantees the player always finds hostiles in a dark cave, since cave
-// slots always try to spawn within a fixed 10-block radius regardless of
-// lighting - only actually lighting the area (raw light > 3) stops them.
-const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep'];
-const RESPAWN_COOLDOWN = 30; // seconds, individual per slot
-const AMBIENT_SPAWN_MIN_RADIUS = 10; // animals/surface hostiles: stay out of the player's immediate view so they don't visibly pop in
-const CAVE_SPAWN_RADIUS = 10; // fixed, not a range - "si o si en el radio 10"
-const CAVE_LIGHT_MAX = 3; // raw light level a cave column must be at/under to qualify
-const SURFACE_LIGHT_MAX = 4; // sky exposure a night surface column must be at/under (day/night-cycle.ts's nightSkyDarken=11 floors an exposed column at 15-11)
-
-type SpawnSlot = { mobId: number | null; cooldown: number };
-const animalSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
-const surfaceHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
-const caveHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
-
-/** True if (x,gy,z) is generated grass with two clear blocks above - a valid spot for a passive mob to stand. */
-function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
-  if (!world.isChunkLoaded(x, z)) return false;
-  if (world.getBlock(x, gy, z) !== BlockId.GRASS) return false;
-  return !isSolidBlock(world.getBlock(x, gy + 1, z)) && !isSolidBlock(world.getBlock(x, gy + 2, z));
-}
-
-/** Surface: dark enough (night, not just shaded), solid dry footing, at/above water level, not standing in water. */
-function isValidHostileSurfaceColumn(x: number, gy: number, z: number): boolean {
-  if (!world.isChunkLoaded(x, z)) return false;
-  if (gy < WATER_LEVEL) return false;
-  const ground = world.getBlock(x, gy, z);
-  if (ground === BlockId.AIR || ground === BlockId.WATER || ground === BlockId.LAVA) return false;
-  if (!isSolidBlock(ground)) return false;
-  if (isSolidBlock(world.getBlock(x, gy + 1, z)) || isSolidBlock(world.getBlock(x, gy + 2, z))) return false;
-  if (world.getBlock(x, gy + 1, z) === BlockId.WATER || world.getBlock(x, gy + 2, z) === BlockId.WATER) return false;
-  return lightEngine.getSkyExposure(x, gy + 1, z) <= SURFACE_LIGHT_MAX;
-}
-
-/**
- * Underground: standable column, dim enough (raw light <= CAVE_LIGHT_MAX - a
- * nearby torch pushes it over and blocks the spawn). Depth is judged relative
- * to the LOCAL surface height (baked into how the caller picks `y`, always a
- * few blocks under that column's own terrain), not the world's absolute
- * WATER_LEVEL - a cave cut into a mountain at y=100 is just as "underground"
- * as one at y=40, even though 100 >= WATER_LEVEL (63).
- */
-function isValidHostileCaveColumn(x: number, y: number, z: number): boolean {
-  if (!world.isChunkLoaded(x, z)) return false;
-  if (!isSolidBlock(world.getBlock(x, y, z))) return false;
-  if (isSolidBlock(world.getBlock(x, y + 1, z)) || isSolidBlock(world.getBlock(x, y + 2, z))) return false;
-  if (world.getBlock(x, y + 1, z) === BlockId.WATER || world.getBlock(x, y + 2, z) === BlockId.WATER) return false;
-  return lightEngine.getRawBrightness(x, y + 1, z) <= CAVE_LIGHT_MAX;
-}
-
-/** Random point within the player's currently-loaded chunks (view radius), for animals/surface hostiles. */
-function trySpawnAnimal(): number | null {
-  const p = player.state.position;
-  const maxRadius = Math.max(AMBIENT_SPAWN_MIN_RADIUS + 1, world.viewRadius * CHUNK_SIZE);
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const angle = Math.random() * Math.PI * 2;
-    const radius = AMBIENT_SPAWN_MIN_RADIUS + Math.random() * (maxRadius - AMBIENT_SPAWN_MIN_RADIUS);
-    const gx = Math.round(p.x + Math.sin(angle) * radius);
-    const gz = Math.round(p.z + Math.cos(angle) * radius);
-    const gy = world.getSurfaceHeight(gx, gz);
-    if (!isValidMobSpawnColumn(gx, gy, gz)) continue;
-    const kind = MOB_KINDS[Math.floor(Math.random() * MOB_KINDS.length)];
-    return mobManager.spawn(kind, MOB_SPECS[kind], new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
-  }
-  return null;
-}
-
-function trySpawnSurfaceHostile(): number | null {
-  const p = player.state.position;
-  const maxRadius = Math.max(AMBIENT_SPAWN_MIN_RADIUS + 1, world.viewRadius * CHUNK_SIZE);
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const angle = Math.random() * Math.PI * 2;
-    const radius = AMBIENT_SPAWN_MIN_RADIUS + Math.random() * (maxRadius - AMBIENT_SPAWN_MIN_RADIUS);
-    const gx = Math.round(p.x + Math.sin(angle) * radius);
-    const gz = Math.round(p.z + Math.cos(angle) * radius);
-    const gy = world.getSurfaceHeight(gx, gz);
-    if (gy < WATER_LEVEL || !isValidHostileSurfaceColumn(gx, gy, gz)) continue;
-    return mobManager.spawn('zombie', ZOMBIE_SPEC, new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
-  }
-  return null;
-}
-
-function trySpawnCaveHostile(): number | null {
-  const p = player.state.position;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const angle = Math.random() * Math.PI * 2;
-    const gx = Math.round(p.x + Math.sin(angle) * CAVE_SPAWN_RADIUS);
-    const gz = Math.round(p.z + Math.cos(angle) * CAVE_SPAWN_RADIUS);
-    if (!world.isChunkLoaded(gx, gz)) continue;
-    const surfaceY = world.getSurfaceHeight(gx, gz);
-    const gy = Math.max(1, Math.min(surfaceY - 3, Math.round(p.y) + Math.round((Math.random() - 0.5) * 16)));
-    if (!isValidHostileCaveColumn(gx, gy, gz)) continue;
-    return mobManager.spawn('zombie', ZOMBIE_SPEC, new THREE.Vector3(gx, gy + 0.5, gz), Math.random() * Math.PI * 2 - Math.PI);
-  }
-  return null;
-}
-
-/** Frees a slot whose mob died or left the loaded area, ticks its cooldown, and tries a fresh spawn once ready. */
-function updateSpawnSlot(slot: SpawnSlot, delta: number, condition: boolean, trySpawn: () => number | null): void {
-  if (slot.mobId !== null) {
-    if (!mobManager.isAlive(slot.mobId)) {
-      slot.mobId = null;
-      slot.cooldown = RESPAWN_COOLDOWN;
-      return;
-    }
-    const pos = mobManager.getPosition(slot.mobId);
-    if (pos && !world.isChunkLoaded(Math.round(pos.x), Math.round(pos.z))) {
-      mobManager.forceRemove(slot.mobId);
-      slot.mobId = null;
-      slot.cooldown = RESPAWN_COOLDOWN;
-    }
-    return;
-  }
-  if (slot.cooldown > 0) {
-    slot.cooldown -= delta;
-    return;
-  }
-  if (!condition) return;
-  slot.mobId = trySpawn();
-}
-
-function updateSpawnSlots(delta: number): void {
-  const isDay = !dayNightCycle.isNight();
-  const isNight = dayNightCycle.isNight();
-  for (const slot of animalSlots) updateSpawnSlot(slot, delta, isDay, trySpawnAnimal);
-  for (const slot of surfaceHostileSlots) updateSpawnSlot(slot, delta, isNight, trySpawnSurfaceHostile);
-  for (const slot of caveHostileSlots) updateSpawnSlot(slot, delta, true, trySpawnCaveHostile);
-}
-
-chat.registerCommand('mobstatus', () => {
-  const describe = (slots: SpawnSlot[]) =>
-    slots.map((s) => (s.mobId !== null ? `#${s.mobId}` : s.cooldown > 0 ? `cd ${s.cooldown.toFixed(0)}s` : 'ready')).join(', ');
-  chat.system(`Animals (day): ${describe(animalSlots)}`);
-  chat.system(`Surface hostiles (night): ${describe(surfaceHostileSlots)}`);
-  chat.system(`Cave hostiles (any time): ${describe(caveHostileSlots)}`);
-  return `isNight=${dayNightCycle.isNight()} viewRadius=${world.viewRadius} chunks`;
-});
-
-const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-chat.registerCommand('give', (args) => {
-  if (args.length === 0) return 'Usage: /give <item|block> [count]';
-
-  // Trailing pure-number argument is the count; the rest is the item name.
-  let count = 1;
-  let nameParts = args;
-  const last = args[args.length - 1];
-  if (args.length > 1 && /^\d+$/.test(last)) {
-    count = Math.max(1, Math.min(6400, parseInt(last, 10)));
-    nameParts = args.slice(0, -1);
-  }
-  const query = slugify(nameParts.join(' ').replace(/^minecraft:/, ''));
-
-  let id: number | null = null;
-  let label = '';
-  for (const b of BLOCK_CATALOG) {
-    if (slugify(b.name) === query || String(b.id) === query) { id = b.id; label = b.name; break; }
-  }
-  if (id == null) {
-    for (const [key, def] of Object.entries(ITEMS)) {
-      if (slugify(def.name) === query || key === query) { id = Number(key); label = def.name; break; }
-    }
-  }
-  if (id == null) return `Unknown item: ${nameParts.join(' ')}`;
-
-  const per = maxStackOf(id);
-  let remaining = count;
-  while (remaining > 0) {
-    const take = Math.min(remaining, per);
-    const leftover = inventory.addItem(makeStack(id, take));
-    remaining -= take - leftover;
-    if (leftover > 0) break;
-  }
-  const gave = count - remaining;
-  return gave > 0 ? `Gave ${gave} × ${label}` : 'Inventory full';
-});
 const underwaterManager = new UnderwaterManager(camera, world, scene, fog, underwaterOverlay);
 const gameLoop = new GameLoop(world, player, lightEngine, camera, canvas, scene, pauseMenu, dayNightCycle, underwaterManager);
 
@@ -769,7 +528,7 @@ function animate() {
       (x, y, z) => lightEngine.getSkyExposure(x, y, z),
     );
 
-    updateSpawnSlots(delta);
+    mobSpawning.update(delta);
 
     if (player.consumeWaterEntry()) soundManager.playRandom('player/Water_splash', 2, 0.5);
 
@@ -880,28 +639,9 @@ function animate() {
   diagnostics.update(performance.now(), loopState.dayNight.cycleProgress * 100);
 }
 
-/** Shrink the inventory / crafting-table panels so they never overflow a small
- *  (phone) screen. Never scales past the desktop 1.18. */
-function fitInventoryPanels() {
-  const scale = Math.min(
-    1.18,
-    (window.innerWidth - 16) / 352,
-    (window.innerHeight - 16) / 332,
-  );
-  for (const sel of ['#backpack', '#crafting-table', '#furnace']) {
-    document.querySelector<HTMLElement>(sel)?.style.setProperty('--inv-scale', String(scale));
-  }
-}
 fitInventoryPanels();
 
-function applyViewport() {
-  const { w, h } = viewportSize();
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-  renderer.setSize(w, h, false);
-  hand.resize(w / h);
-  fitInventoryPanels();
-}
+const applyViewport = createApplyViewport(camera, renderer, hand);
 window.addEventListener('resize', applyViewport);
 window.addEventListener('orientationchange', applyViewport);
 window.visualViewport?.addEventListener('resize', applyViewport);
@@ -917,64 +657,6 @@ document.addEventListener('keydown', (event) => {
 });
 
 // Make floating panels draggable
-function makeFloatingPanelDraggable(panelId: string) {
-  const panel = document.querySelector<HTMLElement>(`#${panelId}`)!;
-  const header = panel.querySelector<HTMLElement>('header')!;
-  let isDragging = false;
-  let startX = 0;
-  let startY = 0;
-  let startLeft = 0;
-  let startTop = 0;
-
-  const loadPosition = () => {
-    const saved = localStorage.getItem(`panel-position-${panelId}`);
-    if (saved) {
-      const { left, top } = JSON.parse(saved);
-      panel.style.left = `${left}px`;
-      panel.style.top = `${top}px`;
-      panel.style.right = 'auto';
-    }
-  };
-
-  const savePosition = () => {
-    const rect = panel.getBoundingClientRect();
-    localStorage.setItem(`panel-position-${panelId}`, JSON.stringify({
-      left: rect.left,
-      top: rect.top,
-    }));
-  };
-
-  header.style.cursor = 'grab';
-  header.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    startX = e.clientX;
-    startY = e.clientY;
-    const rect = panel.getBoundingClientRect();
-    startLeft = rect.left;
-    startTop = rect.top;
-    header.style.cursor = 'grabbing';
-  });
-
-  document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    const deltaX = e.clientX - startX;
-    const deltaY = e.clientY - startY;
-    panel.style.left = `${startLeft + deltaX}px`;
-    panel.style.top = `${startTop + deltaY}px`;
-    panel.style.right = 'auto';
-  });
-
-  document.addEventListener('mouseup', () => {
-    if (isDragging) {
-      isDragging = false;
-      savePosition();
-      header.style.cursor = 'grab';
-    }
-  });
-
-  loadPosition();
-}
-
 makeFloatingPanelDraggable('diagnostics-panel');
 makeFloatingPanelDraggable('block-inspector');
 
