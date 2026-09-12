@@ -4,8 +4,9 @@ import { BLOCK_CATALOG } from './creative-palette';
 import { BlockId } from './block';
 import { ITEMS, isBlock } from './item';
 import {
-  type FaceRects, type FaceFlips, MIRROR_U, applyAtlasUVs as applyAtlasUVsRaw, applyFaceShading,
-} from './atlas-box';
+  getAtlasMaterial, getOverlayMaterial, getSkinAtlasMaterial, applySkinTexture, resetSkinTexture,
+  buildArmGeometry, buildArmMesh, buildPlayerModelParts, type PlayerModelParts,
+} from './player-model-geometry';
 
 export type ModelAdjustments = {
   head: { x: number; y: number; z: number };
@@ -15,104 +16,7 @@ export type ModelAdjustments = {
   legs: { x: number; y: number; z: number };
 };
 
-// --- Shared skin atlas (textures/player.png, a 64x64 Minecraft skin) ---
-const ATLAS_PATH = new URL('../textures/player.png', import.meta.url).href;
-const ATLAS_W = 64;
-const ATLAS_H = 64;
-
-/**
- * One material with the atlas map, shared by every body part.
- * Unlit (MeshBasicMaterial) so the skin reads at full brightness, like the
- * previous textured head — MeshStandardMaterial rendered it near-black.
- */
-let sharedAtlasMaterial: THREE.MeshBasicMaterial | null = null;
-function getAtlasMaterial(): THREE.MeshBasicMaterial {
-  if (sharedAtlasMaterial) return sharedAtlasMaterial;
-  const texture = new THREE.TextureLoader().load(ATLAS_PATH);
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
-  texture.generateMipmaps = false;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  sharedAtlasMaterial = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true });
-  return sharedAtlasMaterial;
-}
-
-/**
- * Point both the base atlas material AND the outer 3D-layer overlay material
- * (hat/jacket/sleeves/pants - see getOverlayMaterial()) at the same new
- * texture, then dispose whatever they both used to share. Overlay's map is
- * only ever seeded once, at first use, as a snapshot of whatever the atlas
- * had then - if a skin swap only ever touched the atlas material, the
- * overlay kept showing the old skin's 3D layers (or, worse, a disposed
- * texture once the old one was freed).
- */
-function setSharedSkinTexture(texture: THREE.Texture): void {
-  const atlas = getAtlasMaterial();
-  const overlay = overlayMaterial; // don't force-create it if nothing has yet
-  const oldTexture = atlas.map;
-  atlas.map = texture;
-  atlas.needsUpdate = true;
-  if (overlay) {
-    overlay.map = texture;
-    overlay.needsUpdate = true;
-  }
-  if (oldTexture && oldTexture !== texture) oldTexture.dispose();
-}
-
-/**
- * Swap the skin atlas for a custom one (Player Options -> Import Skin).
- * Replaces the shared materials' map in place, so every existing mesh built
- * with getAtlasMaterial()/getSkinAtlasMaterial() - the world player model, the
- * inventory doll(s), the first-person arm, and their 3D overlay layers -
- * picks it up immediately without needing to be rebuilt.
- */
-export function applySkinTexture(image: HTMLImageElement): void {
-  const texture = new THREE.Texture(image);
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
-  texture.generateMipmaps = false;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-  setSharedSkinTexture(texture);
-}
-
-/** Revert to the built-in default skin (Player Options -> Reset Skin). */
-export function resetSkinTexture(): void {
-  const texture = new THREE.TextureLoader().load(ATLAS_PATH);
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
-  texture.generateMipmaps = false;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  setSharedSkinTexture(texture);
-}
-
-// --- Outer "3D" layer (hat / jacket / sleeves / pants). Same atlas as the base. ---
-// MCPE inflates the shell box by g=0.5 px per side. In EvlyMC units that is
-// ~0.069 blocks on width/depth and ~0.063 on height (px->block ratio differs per axis).
-const INFLATE_WD = 0.069;
-const INFLATE_H = 0.063;
-
-let overlayMaterial: THREE.MeshBasicMaterial | null = null;
-function getOverlayMaterial(): THREE.MeshBasicMaterial {
-  if (overlayMaterial) return overlayMaterial;
-  // Reuse the base atlas texture (player.png); if the skin has 3D layers the
-  // overlay regions carry alpha and alphaTest cuts out the empty parts.
-  const texture = getAtlasMaterial().map;
-  overlayMaterial = new THREE.MeshBasicMaterial({
-    map: texture,
-    vertexColors: true,
-    transparent: true,
-    alphaTest: 0.5,
-    side: THREE.DoubleSide,
-  });
-  return overlayMaterial;
-}
-
-/** player.png-bound wrapper: applyAtlasUVsRaw() (atlas-box.ts) needs the atlas
- *  size explicitly since it's shared with mobs, which use a different one. */
-function applyAtlasUVs(geo: THREE.BoxGeometry, rects: FaceRects, flips: FaceFlips = {}) {
-  applyAtlasUVsRaw(geo, rects, ATLAS_W, ATLAS_H, flips);
-}
+export { applySkinTexture, resetSkinTexture, buildArmGeometry, getSkinAtlasMaterial };
 
 /** Shortest signed angle in (-PI, PI]. */
 function wrapAngle(a: number): number {
@@ -120,106 +24,6 @@ function wrapAngle(a: number): number {
   if (a <= -Math.PI) a += Math.PI * 2;
   else if (a > Math.PI) a -= Math.PI * 2;
   return a;
-}
-
-/**
- * Atlas pixel rects per body part, derived from MCPE 0.6.1 (loro/src/client/model:
- * HumanoidModel.cpp texOffs + Cube.cpp face formula), 64x64 skin layout.
- * Keys are EvlyMC cube faces; the model faces -Z so nz = MCPE "Front".
- */
-const SKIN_UV = {
-  head: {
-    nz: [8, 8, 15, 15], pz: [24, 8, 31, 15], px: [0, 8, 7, 15],
-    nx: [16, 8, 23, 15], py: [8, 0, 15, 7], ny: [16, 0, 23, 7],
-  } as FaceRects,
-  torso: {
-    nz: [20, 20, 27, 31], pz: [32, 20, 39, 31], px: [16, 20, 19, 31],
-    nx: [28, 20, 31, 31], py: [20, 16, 27, 19], ny: [28, 16, 35, 19],
-  } as FaceRects,
-  armRight: {
-    nz: [44, 20, 47, 31], pz: [52, 20, 55, 31], px: [40, 20, 43, 31],
-    nx: [48, 20, 51, 31], py: [44, 16, 47, 19], ny: [48, 16, 51, 19],
-  } as FaceRects,
-  armLeft: {
-    nz: [36, 52, 39, 63], pz: [44, 52, 47, 63], px: [32, 52, 35, 63],
-    nx: [40, 52, 43, 63], py: [36, 48, 39, 51], ny: [40, 48, 43, 51],
-  } as FaceRects,
-  legRight: {
-    nz: [4, 20, 7, 31], pz: [12, 20, 15, 31], px: [0, 20, 3, 31],
-    nx: [8, 20, 11, 31], py: [4, 16, 7, 19], ny: [8, 16, 11, 19],
-  } as FaceRects,
-  legLeft: {
-    nz: [20, 52, 23, 63], pz: [28, 52, 31, 63], px: [16, 52, 19, 63],
-    nx: [24, 52, 27, 63], py: [20, 48, 23, 51], ny: [24, 48, 27, 51],
-  } as FaceRects,
-};
-
-/**
- * Outer 3D layer rects (MCPE overlay boxes: hair/jacket/sleeves/pants,
- * texOffs from HumanoidModel.cpp lines 46, 69-82). Same face convention as SKIN_UV.
- */
-const SKIN_UV_OVERLAY = {
-  hat: {
-    nz: [40, 8, 47, 15], pz: [56, 8, 63, 15], px: [32, 8, 39, 15],
-    nx: [48, 8, 55, 15], py: [40, 0, 47, 7], ny: [48, 0, 55, 7],
-  } as FaceRects,
-  jacket: {
-    nz: [20, 36, 27, 47], pz: [32, 36, 39, 47], px: [16, 36, 19, 47],
-    nx: [28, 36, 31, 47], py: [20, 32, 27, 35], ny: [28, 32, 35, 35],
-  } as FaceRects,
-  sleeveRight: {
-    nz: [44, 36, 47, 47], pz: [52, 36, 55, 47], px: [40, 36, 43, 47],
-    nx: [48, 36, 51, 47], py: [44, 32, 47, 35], ny: [48, 32, 51, 35],
-  } as FaceRects,
-  sleeveLeft: {
-    nz: [52, 52, 55, 63], pz: [60, 52, 63, 63], px: [48, 52, 51, 63],
-    nx: [56, 52, 59, 63], py: [52, 48, 55, 51], ny: [56, 48, 59, 51],
-  } as FaceRects,
-  pantRight: {
-    nz: [4, 36, 7, 47], pz: [12, 36, 15, 47], px: [0, 36, 3, 47],
-    nx: [8, 36, 11, 47], py: [4, 32, 7, 35], ny: [8, 32, 11, 35],
-  } as FaceRects,
-  pantLeft: {
-    nz: [4, 52, 7, 63], pz: [12, 52, 15, 63], px: [0, 52, 3, 63],
-    nx: [8, 52, 11, 63], py: [4, 48, 7, 51], ny: [8, 48, 11, 51],
-  } as FaceRects,
-};
-
-// --- Slim ("Alex") arms: 3 px wide instead of 4. Depth (px/nx faces) is unchanged. ---
-const ARM_WIDTH = 0.275;
-const ARM_WIDTH_SLIM = 0.20625; // 3/4 of classic
-// Keep the inner edge (toward the torso) fixed when switching to slim.
-const ARM_SLIM_INSET = (ARM_WIDTH - ARM_WIDTH_SLIM) / 2;
-
-const SKIN_UV_SLIM = {
-  armRight: {
-    nz: [44, 20, 46, 31], pz: [51, 20, 53, 31], px: [40, 20, 43, 31],
-    nx: [47, 20, 50, 31], py: [44, 16, 46, 19], ny: [47, 16, 49, 19],
-  } as FaceRects,
-  armLeft: {
-    nz: [36, 52, 38, 63], pz: [43, 52, 45, 63], px: [32, 52, 35, 63],
-    nx: [39, 52, 42, 63], py: [36, 48, 38, 51], ny: [39, 48, 41, 51],
-  } as FaceRects,
-};
-
-/**
- * Standalone arm-box builder, shared with the first-person hand renderer so it
- * gets the exact same skin UVs / face shading as the third-person model.
- */
-export function buildArmGeometry(side: 'left' | 'right', slim: boolean): THREE.BoxGeometry {
-  const width = slim ? ARM_WIDTH_SLIM : ARM_WIDTH;
-  const geo = new THREE.BoxGeometry(width, 0.76, 0.275);
-  const rects = side === 'right'
-    ? (slim ? SKIN_UV_SLIM.armRight : SKIN_UV.armRight)
-    : (slim ? SKIN_UV_SLIM.armLeft : SKIN_UV.armLeft);
-  applyAtlasUVs(geo, rects, side === 'left' ? MIRROR_U : {});
-  applyFaceShading(geo);
-  return geo;
-}
-
-/** The shared player-skin atlas material (vertex-colour shaded, nearest-filtered). */
-export function getSkinAtlasMaterial(): THREE.MeshBasicMaterial {
-  return getAtlasMaterial();
 }
 
 // --- Sneak pose (MCPE 0.6.1 HumanoidModel::setupAnim) ---
@@ -232,44 +36,23 @@ const SNEAK_BODY_DZ = -0.03;      // torso + arms + legs shift forward (-Z)
 const SNEAK_DAMP = 14;           // higher = snappier in/out
 const TORSO_LEN = 0.76;          // torso height; the hips sit this far below the neck pivot
 
-const SKIN_UV_OVERLAY_SLIM = {
-  sleeveRight: {
-    nz: [44, 36, 46, 47], pz: [51, 36, 53, 47], px: [40, 36, 43, 47],
-    nx: [47, 36, 50, 47], py: [44, 32, 46, 35], ny: [47, 32, 49, 35],
-  } as FaceRects,
-  sleeveLeft: {
-    nz: [52, 52, 54, 63], pz: [59, 52, 61, 63], px: [48, 52, 51, 63],
-    nx: [55, 52, 58, 63], py: [52, 48, 54, 51], ny: [55, 48, 57, 51],
-  } as FaceRects,
-};
-
 /**
- * Creates a 3D player model (Steve from Minecraft).
- * All dimensions in blocks.
- * No animations - static model only.
+ * Creates a 3D player model (Steve from Minecraft) and drives its animation
+ * state (walk cycle, swing, hurt flash, death, sneak). The static geometry
+ * itself is built by player-model-geometry.ts.
  */
 export class PlayerModel {
   readonly group: THREE.Group;
-  private head?: THREE.Mesh;
-  private torso?: THREE.Mesh;
+  private readonly parts: PlayerModelParts;
   private armLeft?: THREE.Mesh;
   private armRight?: THREE.Mesh;
-  private legLeft?: THREE.Mesh;
-  private legRight?: THREE.Mesh;
-  private armLeftGroup?: THREE.Group;
   private armLeftRotation = 0;
-  private armRightGroup?: THREE.Group;
   private armRightRotation = 0;
-  /** Fist pivot on the right arm; the held block/item hangs off this. */
-  private handAnchor?: THREE.Group;
   private heldMesh?: THREE.Group;
   private heldId: number | null = null;
   private lightLevel = 1;
-  private legLeftGroup?: THREE.Group;
   private legLeftRotation = 0;
-  private legRightGroup?: THREE.Group;
   private legRightRotation = 0;
-  private headColorMaterial?: THREE.Material;
   private isWalking = false;
   private isReturning = false;
   private walkCycleTime = 0;
@@ -302,7 +85,6 @@ export class PlayerModel {
   private slimArms = false;
   private bodyYaw = 0;
   private bodyYawInit = false;
-  private torsoGroup?: THREE.Group;
   private sneakTarget = 0;
   private sneakAmount = 0;
   /** Extra arm pitch from the current sneak amount; folded in by the arm setters. */
@@ -310,228 +92,17 @@ export class PlayerModel {
 
   constructor() {
     this.group = new THREE.Group();
-    this.buildModel();
-    // this.loadTexture(); // Disabled for manual UV mapping
-  }
-
-  private async loadTexture() {
-    const textureLoader = new THREE.TextureLoader();
-    try {
-      const texture = await textureLoader.loadAsync(ATLAS_PATH);
-      texture.magFilter = THREE.NearestFilter;
-      texture.minFilter = THREE.NearestFilter;
-      texture.colorSpace = THREE.SRGBColorSpace;
-
-      console.log('Player texture loaded successfully:', texture);
-
-      const material = new THREE.MeshBasicMaterial({
-        map: texture,
-        side: THREE.DoubleSide,
-      });
-
-      // Apply textured material to all body parts
-      this.group.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.material = material;
-        }
-      });
-
-      console.log('Texture material applied to all meshes');
-    } catch (error) {
-      console.error('Failed to load player texture:', error);
-    }
-  }
-
-  private buildModel() {
-    // Create default materials for fallback
-    const skinColor = 0xd4a373; // Skin tone
-    const shirtColor = 0x1e5aa8; // Blue shirt
-    const pantsColor = 0x2d2d2d; // Dark gray pants
-    const bootsColor = 0x1a1a1a; // Black boots
-
-    // Eyes are at y=0 (player.state.position), feet are at y=-1.62 (eye height)
-    // Head (0.55 x 0.55 x 0.55) - 10% larger - eyes approximately in upper middle of head
-    this.head = new THREE.Mesh(
-      this.createHeadGeometry(),
-      this.createHeadMaterials(),
-    );
-    this.head.position.y = 0.02; // Positioned so eyes are near center
-    this.head.castShadow = true;
-    this.head.receiveShadow = true;
-
-    this.group.add(this.head);
-    this.addOverlay(this.head, 0.55, 0.55, 0.55, SKIN_UV_OVERLAY.hat);
-
-    // Torso/Body (0.55 x 0.76 x 0.275) - 10% larger + elongated
-    // Torso lives in a pivot group at the neck (y=-0.24) so it can lean forward when sneaking.
-    this.torsoGroup = new THREE.Group();
-    this.torsoGroup.position.y = -0.24;
-    this.group.add(this.torsoGroup);
-
-    this.torso = new THREE.Mesh(
-      this.createTorsoGeometry(),
-      getAtlasMaterial(),
-    );
-    this.torso.position.y = -0.38; // torso centre relative to the neck pivot
-    this.torso.castShadow = true;
-    this.torso.receiveShadow = true;
-    this.torsoGroup.add(this.torso);
-    this.addOverlay(this.torso, 0.55, 0.76, 0.275, SKIN_UV_OVERLAY.jacket);
-
-    // Left arm - with shoulder joint for rotation
-    this.armLeftGroup = new THREE.Group();
-    this.armLeftGroup.position.set(-0.4125, -0.24, 0); // Shoulder position (top of arm)
-    this.group.add(this.armLeftGroup);
-    this.buildArm('left');
-
-    // Right arm - with shoulder joint for rotation
-    this.armRightGroup = new THREE.Group();
-    this.armRightGroup.position.set(0.4125, -0.24, 0); // Shoulder position (top of arm)
-    this.group.add(this.armRightGroup);
-    this.buildArm('right');
-
-    // Fist: bottom of the 0.76-tall arm, nudged forward (-Z) out of the palm.
-    // Parented to the arm group so the held thing swings with the walk anim.
-    this.handAnchor = new THREE.Group();
-    this.handAnchor.position.set(0, -0.7, -0.06);
-    this.armRightGroup.add(this.handAnchor);
-
-    // Left leg - with hip joint for rotation
-    this.legLeftGroup = new THREE.Group();
-    this.legLeftGroup.position.set(-0.13875, -0.99, 0); // Hip position (top center of leg)
-    this.group.add(this.legLeftGroup);
-
-    this.legLeft = new THREE.Mesh(
-      this.createLegGeometry('left'),
-      getAtlasMaterial(),
-    );
-    this.legLeft.position.set(0, -0.38, 0); // Relative to hip (half height down)
-    this.legLeft.castShadow = true;
-    this.legLeft.receiveShadow = true;
-    this.legLeftGroup.add(this.legLeft);
-    this.addOverlay(this.legLeft, 0.275, 0.76, 0.275, SKIN_UV_OVERLAY.pantLeft, MIRROR_U);
-
-    // Right leg - with hip joint for rotation
-    this.legRightGroup = new THREE.Group();
-    this.legRightGroup.position.set(0.13875, -0.99, 0); // Hip position (top center of leg)
-    this.group.add(this.legRightGroup);
-
-    this.legRight = new THREE.Mesh(
-      this.createLegGeometry('right'),
-      getAtlasMaterial(),
-    );
-    this.legRight.position.set(0, -0.38, 0); // Relative to hip (half height down)
-    this.legRight.castShadow = true;
-    this.legRight.receiveShadow = true;
-    this.legRightGroup.add(this.legRight);
-    this.addOverlay(this.legRight, 0.275, 0.76, 0.275, SKIN_UV_OVERLAY.pantRight);
-
-    // Enable flat shading for blocky Minecraft look
-    this.group.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.computeVertexNormals();
-        if (child.material instanceof THREE.MeshStandardMaterial) {
-          child.material.flatShading = true;
-        }
-      }
-    });
-
-    // Model is 1.8 blocks tall (0.5 head + 0.6 torso + 0.6 legs)
-    // Positioned so the model's center aligns with player.state.position (eye level)
-    // Player position represents eye position (1.62 blocks above feet)
-    this.group.position.y = 0; // No offset - position synced directly
-  }
-
-  /**
-   * Attach an inflated shell box (the "3D"/outer skin layer) as a child of a
-   * base part, so it inherits every transform (joint rotation, adjustments).
-   * Uses the transparent overlay material (test.png).
-   */
-  private addOverlay(base: THREE.Mesh, w: number, h: number, d: number, rects: FaceRects, flips?: FaceFlips) {
-    const geo = new THREE.BoxGeometry(w + INFLATE_WD, h + INFLATE_H, d + INFLATE_WD);
-    applyAtlasUVs(geo, rects, flips ?? {});
-    applyFaceShading(geo);
-    const shell = new THREE.Mesh(geo, getOverlayMaterial());
-    shell.castShadow = true;
-    base.add(shell);
-  }
-
-  /** Head uses the shared skin atlas, same material as the rest of the body. */
-  private createHeadMaterials(): THREE.Material {
-    return getAtlasMaterial();
-  }
-
-  /**
-   * Head geometry, UV-mapped to the atlas (textures/player.png).
-   * 'nz' is the front (the face), which points along the look arrow.
-   * Pixel rects are [x0, y0, x1, y1] inclusive.
-   */
-  private createHeadGeometry(): THREE.BoxGeometry {
-    const geo = new THREE.BoxGeometry(0.55, 0.55, 0.55);
-    applyAtlasUVs(geo, SKIN_UV.head);
-    applyFaceShading(geo);
-    return geo;
-  }
-
-  /** Torso geometry, UV-mapped to the atlas (MCPE body region). */
-  private createTorsoGeometry(): THREE.BoxGeometry {
-    const geo = new THREE.BoxGeometry(0.55, 0.76, 0.275);
-    applyAtlasUVs(geo, SKIN_UV.torso);
-    applyFaceShading(geo);
-    return geo;
-  }
-
-  /** Arm geometry. Left arm mirrors the MCPE arm1 region; slim = "Alex" (3 px wide). */
-  private createArmGeometry(side: 'left' | 'right', slim: boolean): THREE.BoxGeometry {
-    return buildArmGeometry(side, slim);
-  }
-
-  /** (Re)build one arm mesh + its 3D overlay for the current slim/classic setting. */
-  private buildArm(side: 'left' | 'right') {
-    const group = side === 'left' ? this.armLeftGroup : this.armRightGroup;
-    if (!group) return;
-
-    const old = side === 'left' ? this.armLeft : this.armRight;
-    if (old) {
-      group.remove(old);
-      old.traverse((c) => { if (c instanceof THREE.Mesh) c.geometry.dispose(); });
-    }
-
-    const mesh = new THREE.Mesh(this.createArmGeometry(side, this.slimArms), getAtlasMaterial());
-    // Keep the inner edge (toward the torso) attached when slim.
-    const inset = this.slimArms ? (side === 'left' ? ARM_SLIM_INSET : -ARM_SLIM_INSET) : 0;
-    mesh.position.set(inset, -0.38, 0);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    group.add(mesh);
-
-    const width = this.slimArms ? ARM_WIDTH_SLIM : ARM_WIDTH;
-    const overlayRects = side === 'left'
-      ? (this.slimArms ? SKIN_UV_OVERLAY_SLIM.sleeveLeft : SKIN_UV_OVERLAY.sleeveLeft)
-      : (this.slimArms ? SKIN_UV_OVERLAY_SLIM.sleeveRight : SKIN_UV_OVERLAY.sleeveRight);
-    this.addOverlay(mesh, width, 0.76, 0.275, overlayRects, side === 'left' ? MIRROR_U : undefined);
-
-    if (side === 'left') this.armLeft = mesh; else this.armRight = mesh;
+    this.parts = buildPlayerModelParts(this.group);
+    this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', this.slimArms);
+    this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', this.slimArms);
   }
 
   /** Toggle slim ("Alex") arms. Rebuilds both arm meshes. */
   setSlimArms(slim: boolean) {
     if (this.slimArms === slim) return;
     this.slimArms = slim;
-    this.buildArm('left');
-    this.buildArm('right');
-  }
-
-  /** Leg geometry. Left leg uses the mirrored MCPE leg1 region. */
-  private createLegGeometry(side: 'left' | 'right'): THREE.BoxGeometry {
-    const geo = new THREE.BoxGeometry(0.275, 0.76, 0.275);
-    if (side === 'right') {
-      applyAtlasUVs(geo, SKIN_UV.legRight);
-    } else {
-      applyAtlasUVs(geo, SKIN_UV.legLeft, MIRROR_U);
-    }
-    applyFaceShading(geo);
-    return geo;
+    this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', slim, this.armLeft);
+    this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', slim, this.armRight);
   }
 
   /**
@@ -546,44 +117,33 @@ export class PlayerModel {
    */
   setAdjustments(adjustments: ModelAdjustments) {
     const s = this.sneakAmount;
-    if (this.head) {
-      this.head.position.x = adjustments.head.x;
-      this.head.position.y = 0.02 + adjustments.head.y + SNEAK_HEAD_DY * s;
-      this.head.position.z = adjustments.head.z + SNEAK_HEAD_DZ * s;
-    }
+    const { head, torsoGroup, armLeftGroup, armRightGroup, legLeftGroup, legRightGroup } = this.parts;
+    head.position.x = adjustments.head.x;
+    head.position.y = 0.02 + adjustments.head.y + SNEAK_HEAD_DY * s;
+    head.position.z = adjustments.head.z + SNEAK_HEAD_DZ * s;
     // Whole-body crouch shift (head excluded).
     const bodyDy = SNEAK_BODY_DY * s;
     const bodyDz = SNEAK_BODY_DZ * s;
-    if (this.torsoGroup) {
-      this.torsoGroup.position.x = adjustments.torso.x;
-      this.torsoGroup.position.y = -0.24 + adjustments.torso.y + bodyDy;
-      this.torsoGroup.position.z = adjustments.torso.z + bodyDz;
-    }
-    if (this.armLeftGroup) {
-      this.armLeftGroup.position.x = -0.4125 + adjustments.armLeft.x;
-      this.armLeftGroup.position.y = -0.24 + adjustments.armLeft.y + bodyDy;
-      this.armLeftGroup.position.z = adjustments.armLeft.z + bodyDz;
-    }
-    if (this.armRightGroup) {
-      this.armRightGroup.position.x = 0.4125 + adjustments.armRight.x;
-      this.armRightGroup.position.y = -0.24 + adjustments.armRight.y + bodyDy;
-      this.armRightGroup.position.z = adjustments.armRight.z + bodyDz;
-    }
+    torsoGroup.position.x = adjustments.torso.x;
+    torsoGroup.position.y = -0.24 + adjustments.torso.y + bodyDy;
+    torsoGroup.position.z = adjustments.torso.z + bodyDz;
+    armLeftGroup.position.x = -0.4125 + adjustments.armLeft.x;
+    armLeftGroup.position.y = -0.24 + adjustments.armLeft.y + bodyDy;
+    armLeftGroup.position.z = adjustments.armLeft.z + bodyDz;
+    armRightGroup.position.x = 0.4125 + adjustments.armRight.x;
+    armRightGroup.position.y = -0.24 + adjustments.armRight.y + bodyDy;
+    armRightGroup.position.z = adjustments.armRight.z + bodyDz;
     // Follow the torso's bottom edge as it swings on the neck pivot, so the hips
     // stay glued to the torso instead of tearing away.
     const theta = SNEAK_TORSO_PITCH * s;
     const hipDy = TORSO_LEN * (1 - Math.cos(theta)); // rises slightly
     const hipDz = -TORSO_LEN * Math.sin(theta);      // moves forward (-Z)
-    if (this.legLeftGroup) {
-      this.legLeftGroup.position.x = -0.13875 + adjustments.legs.x;
-      this.legLeftGroup.position.y = -0.99 + adjustments.legs.y + hipDy + bodyDy;
-      this.legLeftGroup.position.z = adjustments.legs.z + hipDz + bodyDz;
-    }
-    if (this.legRightGroup) {
-      this.legRightGroup.position.x = 0.13875 + adjustments.legs.x;
-      this.legRightGroup.position.y = -0.99 + adjustments.legs.y + hipDy + bodyDy;
-      this.legRightGroup.position.z = adjustments.legs.z + hipDz + bodyDz;
-    }
+    legLeftGroup.position.x = -0.13875 + adjustments.legs.x;
+    legLeftGroup.position.y = -0.99 + adjustments.legs.y + hipDy + bodyDy;
+    legLeftGroup.position.z = adjustments.legs.z + hipDz + bodyDz;
+    legRightGroup.position.x = 0.13875 + adjustments.legs.x;
+    legRightGroup.position.y = -0.99 + adjustments.legs.y + hipDy + bodyDy;
+    legRightGroup.position.z = adjustments.legs.z + hipDz + bodyDz;
   }
 
   /**
@@ -591,11 +151,7 @@ export class PlayerModel {
    */
   setLeftArmRotation(angle: number) {
     this.armLeftRotation = angle;
-    if (this.armLeftGroup) {
-      this.armLeftGroup.rotation.x = angle + this.armSneakOffset;
-    } else {
-      console.error('armLeftGroup is null/undefined!');
-    }
+    this.parts.armLeftGroup.rotation.x = angle + this.armSneakOffset;
   }
 
   /**
@@ -610,9 +166,7 @@ export class PlayerModel {
    */
   setRightArmRotation(angle: number) {
     this.armRightRotation = angle;
-    if (this.armRightGroup) {
-      this.armRightGroup.rotation.x = angle + this.armSneakOffset;
-    }
+    this.parts.armRightGroup.rotation.x = angle + this.armSneakOffset;
   }
 
   /**
@@ -627,9 +181,7 @@ export class PlayerModel {
    */
   setLeftLegRotation(angle: number) {
     this.legLeftRotation = angle;
-    if (this.legLeftGroup) {
-      this.legLeftGroup.rotation.x = angle;
-    }
+    this.parts.legLeftGroup.rotation.x = angle;
   }
 
   /**
@@ -637,9 +189,7 @@ export class PlayerModel {
    */
   setRightLegRotation(angle: number) {
     this.legRightRotation = angle;
-    if (this.legRightGroup) {
-      this.legRightGroup.rotation.x = angle;
-    }
+    this.parts.legRightGroup.rotation.x = angle;
   }
 
   /**
@@ -789,9 +339,7 @@ export class PlayerModel {
     this.group.rotation.y = yaw;
     this.bodyYaw = yaw;
     this.bodyYawInit = true;
-    if (this.head) {
-      this.head.rotation.set(0, 0, 0);
-    }
+    this.parts.head.rotation.set(0, 0, 0);
   }
 
   /**
@@ -802,11 +350,10 @@ export class PlayerModel {
     this.group.rotation.y = bodyYaw;
     this.bodyYaw = bodyYaw;
     this.bodyYawInit = true;
-    if (this.head) {
-      this.head.rotation.order = 'YXZ';
-      this.head.rotation.y = headYawLocal;
-      this.head.rotation.x = headPitch;
-    }
+    const head = this.parts.head;
+    head.rotation.order = 'YXZ';
+    head.rotation.y = headYawLocal;
+    head.rotation.x = headPitch;
   }
 
   /**
@@ -841,15 +388,14 @@ export class PlayerModel {
     }
 
     this.group.rotation.y = this.bodyYaw;
-    if (this.head) {
-      this.head.rotation.order = 'YXZ';
-      // LCE HumanoidModel::setupAnim: head.yRot = headYaw - bodyYaw, head.xRot = pitch.
-      // Sign check (same property the inventory doll drives): head.rotation.x < 0
-      // tips the face DOWN, and `state.pitch` is negative when looking down, so
-      // the raw look pitch passes straight through.
-      this.head.rotation.y = wrapAngle(lookYaw - this.bodyYaw);
-      this.head.rotation.x = lookPitch;
-    }
+    const head = this.parts.head;
+    head.rotation.order = 'YXZ';
+    // LCE HumanoidModel::setupAnim: head.yRot = headYaw - bodyYaw, head.xRot = pitch.
+    // Sign check (same property the inventory doll drives): head.rotation.x < 0
+    // tips the face DOWN, and `state.pitch` is negative when looking down, so
+    // the raw look pitch passes straight through.
+    head.rotation.y = wrapAngle(lookYaw - this.bodyYaw);
+    head.rotation.x = lookPitch;
   }
 
   /**
@@ -858,11 +404,12 @@ export class PlayerModel {
    * `null` empties the hand.
    */
   setHeldItem(id: number | null) {
-    if (id === this.heldId || !this.handAnchor) return;
+    if (id === this.heldId) return;
     this.heldId = id;
+    const handAnchor = this.parts.handAnchor;
 
     if (this.heldMesh) {
-      this.handAnchor.remove(this.heldMesh);
+      handAnchor.remove(this.heldMesh);
       disposeBlockMesh(this.heldMesh);
       this.heldMesh = undefined;
     }
@@ -898,7 +445,7 @@ export class PlayerModel {
       this.heldMesh = mesh;
     }
     if (this.heldMesh) {
-      this.handAnchor.add(this.heldMesh);
+      handAnchor.add(this.heldMesh);
       tintByLight(this.heldMesh, this.lightLevel);
     }
   }
@@ -928,9 +475,7 @@ export class PlayerModel {
     this.setLeftArmRotation(this.armLeftRotation);
     this.setRightArmRotation(this.armRightRotation);
 
-    if (this.torsoGroup) {
-      this.torsoGroup.rotation.x = SNEAK_TORSO_PITCH * this.sneakAmount;
-    }
+    this.parts.torsoGroup.rotation.x = SNEAK_TORSO_PITCH * this.sneakAmount;
   }
 
   /** Flash red for HURT_FLASH_DURATION - call when the player takes damage. */
