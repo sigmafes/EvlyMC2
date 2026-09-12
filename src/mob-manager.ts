@@ -83,7 +83,10 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
 
 const CHASE_RADIUS = 16;         // blocks - zombie notices/keeps chasing the player within this range
 const CHASE_REPATH_INTERVAL = 1; // seconds between chase path re-plans
-const ATTACK_RANGE = 2.2;        // blocks, centre-to-centre (a bit past melee-adjacent so it doesn't need to be pixel-perfect on top of the player)
+const ATTACK_RANGE = 1.8;        // blocks, centre-to-centre (a bit past melee-adjacent so it doesn't need to be pixel-perfect on top of the player)
+const LEAP_RANGE = 4;            // blocks, horizontal - close enough to attempt a leap up toward a player standing above
+const LEAP_MIN_HEIGHT_DIFF = 1.2; // blocks - player has to be genuinely above, not just on a half-slab-ish bump
+const LEAP_UP_FORCE = 11;        // higher arc than JUMP_FORCE (8) - clears ~2.5 blocks instead of ~1.3
 const ATTACK_INTERVAL = 1;       // seconds between hits while in range
 const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
 const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY), same as animals - widening this would plan climbs it can't execute
@@ -382,6 +385,7 @@ export class MobManager {
         continue;
       }
 
+      this.tryEscapeStuck(mob);
       this.updateAI(mob, delta);
       this.updatePhysics(mob, delta);
       if (mob.kind === 'zombie' && getSkyExposure) this.updateBurn(mob, delta, getSkyExposure);
@@ -594,6 +598,21 @@ export class MobManager {
       return true;
     }
 
+    // Leap: the player is above and close but the normal walk/step-up limits
+    // (ZOMBIE_STEP_UP=1) can't close that gap - e.g. player standing over a
+    // hole in a cave ceiling, or up on a ledge. Throw the mob upward and
+    // toward the player instead of just walking into the wall underneath
+    // them; updatePhysics's own collision still governs whether it actually
+    // clears the gap, this just gives it a much bigger arc to try with.
+    if (mob.grounded && dy >= LEAP_MIN_HEIGHT_DIFF && dist <= LEAP_RANGE) {
+      mob.path = null;
+      const dirLen = Math.max(dist, 0.001);
+      this.moveHorizontal(mob, dx / dirLen, dz / dirLen, mob.walkSpeed, delta);
+      mob.velocity.y = LEAP_UP_FORCE;
+      mob.grounded = false;
+      return true;
+    }
+
     mob.attackTimer = 0;
     mob.chaseRepathTimer -= delta;
     if (!mob.path || mob.pathIndex >= mob.path.length || mob.chaseRepathTimer <= 0) {
@@ -769,6 +788,33 @@ export class MobManager {
         for (let by = y0; by <= y1; by++) {
           if (this.isSolid(bx, by, bz)) return true;
         }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * A cave-hostile spawn point is only checked at its exact centre column, so
+   * an edge-case (a spawn candidate found valid a frame before terrain around
+   * it finished settling, or just an unlucky pocket) can still leave a mob
+   * embedded in solid terrain, stuck in place with nowhere for the AI to walk
+   * it out to. Mirrors the player's own isEmbedded/tryEscapeStuck
+   * (player-physics.ts): scan straight up for the first clear 2-block gap and
+   * teleport there, zeroing velocity, instead of leaving it wedged forever.
+   */
+  private tryEscapeStuck(mob: Mob): boolean {
+    const group = mob.model.getGroup();
+    if (!this.overlapsSolid(group.position.x, group.position.y, group.position.z, mob.radius, mob.height)) return false;
+    const x = Math.round(group.position.x);
+    const z = Math.round(group.position.z);
+    const startY = Math.floor(group.position.y);
+    const MAX_SCAN = 256;
+    for (let y = startY; y < startY + MAX_SCAN; y += 1) {
+      if (!this.isSolid(x, y, z) && !this.isSolid(x, y + 1, z)) {
+        group.position.set(x, y + 0.5, z);
+        mob.velocity.set(0, 0, 0);
+        mob.grounded = false;
+        return true;
       }
     }
     return false;

@@ -103,6 +103,6 @@ export const SHEEP_SPEC: QuadrupedSpec = {
     size: BODY_SIZE,
     pivot: [0, BODY_PIVOT_Y, 0],
     uv: WOOL_UV,
-    inflate: PX(1.5),
+    inflate: PX(2.5),
   },
 };
