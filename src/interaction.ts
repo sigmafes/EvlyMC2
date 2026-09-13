@@ -77,7 +77,7 @@ export class BlockInteraction {
   private chipTimer = 0;
 
   private attackCooldown = 0;
-  private static readonly ATTACK_COOLDOWN = 0.4;
+  private static readonly ATTACK_COOLDOWN = 0.25;
 
   private rightHeld = false;
   private eating = false;

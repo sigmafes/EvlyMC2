@@ -290,25 +290,29 @@ export class MobManager {
     if (this.soundManager && this.inSoundRange(mob, fromPos)) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
     mob.model.hurt(); // 0.2s red flash
 
-    // Hostile mobs (zombie) never flee - they keep chasing through the hit.
-    // Panic (LCE PanicGoal) only applies to passive mobs: forget whatever it
-    // was doing and start pathing to a random reachable point away from the attacker.
-    if (isHostileKind(mob.kind)) return false;
-
     const pos = mob.model.getGroup().position;
-    mob.fleeDir.set(pos.x - fromPos.x, 0, pos.z - fromPos.z);
-    if (mob.fleeDir.lengthSq() < 1e-6) mob.fleeDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
-    mob.fleeDir.normalize();
-    mob.fleeTimer = FLEE_DURATION;
-    mob.path = null;
+    const pushDir = new THREE.Vector2(pos.x - fromPos.x, pos.z - fromPos.z);
+    if (pushDir.lengthSq() < 1e-6) pushDir.set(Math.random() - 0.5, Math.random() - 0.5);
+    pushDir.normalize();
 
     // Knockback: an instant shove away from the attacker plus a small hop,
-    // decaying over the next few frames (see updatePhysics) - independent of
-    // (and on top of) the flee movement that starts the same frame.
-    mob.velocity.x = mob.fleeDir.x * KNOCKBACK_SPEED;
-    mob.velocity.z = mob.fleeDir.z * KNOCKBACK_SPEED;
+    // decaying over the next few frames (see updatePhysics). Every mob gets
+    // this, hostile or not - a skeleton standing its ground to shoot still
+    // needs to feel a melee hit, not just visually flash.
+    mob.velocity.x = pushDir.x * KNOCKBACK_SPEED;
+    mob.velocity.z = pushDir.y * KNOCKBACK_SPEED;
     mob.velocity.y = KNOCKBACK_UP;
     mob.grounded = false;
+
+    // Hostile mobs (zombie, skeleton) never flee - they keep chasing/aiming
+    // through the hit, just shoved back by the knockback above. Panic (LCE
+    // PanicGoal) only applies to passive mobs: forget whatever it was doing
+    // and start pathing to a random reachable point away from the attacker.
+    if (isHostileKind(mob.kind)) return false;
+
+    mob.fleeDir.set(pushDir.x, 0, pushDir.y);
+    mob.fleeTimer = FLEE_DURATION;
+    mob.path = null;
 
     return false;
   }
