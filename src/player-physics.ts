@@ -154,13 +154,15 @@ export class PlayerPhysics {
    */
   updatePhysics(direction: THREE.Vector3, wantJump: boolean, sprinting: boolean, delta: number) {
     // If the player is embedded in solid terrain (e.g. new terrain generated
-    // around/under them, or they were teleported into a wall), skip the
-    // normal per-axis collision resolver entirely this frame: it nudges
-    // position away from EACH overlapping block independently, and several
+    // around/under them, or they were teleported into a wall), don't let the
+    // normal per-axis collision resolver fight it out block by block: several
     // overlapping at once can compound into a violent sideways shove that's
-    // still inside the world instead of a clean escape. Go straight up to
-    // the nearest 2-block gap of open air instead.
-    if (this.tryEscapeStuck()) return;
+    // still inside the world instead of a clean escape. Go straight up to the
+    // nearest 2-block gap of open air instead - but keep going into the rest
+    // of this same update() afterwards (gravity, input movement) instead of
+    // returning early, so being embedded never simply freezes the player for
+    // a frame; it should still fall/move exactly like normal once clear.
+    this.tryEscapeStuck();
 
     const inWater = this.isInWater();
 

@@ -42,8 +42,9 @@ const ri = (min: number, max: number) => min + Math.floor(Math.random() * (max -
  * after being hurt, ignoring the wander target until it expires.
  */
 const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpeedMult: number; radius: number; height: number }> = {
-  pig: { maxHealth: 10, walkSpeed: 2.3, fleeSpeedMult: 1.6, radius: 0.45, height: 0.9 },
-  cow: { maxHealth: 10, walkSpeed: 2.0, fleeSpeedMult: 1.6, radius: 0.5, height: 1.4 },
+  // Animals: 0.9x0.9 footprint, 1.3 tall (radius is the half-width overlapsSolid uses).
+  pig: { maxHealth: 10, walkSpeed: 2.3, fleeSpeedMult: 1.6, radius: 0.45, height: 1.3 },
+  cow: { maxHealth: 10, walkSpeed: 2.0, fleeSpeedMult: 1.6, radius: 0.45, height: 1.3 },
   sheep: { maxHealth: 8, walkSpeed: 2.0, fleeSpeedMult: 1.6, radius: 0.45, height: 1.3 },
   // LCE zombie: 20 HP (10 hearts). No flee behaviour, fleeSpeedMult unused.
   zombie: { maxHealth: 20, walkSpeed: 2.3, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
@@ -269,8 +270,9 @@ export class MobManager {
     return best;
   }
 
-  /** Apply damage; on death, starts the death-spin animation (drops/removal happen once it finishes). Returns true if it died. */
-  damage(mobId: number, amount: number, fromPos: THREE.Vector3): boolean {
+  /** Apply damage; on death, starts the death-spin animation (drops/removal happen once it finishes). Returns true if it died.
+   * `knockback` (default true) - sunlight burn ticks call this with `fromPos` equal to the mob's own position (there's no attacker), which used to fall into the degenerate-direction fallback below and shove a burning mob in a random direction; pass false to skip the shove/hop/flee entirely for damage with no real attacker. */
+  damage(mobId: number, amount: number, fromPos: THREE.Vector3, knockback = true): boolean {
     const index = this.mobs.findIndex((m) => m.id === mobId);
     if (index === -1) return false;
     const mob = this.mobs[index];
@@ -289,6 +291,8 @@ export class MobManager {
     }
     if (this.soundManager && this.inSoundRange(mob, fromPos)) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
     mob.model.hurt(); // 0.2s red flash
+
+    if (!knockback) return false;
 
     const pos = mob.model.getGroup().position;
     const pushDir = new THREE.Vector2(pos.x - fromPos.x, pos.z - fromPos.z);
@@ -374,7 +378,7 @@ export class MobManager {
     mob.burnTimer -= delta;
     if (mob.burnTimer <= 0) {
       mob.burnTimer = BURN_DAMAGE_INTERVAL;
-      this.damage(mob.id, BURN_DAMAGE, p);
+      this.damage(mob.id, BURN_DAMAGE, p, false); // sunlight has no attacker position to shove away from
     }
   }
 

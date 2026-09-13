@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BlockId, isInteractive, isToggleable } from './block';
+import { BlockId, isInteractive, isToggleable, isSolidBlock } from './block';
 import { isBlock, foodValue, ItemId } from './item';
 import { getDrops } from './drops';
 import { isSlab, shapeBoxesFor } from './block-shapes';
@@ -155,12 +155,20 @@ export class BlockInteraction {
       this.touchActive ? this.touchAimNdc! : undefined,
     );
 
-    if (!hit) {
+    // Suffocating inside a solid block: the camera sits INSIDE that block's
+    // geometry, so a normal raycast almost never reports a hit (no face to
+    // catch from in there) and the player would have no way to dig
+    // themselves out. Fall back to targeting whatever block the camera
+    // itself occupies.
+    const target = hit
+      ? { blockPosition: hit.blockPosition, normal: (hit.intersection.face?.normal ?? new THREE.Vector3()).clone() }
+      : this.embeddedBlockTarget();
+
+    if (!target) {
       this.target = null;
       this.highlight.hideTarget();
     } else {
-      const { blockPosition } = hit;
-      const normal = (hit.intersection.face?.normal ?? new THREE.Vector3()).clone();
+      const { blockPosition, normal } = target;
       const lightPosition = blockPosition.clone().add(normal).round();
       const id = this.world.getBlock(blockPosition.x, blockPosition.y, blockPosition.z);
       this.target = { position: blockPosition, lightPosition, id, normal };
@@ -175,6 +183,18 @@ export class BlockInteraction {
     this.updateEating(delta);
     this.updateDrawingBow(delta);
     this.updateAttackSwing(delta);
+  }
+
+  /** Whatever solid block the camera itself is inside of, if any - see the
+   * suffocation fallback in update(). Normal has no real meaning here (there's
+   * no face to hit from inside solid geometry); straight up is as good as any. */
+  private embeddedBlockTarget(): { blockPosition: THREE.Vector3; normal: THREE.Vector3 } | null {
+    const camPos = new THREE.Vector3();
+    this.camera.getWorldPosition(camPos);
+    const blockPosition = camPos.clone().round();
+    const id = this.world.getBlock(blockPosition.x, blockPosition.y, blockPosition.z);
+    if (!isSolidBlock(id)) return null;
+    return { blockPosition, normal: new THREE.Vector3(0, 1, 0) };
   }
 
   /** MC behaviour: holding the attack button swings the hand on a fixed cadence,
