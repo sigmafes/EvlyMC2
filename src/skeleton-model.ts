@@ -57,6 +57,12 @@ const ARM_INSET_X = BODY_SIZE[0] / 2 + ARM_SIZE[0] / 2; // arms just outside the
 // Arms hang straight down, unlike the zombie's forward-reaching pose - a
 // skeleton just stands and shoots, no melee "reach" needed.
 const ARM_PITCH = 0;
+// Attack (drawing the bow) pose: both arms forward like a zombie's reach.
+const ATTACK_ARM_PITCH = Math.PI / 2;
+// Off-hand (left) arm rolls slightly toward the bow-holding (right) arm while
+// drawing, as if steadying the shot - a small positive Z-rotation swings the
+// left arm's hand in toward +X, i.e. toward the body/right-arm centreline.
+const OFFHAND_ATTACK_ROLL = 0.4;
 
 export const SKELETON_SPEC: BipedSpec = {
   texturePath: TEXTURE_PATH,
@@ -75,6 +81,8 @@ export const SKELETON_SPEC: BipedSpec = {
     [ARM_INSET_X, SHOULDER_Y, 0],  // right
   ],
   armPitch: ARM_PITCH,
+  attackArmPitch: ATTACK_ARM_PITCH,
+  offhandAttackRoll: OFFHAND_ATTACK_ROLL,
   // Bow held in the right fist for good, rendered the same way as the
   // player's third-person held item (buildItemMesh - see player-model.ts's
   // setHeldItem) - a skeleton never swaps its held item, so there's no

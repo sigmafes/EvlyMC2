@@ -23,6 +23,7 @@ type AnyMobModel = {
   hurt(): void;
   setDying(on: boolean): void;
   update(delta: number): void;
+  setAttacking?(on: boolean): void;
 };
 
 const HOSTILE_KINDS: MobKind[] = ['zombie', 'skeleton'];

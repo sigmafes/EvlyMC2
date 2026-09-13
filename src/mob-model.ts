@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { applyAtlasUVs, applyFaceShading, type FaceRects, type FaceFlips } from './atlas-box';
-import { buildItemMesh } from './block-preview';
+import { buildItemMesh, tintByLight } from './block-preview';
 
 const DEG = Math.PI / 180;
 
@@ -265,8 +265,20 @@ export type BipedSpec = {
   legPivots: [number, number, number][];
   arm: QuadrupedLegSpec;
   armPivots: [number, number, number][];
-  /** Fixed pose applied to both arm groups once at build time (radians, local X). */
+  /** Default (non-attacking) pose applied to both arm groups (radians, local X). */
   armPitch: number;
+  /**
+   * Attack-mode pose (radians, local X on both arms - e.g. a skeleton drawing
+   * its bow raises both arms forward like a zombie's reach instead of
+   * hanging down). Omit for mobs whose armPitch never changes (zombie).
+   */
+  attackArmPitch?: number;
+  /**
+   * Extra local-Z roll applied ONLY to the left (off-hand) arm while
+   * attacking, swinging it in toward the right arm (e.g. a skeleton's
+   * off-hand coming up near the bow-holding hand to steady the draw).
+   */
+  offhandAttackRoll?: number;
   /** Held in the right fist for the mob's whole lifetime (skeleton's bow) - same buildItemMesh() render as the player's third-person held item, just with no swap-on-the-fly logic since it never changes. */
   heldItem?: {
     texturePath: string;
@@ -280,7 +292,11 @@ export class BipedMobModel {
   readonly group = new THREE.Group();
   private readonly headGroup = new THREE.Group();
   private readonly legGroups: THREE.Group[] = [];
+  private readonly armGroups: THREE.Group[] = []; // [left, right]
   private readonly material: THREE.MeshBasicMaterial;
+  private heldItemMesh?: THREE.Group;
+  private attacking = false;
+  private attackAmount = 0;
 
   private walking = false;
   private legPhase = 0;
@@ -337,6 +353,7 @@ export class BipedMobModel {
       armMesh.position.set(0, -spec.arm.size[1] / 2, 0);
       armGroup.add(armMesh);
       this.group.add(armGroup);
+      this.armGroups.push(armGroup);
 
       if (i === 1 && spec.heldItem) {
         const item = spec.heldItem;
@@ -345,6 +362,7 @@ export class BipedMobModel {
         mesh.position.set(...(item.position ?? [0, -spec.arm.size[1], -0.05]));
         mesh.rotation.set(...(item.rotation ?? [0, Math.PI / 2, 0]));
         armGroup.add(mesh);
+        this.heldItemMesh = mesh;
       }
     });
   }
@@ -355,6 +373,11 @@ export class BipedMobModel {
 
   setWalking(walking: boolean): void {
     this.walking = walking;
+  }
+
+  /** Toggle between the default arm pose and attackArmPitch/offhandAttackRoll (both optional on BipedSpec - a no-op if neither is set). Called every frame by whoever decides the mob is in its attack stance (e.g. mob-ai.ts's ranged skeleton AI). */
+  setAttacking(on: boolean): void {
+    this.attacking = on;
   }
 
   setLightLevel(level01: number): void {
@@ -380,6 +403,7 @@ export class BipedMobModel {
     } else {
       this.material.color.setScalar(b);
     }
+    if (this.heldItemMesh) tintByLight(this.heldItemMesh, this.lightLevel01);
 
     const target = this.walking ? 1 : 0;
     const k = 1 - Math.exp(-EASE_RATE * delta);
@@ -397,5 +421,19 @@ export class BipedMobModel {
     const walkBob = Math.sin(this.legPhase * Math.PI * 4) * WALK_HEAD_BOB * this.walkAmount;
     const idleSway = Math.sin(this.idleTime * 1.5) * IDLE_HEAD_SWAY * (1 - this.walkAmount);
     this.headGroup.rotation.x = walkBob + idleSway;
+
+    // Arm pose: eased blend between the default armPitch and attackArmPitch
+    // (both arms), plus an extra inward roll on the off-hand (left) arm only
+    // - e.g. a skeleton's hands coming together to steady a bow draw. A
+    // no-op (stays at armPitch) for any mob whose spec does not set these.
+    if (this.spec.attackArmPitch !== undefined) {
+      const attackTarget = this.attacking ? 1 : 0;
+      this.attackAmount += (attackTarget - this.attackAmount) * k;
+      const pitch = THREE.MathUtils.lerp(this.spec.armPitch, this.spec.attackArmPitch, this.attackAmount);
+      this.armGroups.forEach((arm, i) => {
+        arm.rotation.x = pitch;
+        arm.rotation.z = i === 0 ? (this.spec.offhandAttackRoll ?? 0) * this.attackAmount : 0;
+      });
+    }
   }
 }

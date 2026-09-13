@@ -136,7 +136,15 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
 
   if (dist <= ATTACK_RANGE && Math.abs(dy) <= mob.height + 1) {
     mob.path = null;
-    applyGroundFriction(mob, delta);
+    // Zero instantly, not applyGroundFriction's gradual decay: at melee range
+    // `dist` can flap in and out of ATTACK_RANGE by a hair (chase re-adds
+    // walkSpeed-worth of velocity, friction only bleeds a fraction of it off
+    // per frame), and any leftover horizontal velocity bumping a step/ledge
+    // triggers updatePhysics's auto-step jump - reads as the zombie
+    // continuously hopping in place while it's supposed to just stand and
+    // swing.
+    mob.velocity.x = 0;
+    mob.velocity.z = 0;
     easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
     mob.attackTimer -= delta;
     if (mob.attackTimer <= 0) {
@@ -212,6 +220,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
     mob.chasing = false;
     mob.attackTimer = 0;
     mob.rangedSeeTimer = 0;
+    mob.model.setAttacking?.(false);
     return false;
   }
 
@@ -223,6 +232,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
     mob.chasing = false;
     mob.attackTimer = 0;
     mob.rangedSeeTimer = 0;
+    mob.model.setAttacking?.(false);
     return false;
   }
   mob.chasing = true;
@@ -233,6 +243,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
 
   if (dist <= RANGED_ATTACK_RADIUS && canSee && mob.rangedSeeTimer >= RANGED_SIGHT_REQUIRED) {
     mob.path = null;
+    mob.model.setAttacking?.(true);
     applyGroundFriction(mob, delta);
     easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
     mob.attackTimer -= delta;
@@ -246,6 +257,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
   }
 
   // Still out of range, out of sight, or building up the sight timer - close in.
+  mob.model.setAttacking?.(false);
   mob.attackTimer = 0;
   mob.chaseRepathTimer -= delta;
   if (!mob.path || mob.pathIndex >= mob.path.length || mob.chaseRepathTimer <= 0) {
