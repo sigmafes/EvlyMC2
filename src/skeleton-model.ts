@@ -48,7 +48,10 @@ const BODY_PIVOT_Y = LEG_TOP_Y + BODY_SIZE[1] / 2;    // hip -> torso centre
 const SHOULDER_Y = LEG_TOP_Y + BODY_SIZE[1];          // hip -> shoulder
 const HEAD_PIVOT_Y = SHOULDER_Y + HEAD_SIZE[1] / 2;
 
-const LEG_INSET_X = LEG_SIZE[0] / 2;                  // legs flush together under the body's centre line
+// LCE SkeletonModel::_init: leg0->setPos(-2, 12, 0), leg1->setPos(2, 12, 0) -
+// an explicit 2px half-gap, not just "flush together" (that formula, half
+// the leg's own 2px width, put them almost touching at the centre line).
+const LEG_INSET_X = PX(2);
 const ARM_INSET_X = BODY_SIZE[0] / 2 + ARM_SIZE[0] / 2; // arms just outside the body
 
 // Arms hang straight down, unlike the zombie's forward-reaching pose - a
@@ -72,4 +75,9 @@ export const SKELETON_SPEC: BipedSpec = {
     [ARM_INSET_X, SHOULDER_Y, 0],  // right
   ],
   armPitch: ARM_PITCH,
+  // Bow held in the right fist for good, rendered the same way as the
+  // player's third-person held item (buildItemMesh - see player-model.ts's
+  // setHeldItem) - a skeleton never swaps its held item, so there's no
+  // per-frame swap logic needed here, just a static attach at build time.
+  heldItem: { texturePath: 'items/bow.png', scale: 0.5, position: [0, -0.72, -0.05], rotation: [0, Math.PI / 2, 0] },
 };

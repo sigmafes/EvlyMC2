@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { applyAtlasUVs, applyFaceShading, type FaceRects, type FaceFlips } from './atlas-box';
+import { buildItemMesh } from './block-preview';
 
 const DEG = Math.PI / 180;
 
@@ -266,6 +267,13 @@ export type BipedSpec = {
   armPivots: [number, number, number][];
   /** Fixed pose applied to both arm groups once at build time (radians, local X). */
   armPitch: number;
+  /** Held in the right fist for the mob's whole lifetime (skeleton's bow) - same buildItemMesh() render as the player's third-person held item, just with no swap-on-the-fly logic since it never changes. */
+  heldItem?: {
+    texturePath: string;
+    scale?: number;
+    position?: [number, number, number];
+    rotation?: [number, number, number];
+  };
 };
 
 export class BipedMobModel {
@@ -287,7 +295,12 @@ export class BipedMobModel {
 
   constructor(private readonly spec: BipedSpec) {
     const texture = getMobTexture(spec.texturePath);
-    this.material = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true });
+    // alphaTest (not `transparent` - no sorting/blending needed for a hard
+    // cutout) so a skin with genuine alpha holes - the skeleton's ribcage
+    // gaps in its torso art - actually cuts through instead of rendering
+    // those pixels solid. DoubleSide so the inside of a cutout isn't just a
+    // black void from the back.
+    this.material = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide });
 
     this.group.add(buildBox(spec.body, spec.textureW, spec.textureH, this.material));
 
@@ -314,7 +327,9 @@ export class BipedMobModel {
     const armGeo = new THREE.BoxGeometry(...spec.arm.size);
     applyAtlasUVs(armGeo, spec.arm.uv, spec.textureW, spec.textureH);
     applyFaceShading(armGeo);
-    for (const pivot of spec.armPivots) {
+    // armPivots order is [left, right] (see BipedSpec) - index 1 is the right
+    // arm, same one PlayerModel hangs its held-item anchor off of.
+    spec.armPivots.forEach((pivot, i) => {
       const armGroup = new THREE.Group();
       armGroup.position.set(...pivot);
       armGroup.rotation.x = spec.armPitch;
@@ -322,7 +337,16 @@ export class BipedMobModel {
       armMesh.position.set(0, -spec.arm.size[1] / 2, 0);
       armGroup.add(armMesh);
       this.group.add(armGroup);
-    }
+
+      if (i === 1 && spec.heldItem) {
+        const item = spec.heldItem;
+        const mesh = buildItemMesh(item.texturePath);
+        mesh.scale.setScalar(item.scale ?? 0.5);
+        mesh.position.set(...(item.position ?? [0, -spec.arm.size[1], -0.05]));
+        mesh.rotation.set(...(item.rotation ?? [0, Math.PI / 2, 0]));
+        armGroup.add(mesh);
+      }
+    });
   }
 
   getGroup(): THREE.Group {
