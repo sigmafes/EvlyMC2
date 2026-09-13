@@ -60,6 +60,12 @@ export class BlockInteraction {
   private readonly placer: BlockPlacer;
   private isPlaying = false;      // pointer-locked (desktop)
   private touchActive = false;    // on-screen touch controls engaged (mobile)
+  /** Freeform touch aim point in NDC (-1..1), or null when no finger is on the
+   * look layer - loro's `updateFreeformPickDirection` equivalent: on touch,
+   * the pick ray comes from wherever the finger actually is, not a fixed
+   * centre crosshair, so there's nothing to aim with until a finger touches
+   * down. */
+  private touchAimNdc: THREE.Vector2 | null = null;
   private target: TargetBlock | null = null;
   private selectedBlock: BlockId | null = BlockId.OAK_PLANKS;
   /** Raw selected hotbar id (block or tool); drives mining speed / harvest. */
@@ -129,7 +135,7 @@ export class BlockInteraction {
   /** Enable the mobile input path (no pointer lock). */
   setTouchActive(active: boolean) {
     this.touchActive = active;
-    if (!active) { this.leftHeld = false; this.rightHeld = false; this.cancelMining(); this.cancelEating(); this.cancelDrawingBow(); }
+    if (!active) { this.leftHeld = false; this.rightHeld = false; this.touchAimNdc = null; this.cancelMining(); this.cancelEating(); this.cancelDrawingBow(); }
   }
 
   attachHighlight(scene: THREE.Scene) {
@@ -140,10 +146,13 @@ export class BlockInteraction {
   update(delta: number) {
     if (this.attackCooldown > 0) this.attackCooldown -= delta;
 
-    const hit = this.raycast.castRay(
+    // Touch: no crosshair to fall back to - without a finger down there's
+    // nothing to aim at (see touchAimNdc).
+    const hit = (this.touchActive && !this.touchAimNdc) ? undefined : this.raycast.castRay(
       this.camera,
       this.world.getMeshObjects(),
       (x, y, z) => this.world.getBlock(x, y, z),
+      this.touchActive ? this.touchAimNdc! : undefined,
     );
 
     if (!hit) {
@@ -311,10 +320,19 @@ export class BlockInteraction {
   /** If a mob is the nearest thing on the crosshair (closer than any targeted block), hit it and return true. */
   private attackNearestMob(): boolean {
     if (!this.hitTestMob || this.attackCooldown > 0) return false;
-    const origin = new THREE.Vector3();
-    const dir = new THREE.Vector3();
-    this.camera.getWorldPosition(origin);
-    this.camera.getWorldDirection(dir);
+    if (this.touchActive && !this.touchAimNdc) return false;
+    let origin: THREE.Vector3;
+    let dir: THREE.Vector3;
+    if (this.touchActive) {
+      const ray = this.raycast.rayFromNdc(this.camera, this.touchAimNdc!);
+      origin = ray.origin;
+      dir = ray.direction;
+    } else {
+      origin = new THREE.Vector3();
+      dir = new THREE.Vector3();
+      this.camera.getWorldPosition(origin);
+      this.camera.getWorldDirection(dir);
+    }
     const mobHit = this.hitTestMob(origin, dir, 4);
     if (!mobHit) return false;
     if (this.target) {
@@ -455,10 +473,12 @@ export class BlockInteraction {
       return;
     }
 
+    if (this.touchActive && !this.touchAimNdc) return;
     const hit = this.raycast.castRay(
       this.camera,
       this.world.getMeshObjects(),
       (x, y, z) => this.world.getBlock(x, y, z),
+      this.touchActive ? this.touchAimNdc! : undefined,
     );
     if (!hit || !hit.intersection.face) return;
 
@@ -550,6 +570,23 @@ export class BlockInteraction {
   touchLook(dx: number, dy: number) {
     const sensitivity = (this.pauseMenu?.touchSensitivity ?? 100) / 100;
     this.player.look(dx * sensitivity, dy * sensitivity);
+  }
+
+  /** Finger on the world layer, at (clientX, clientY): freeform aim point
+   * (LCE Android / loro's freeform pick mode) - the pick ray comes from
+   * wherever the finger actually is on screen, not a fixed centre crosshair. */
+  touchAimMove(clientX: number, clientY: number) {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.touchAimNdc = this.touchAimNdc ? this.touchAimNdc.set(ndcX, ndcY) : new THREE.Vector2(ndcX, ndcY);
+  }
+
+  /** Finger lifted off the world layer: nothing left to aim at. */
+  touchAimEnd() {
+    this.touchAimNdc = null;
+    this.target = null;
+    this.highlight.hideTarget();
   }
 
   /** Tap on the world: place a block / use the held item (LCE Android). */

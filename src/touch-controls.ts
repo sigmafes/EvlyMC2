@@ -21,6 +21,9 @@ export type TouchControlsCallbacks = {
   /** Finger held still on the world: start / stop breaking. */
   onBreakStart: () => void;
   onBreakEnd: () => void;
+  /** Finger position on the world layer (freeform aim, no centre crosshair) - fired on touchdown and every move, cleared with onAimEnd when the finger lifts. */
+  onAimMove: (clientX: number, clientY: number) => void;
+  onAimEnd: () => void;
   onInventory: () => void;
   onThirdPerson: () => void;
   onChat: () => void;
@@ -126,6 +129,7 @@ export class TouchControls {
       this.cb.onJump(false);
       if (this.breaking) { this.breaking = false; this.cb.onBreakEnd(); }
       this.lookPointer = null;
+      this.cb.onAimEnd();
       window.clearTimeout(this.holdTimer);
     }
   }
@@ -223,6 +227,7 @@ export class TouchControls {
       this.lastY = this.startY = e.clientY;
       this.startTime = performance.now();
       this.breaking = false;
+      this.cb.onAimMove(e.clientX, e.clientY);
       window.clearTimeout(this.holdTimer);
       this.holdTimer = window.setTimeout(() => {
         this.breaking = true;
@@ -237,6 +242,7 @@ export class TouchControls {
       const dy = e.clientY - this.lastY;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
+      this.cb.onAimMove(e.clientX, e.clientY);
 
       const drift = Math.hypot(e.clientX - this.startX, e.clientY - this.startY);
       // A real drag before the hold fires cancels the break intent.
@@ -258,6 +264,9 @@ export class TouchControls {
       } else if (drift <= MOVE_TOL && dt < HOLD_MS) {
         this.cb.onTapPlace();
       }
+      // Clear the aim point only after acting on it - onTapPlace/onBreakEnd
+      // above still need this finger's last known screen position.
+      this.cb.onAimEnd();
     };
     layer.addEventListener('pointerup', end);
     layer.addEventListener('pointercancel', end);

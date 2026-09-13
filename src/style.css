@@ -727,6 +727,12 @@ body {
   z-index: 2;
 }
 
+/* Touch aims freeform from wherever the finger is (loro's freeform pick
+   mode), not a fixed centre point - the crosshair would be misleading. */
+body.touch #crosshair {
+  display: none;
+}
+
 #crosshair::before,
 #crosshair::after {
   content: '';
