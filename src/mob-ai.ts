@@ -4,6 +4,7 @@ import type { Mob } from './mob-manager';
 import { isHostileKind } from './mob-manager';
 import { followPath, applyGroundFriction, easeYawTo, moveHorizontal, TURN_RATE, type IsSolidFn, type IsWaterFn } from './mob-physics';
 
+const PLAYER_EYE_HEIGHT = 1.62;  // player-physics.ts's standing eyeHeight - getPlayerPos() reports eyes, not feet
 const CHASE_RADIUS = 16;         // blocks - zombie notices/keeps chasing the player within this range
 const CHASE_REPATH_INTERVAL = 1; // seconds between chase path re-plans
 const ATTACK_RANGE = 1.8;        // blocks, centre-to-centre (a bit past melee-adjacent so it doesn't need to be pixel-perfect on top of the player)
@@ -125,7 +126,13 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
   // zombie on a completely different floor from "reaching through" it.
   const dx = playerPos.x - pos.x;
   const dz = playerPos.z - pos.z;
-  const dy = playerPos.y - pos.y;
+  // Feet-to-feet, not eye-to-feet: subtracting PLAYER_EYE_HEIGHT here matters
+  // for the leap check below - left as playerPos.y - pos.y, dy was ALWAYS
+  // ~+1.6 even standing on the exact same flat floor (the eye offset alone),
+  // which is already past LEAP_MIN_HEIGHT_DIFF (1.2) - so every zombie
+  // within LEAP_RANGE fired the big LEAP_UP_FORCE arc while just walking up
+  // to melee range on flat ground, instead of the normal small step-up hop.
+  const dy = (playerPos.y - PLAYER_EYE_HEIGHT) - pos.y;
   const dist = Math.hypot(dx, dz);
   if (dist > CHASE_RADIUS || Math.abs(dy) > CHASE_RADIUS) {
     mob.chasing = false;

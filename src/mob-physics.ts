@@ -93,9 +93,21 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
     } else if (mob.grounded && !overlapsSolid(isSolid, tryX, y + 1, group.position.z, mob.radius, mob.height)) {
       mob.velocity.y = JUMP_FORCE;
       mob.grounded = false;
-    } else {
+    } else if (mob.grounded) {
+      // Genuinely flat-blocked (no clear step above) - only stop dead while
+      // grounded. While airborne mid-jump, the same foot-height check keeps
+      // reporting "blocked" for the frame or two before gravity/JUMP_FORCE
+      // lift the mob's feet above the step, and zeroing velocity here used to
+      // kill the horizontal carry before that happened - the mob would hop
+      // straight up in place, land back at the same spot with zero speed,
+      // and immediately re-trigger the same jump next frame: an infinite
+      // bounce wedged against the corner instead of ever clearing the step
+      // (and, when it did occasionally clear a corner, a taller "double
+      // jump" look from re-triggering JUMP_FORCE partway up). Leaving
+      // velocity.x untouched while airborne lets it carry through unchanged
+      // the instant vertical clearance opens up.
       mob.velocity.x = 0;
-      if (mob.grounded) stuckGrounded = true;
+      stuckGrounded = true;
     }
 
     const tryZ = group.position.z + mob.velocity.z * delta;
@@ -104,9 +116,9 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
     } else if (mob.grounded && !overlapsSolid(isSolid, group.position.x, y + 1, tryZ, mob.radius, mob.height)) {
       mob.velocity.y = JUMP_FORCE;
       mob.grounded = false;
-    } else {
+    } else if (mob.grounded) {
       mob.velocity.z = 0;
-      if (mob.grounded) stuckGrounded = true;
+      stuckGrounded = true;
     }
 
     if (stuckGrounded && mob.path) {

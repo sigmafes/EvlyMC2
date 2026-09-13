@@ -694,6 +694,7 @@ document.addEventListener('keydown', (event) => {
     dropDebug = !dropDebug;
     droppedItems.setDebug(dropDebug);
     mobManager.setDebug(dropDebug);
+    arrowProjectiles.setDebug(dropDebug);
   }
 });
 

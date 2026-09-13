@@ -39,6 +39,7 @@ export function powerToSpeed(power: number): number {
 
 type Arrow = {
   group: THREE.Group;
+  hitboxHelper: THREE.LineSegments;
   vel: THREE.Vector3;
   fromPlayer: boolean;
   crit: boolean;
@@ -46,52 +47,33 @@ type Arrow = {
   embedTimer: number;
 };
 
-// --- Dedicated entity mesh, ported from loro's real ArrowRenderer.cpp (NOT
-// the item-preview pipeline used for inventory icons/held items): a long
-// thin shaft made of 4 quads crossed around its own long axis, plus a small
-// fletching cross near the tail - both textured with the SAME items/arrow.png
-// icon, but cropped to two specific strips rather than shown whole:
-//   - shaft: the full-width top strip of the icon (rows 0-5 of 16) - loro
-//     literally reuses the diagonal icon's own top edge as a stand-in wood
-//     texture for the shaft.
-//   - fletch: a small square lower down (cols 0-5, rows 5-10) where the
-//     feather art actually sits.
-// loro builds this along local +X and rotates the whole entity with X as
-// forward; ours is built along local -Z instead, matching every other
-// forward-facing convention already used in this codebase.
-const SHAFT_LENGTH = 0.6;
-const SHAFT_WIDTH = 0.08;
-const FLETCH_SIZE = 0.22;
-const FLETCH_INSET = 0.42; // how far back from centre the fletching sits (loro's tail end)
+// --- Dedicated entity mesh: the classic vanilla "billboard cross" - two
+// quads crossed 90 degrees around the shaft's own long axis, each stretched
+// across the WHOLE dedicated entity texture (textures/entity/arrow.png,
+// 16x5: fletching / shaft / arrowhead laid out left-to-right in one strip),
+// instead of the previous shaft-box + separate fletch-plane built from the
+// item icon. This is the real MC entity texture, not the inventory icon.
+const ARROW_LENGTH = 0.7;
+const ARROW_THICKNESS = ARROW_LENGTH * (5 / 16); // preserves the 16:5 texture aspect
 
-let shaftGeometry: THREE.BufferGeometry | null = null;
-let fletchGeometry: THREE.BufferGeometry | null = null;
+let crossGeometry: THREE.BufferGeometry | null = null;
 let arrowMaterial: THREE.MeshBasicMaterial | null = null;
-
-/** Remaps a geometry's existing 0..1 UVs into the given sub-rect (same linear-remap trick as buildItemMesh's atlas UVs). */
-function cropUV(geo: THREE.BufferGeometry, uMin: number, uMax: number, vMin: number, vMax: number): void {
-  const uv = geo.attributes.uv as THREE.BufferAttribute;
-  for (let i = 0; i < uv.count; i++) {
-    uv.setXY(i, uMin + uv.getX(i) * (uMax - uMin), vMin + uv.getY(i) * (vMax - vMin));
-  }
-  uv.needsUpdate = true;
-}
+let hitboxGeo: THREE.BufferGeometry | null = null;
+let hitboxMat: THREE.LineBasicMaterial | null = null;
 
 function getArrowMesh(): THREE.Group {
-  if (!shaftGeometry) {
-    // 4 long quads (BoxGeometry's 4 side faces double as this - top/bottom
-    // caps are tiny 0.08x0.08 squares, unnoticeable) crossed around Z.
-    shaftGeometry = new THREE.BoxGeometry(SHAFT_WIDTH, SHAFT_WIDTH, SHAFT_LENGTH);
-    cropUV(shaftGeometry, 0, 1, 1 - 5 / 16, 1); // top strip, rows 0-5 of 16 (image Y flipped for GL V)
-    shaftGeometry.userData.shared = true;
-  }
-  if (!fletchGeometry) {
-    fletchGeometry = new THREE.PlaneGeometry(FLETCH_SIZE, FLETCH_SIZE);
-    cropUV(fletchGeometry, 0, 5 / 16, 1 - 10 / 16, 1 - 5 / 16); // cols 0-5, rows 5-10 of 16
-    fletchGeometry.userData.shared = true;
+  if (!crossGeometry) {
+    // Plane built with its width (mapped to UV.u, the texture's 16-wide
+    // shaft-to-tip axis) along local X, then rotated so that axis lands on
+    // local Z instead - forward is local -Z (this codebase's convention, see
+    // orient() below), and rotateY(+90deg) sends +X (U=1, the arrowhead) to
+    // -Z, i.e. the front, with no extra flip needed.
+    crossGeometry = new THREE.PlaneGeometry(ARROW_LENGTH, ARROW_THICKNESS);
+    crossGeometry.rotateY(Math.PI / 2);
+    crossGeometry.userData.shared = true;
   }
   if (!arrowMaterial) {
-    const texture = new THREE.TextureLoader().load(new URL('../textures/items/arrow.png', import.meta.url).href);
+    const texture = new THREE.TextureLoader().load(new URL('../textures/entity/arrow.png', import.meta.url).href);
     texture.magFilter = THREE.NearestFilter;
     texture.minFilter = THREE.NearestFilter;
     texture.generateMipmaps = false;
@@ -101,17 +83,18 @@ function getArrowMesh(): THREE.Group {
   }
 
   const group = new THREE.Group();
-  group.add(new THREE.Mesh(shaftGeometry, arrowMaterial));
-
-  const fletchA = new THREE.Mesh(fletchGeometry, arrowMaterial);
-  fletchA.position.z = -FLETCH_INSET;
-  group.add(fletchA);
-  const fletchB = new THREE.Mesh(fletchGeometry, arrowMaterial);
-  fletchB.position.z = -FLETCH_INSET;
-  fletchB.rotation.z = Math.PI / 2; // crossed with fletchA, same "+" cross-section trick as the shaft
-  group.add(fletchB);
-
+  group.add(new THREE.Mesh(crossGeometry, arrowMaterial));
+  const crossB = new THREE.Mesh(crossGeometry, arrowMaterial);
+  crossB.rotation.z = Math.PI / 2; // crossed with the first fin, forming the "+"
+  group.add(crossB);
   return group;
+}
+
+/** Visible wireframe box for the arrow's actual collision hitbox (HALF), toggled with the shared debug key (R). */
+function getHitboxHelper(): THREE.LineSegments {
+  if (!hitboxGeo) hitboxGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(HALF * 2, HALF * 2, HALF * 2));
+  if (!hitboxMat) hitboxMat = new THREE.LineBasicMaterial({ color: 0xff2222 });
+  return new THREE.LineSegments(hitboxGeo, hitboxMat);
 }
 
 export type ArrowSpawnOptions = {
@@ -136,8 +119,15 @@ export type ArrowProjectilesDeps = {
 
 export class ArrowProjectiles {
   private readonly arrows: Arrow[] = [];
+  private debug = false;
 
   constructor(private readonly deps: ArrowProjectilesDeps) {}
+
+  /** Toggle the wireframe hitboxes (bound to the same key as the rest of the debug overlay - R). */
+  setDebug(on: boolean): void {
+    this.debug = on;
+    for (const a of this.arrows) a.hitboxHelper.visible = on;
+  }
 
   /** Fire an arrow from `pos` with the given world-space velocity (blocks/second). */
   spawn(pos: THREE.Vector3, vel: THREE.Vector3, opts: ArrowSpawnOptions): void {
@@ -146,8 +136,14 @@ export class ArrowProjectiles {
     this.orient(group, vel);
     this.deps.scene.add(group);
 
+    const hitboxHelper = getHitboxHelper();
+    hitboxHelper.position.copy(pos);
+    hitboxHelper.visible = this.debug;
+    this.deps.scene.add(hitboxHelper);
+
     this.arrows.push({
       group,
+      hitboxHelper,
       vel: vel.clone(),
       fromPlayer: opts.fromPlayer,
       crit: opts.crit ?? false,
@@ -189,11 +185,13 @@ export class ArrowProjectiles {
         a.embedded = true;
         a.vel.set(0, 0, 0);
         a.group.position.copy(to);
+        a.hitboxHelper.position.copy(to);
         this.playHitSound('block', to);
         continue;
       }
 
       a.group.position.copy(to);
+      a.hitboxHelper.position.copy(to);
       a.vel.x *= DRAG;
       a.vel.z *= DRAG;
       this.orient(a.group, a.vel);
@@ -280,9 +278,10 @@ export class ArrowProjectiles {
     const a = this.arrows[i];
     if (!a) return;
     this.deps.scene.remove(a.group);
+    this.deps.scene.remove(a.hitboxHelper);
     // No dispose here: geometry/material are shared across every in-flight
-    // arrow (getArrowMesh()), not per-instance - disposing them would break
-    // every other arrow still flying.
+    // arrow (getArrowMesh()/getHitboxHelper()), not per-instance - disposing
+    // them would break every other arrow still flying.
     this.arrows.splice(i, 1);
   }
 }
