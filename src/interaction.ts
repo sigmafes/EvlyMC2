@@ -582,6 +582,16 @@ export class BlockInteraction {
     this.touchAimNdc = this.touchAimNdc ? this.touchAimNdc.set(ndcX, ndcY) : new THREE.Vector2(ndcX, ndcY);
   }
 
+  /** Touch-down on a mob: hit it immediately, same as a desktop click - unlike
+   * breaking a block, attacking must not wait for the hold-to-break delay. */
+  touchTryAttack(): boolean {
+    if (!this.touchActive) return false;
+    if (!this.attackNearestMob()) return false;
+    this.onSwing?.();
+    this.swingTimer = 0;
+    return true;
+  }
+
   /** Finger lifted off the world layer: nothing left to aim at. */
   touchAimEnd() {
     this.touchAimNdc = null;

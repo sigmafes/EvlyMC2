@@ -653,7 +653,21 @@ export class Inventory {
   };
 
   private onPaintUp = () => {
-    if (this.paint.committed) this.suppressNextSlotClick = true;
+    if (this.paint.committed) {
+      this.suppressNextSlotClick = true;
+      // Safety net: this flag exists to swallow the synthetic 'click' the
+      // browser fires on the slot the finger happens to lift over at the end
+      // of the drag (so that release doesn't ALSO deposit/pick up there).
+      // That click, if any, fires synchronously right after this pointerup -
+      // but a touch drag often ends outside any registered slot element (or
+      // pointer capture retargets it away entirely), so no click ever comes
+      // to consume the flag. Left armed, it would silently eat the player's
+      // NEXT, completely unrelated tap (e.g. depositing the held leftover
+      // stack), which is exactly why that tap needed doing twice. Clearing it
+      // on the next microtask lets a same-tick click still consume it, while
+      // anything later - a real new tap - goes through normally.
+      queueMicrotask(() => { this.suppressNextSlotClick = false; });
+    }
     this.paint = { down: false, committed: false, startEl: null, seen: new Set() };
   };
 

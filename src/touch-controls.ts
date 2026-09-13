@@ -21,6 +21,8 @@ export type TouchControlsCallbacks = {
   /** Finger held still on the world: start / stop breaking. */
   onBreakStart: () => void;
   onBreakEnd: () => void;
+  /** Touch-down: try to hit a mob right away (returns true if it landed) - attacking must not wait for the hold-to-break delay like mining does. */
+  onAttackTry: () => boolean;
   /** Finger position on the world layer (freeform aim, no centre crosshair) - fired on touchdown and every move, cleared with onAimEnd when the finger lifts. */
   onAimMove: (clientX: number, clientY: number) => void;
   onAimEnd: () => void;
@@ -56,6 +58,7 @@ export class TouchControls {
   private startTime = 0;
   private holdTimer = 0;
   private breaking = false;
+  private attacked = false; // this touch already hit a mob on pointerdown - skip break/tap-place on release
   private lastForwardPress = 0;
 
   /** Sync the on-screen sneak button's pressed-visual without re-firing onSneak (used when sprint cancels sneak programmatically). */
@@ -128,6 +131,7 @@ export class TouchControls {
       this.cb.onMoveAxis(0, 0);
       this.cb.onJump(false);
       if (this.breaking) { this.breaking = false; this.cb.onBreakEnd(); }
+      this.attacked = false;
       this.lookPointer = null;
       this.cb.onAimEnd();
       window.clearTimeout(this.holdTimer);
@@ -228,6 +232,10 @@ export class TouchControls {
       this.startTime = performance.now();
       this.breaking = false;
       this.cb.onAimMove(e.clientX, e.clientY);
+      // Attacking a mob registers immediately on touch-down, like a desktop
+      // click - only breaking a block waits for the hold delay below.
+      this.attacked = this.cb.onAttackTry();
+      if (this.attacked) return;
       window.clearTimeout(this.holdTimer);
       this.holdTimer = window.setTimeout(() => {
         this.breaking = true;
@@ -261,6 +269,8 @@ export class TouchControls {
       if (this.breaking) {
         this.breaking = false;
         this.cb.onBreakEnd();
+      } else if (this.attacked) {
+        this.attacked = false;
       } else if (drift <= MOVE_TOL && dt < HOLD_MS) {
         this.cb.onTapPlace();
       }

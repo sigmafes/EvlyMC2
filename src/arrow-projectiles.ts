@@ -215,7 +215,11 @@ export class ArrowProjectiles {
    * arrived before the gate's window elapsed.
    */
   private checkEntityHit(a: Arrow, from: THREE.Vector3, to: THREE.Vector3): boolean {
-    const speed = a.vel.length();
+    // a.vel is in blocks/SECOND (POWER_TO_SPEED-scaled for travel feel), but
+    // LCE's damage formula (ceil(velocity * ARROW_BASE_DAMAGE)) expects the
+    // original blocks/TICK "power" - undo the scale here so damage doesn't
+    // come out ~15x too high (a full-power hit was one-shotting the player).
+    const speed = a.vel.length() / POWER_TO_SPEED;
     const dmgBase = Math.ceil(speed * BASE_DAMAGE);
     const dmg = a.crit ? dmgBase + Math.floor(Math.random() * (dmgBase / 2 + 2)) : dmgBase;
 

@@ -501,6 +501,7 @@ const touchControls = TouchControls.isTouchDevice()
       onTapPlace: () => interaction.touchTapPlace(),
       onBreakStart: () => interaction.touchBreakStart(),
       onBreakEnd: () => interaction.touchBreakEnd(),
+      onAttackTry: () => interaction.touchTryAttack(),
       onAimMove: (x, y) => interaction.touchAimMove(x, y),
       onAimEnd: () => interaction.touchAimEnd(),
       onInventory: () => inventory.toggleInventory(),
