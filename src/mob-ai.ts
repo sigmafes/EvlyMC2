@@ -15,6 +15,7 @@ const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
 const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY), same as animals - widening this would plan climbs it can't execute
 const ZOMBIE_STEP_DOWN = 3;      // a zombie will drop off a 3-block ledge chasing the player; gravity handles the descent, no jump needed
 
+const RANGED_SHOT_HEIGHT_FRACTION = 0.55; // fraction of mob.height the arrow leaves from (torso, not feet - pos is the feet-level group origin)
 const RANGED_ATTACK_RADIUS = 10;      // blocks - LCE ArrowAttackGoal attackRadiusSqr (skeleton)
 const RANGED_ATTACK_INTERVAL = 3;     // seconds between shots (LCE TICKS_PER_SECOND * 3)
 const RANGED_SIGHT_REQUIRED = 1;      // seconds of continuous line-of-sight required before the first shot (LCE seeTime >= 20 ticks)
@@ -237,7 +238,9 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
     mob.attackTimer -= delta;
     if (mob.attackTimer <= 0) {
       mob.attackTimer = RANGED_ATTACK_INTERVAL;
-      deps.onShootArrow?.(pos.clone(), playerPos.clone());
+      const shotPos = pos.clone();
+      shotPos.y += mob.height * RANGED_SHOT_HEIGHT_FRACTION;
+      deps.onShootArrow?.(shotPos, playerPos.clone());
     }
     return true;
   }

@@ -79,5 +79,5 @@ export const SKELETON_SPEC: BipedSpec = {
   // player's third-person held item (buildItemMesh - see player-model.ts's
   // setHeldItem) - a skeleton never swaps its held item, so there's no
   // per-frame swap logic needed here, just a static attach at build time.
-  heldItem: { texturePath: 'items/bow.png', scale: 0.5, position: [0, -0.72, -0.05], rotation: [0, Math.PI / 2, 0] },
+  heldItem: { texturePath: 'items/bow.png', scale: 0.9, position: [0, -0.72, -0.05], rotation: [0, Math.PI / 2, Math.PI] },
 };

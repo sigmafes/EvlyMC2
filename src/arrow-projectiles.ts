@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildItemMesh, disposeBlockMesh, tintByLight } from './block-preview';
+import { tintByLight } from './block-preview';
 import { ItemId } from './item';
 import { makeStack } from './item-stack';
 import type { InventorySlot } from './inventory';
@@ -24,7 +24,6 @@ const PICKUP_RANGE = 1.2;
 const PICKUP_DELAY = 0.3;    // seconds an embedded arrow waits before it can be collected
 const BASE_DAMAGE = 2.0;     // LCE Arrow::ARROW_BASE_DAMAGE
 const EMBEDDED_DESPAWN = 60; // seconds stuck before it vanishes unclaimed (LCE 20*60 ticks)
-const OWNER_IGNORE_TIME = 5 / 20; // ~5 ticks - an arrow can't hit its own shooter for its first instant of flight
 
 // LCE's "power" (BowItem/ArrowAttackGoal, 0..2.0-ish) is a velocity in
 // blocks/TICK (20 ticks/sec) - transplanted as a raw number it would be an
@@ -45,8 +44,46 @@ type Arrow = {
   crit: boolean;
   embedded: boolean;
   embedTimer: number;
-  flightTime: number;
 };
+
+// --- Dedicated entity mesh: a thin cross of two planes (classic sprite-arrow
+// technique) using the arrow's own texture loaded directly, NOT the
+// item-preview pipeline (buildItemMesh/the item atlas) used for inventory
+// icons and held items - this is its own mesh built once and shared by every
+// in-flight arrow instance, never disposed per-instance.
+const ARROW_LENGTH = 0.7;
+const ARROW_WIDTH = 0.7;
+let arrowGeometry: THREE.BufferGeometry | null = null;
+let arrowMaterial: THREE.MeshBasicMaterial | null = null;
+
+function getArrowMesh(): THREE.Group {
+  if (!arrowGeometry) {
+    // A square plane in the XZ plane (so it's edge-on when the group is later
+    // aimed with local -Z as forward), rotated 45° in its own plane first so
+    // the icon's baked-in diagonal shaft/fletching line ends up running along
+    // -Z (the direction of flight) instead of across it.
+    const plane = new THREE.PlaneGeometry(ARROW_WIDTH, ARROW_LENGTH);
+    plane.rotateZ(-Math.PI / 4);
+    plane.rotateX(-Math.PI / 2);
+    arrowGeometry = plane;
+    arrowGeometry.userData.shared = true;
+  }
+  if (!arrowMaterial) {
+    const texture = new THREE.TextureLoader().load(new URL('../textures/items/arrow.png', import.meta.url).href);
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    arrowMaterial = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
+    arrowMaterial.userData.baseColor = new THREE.Color(0xffffff);
+  }
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(arrowGeometry, arrowMaterial));
+  const cross = new THREE.Mesh(arrowGeometry, arrowMaterial);
+  cross.rotation.z = Math.PI / 2; // second plane crossed through the first, so it reads as an arrow from any viewing angle
+  group.add(cross);
+  return group;
+}
 
 export type ArrowSpawnOptions = {
   /** True if the player fired it (checks mobs for a hit); false if a mob fired it (checks the player). */
@@ -75,8 +112,7 @@ export class ArrowProjectiles {
 
   /** Fire an arrow from `pos` with the given world-space velocity (blocks/second). */
   spawn(pos: THREE.Vector3, vel: THREE.Vector3, opts: ArrowSpawnOptions): void {
-    const group = buildItemMesh('items/arrow.png');
-    group.scale.setScalar(0.35);
+    const group = getArrowMesh();
     group.position.copy(pos);
     this.orient(group, vel);
     this.deps.scene.add(group);
@@ -88,7 +124,6 @@ export class ArrowProjectiles {
       crit: opts.crit ?? false,
       embedded: false,
       embedTimer: 0,
-      flightTime: 0,
     });
   }
 
@@ -109,7 +144,6 @@ export class ArrowProjectiles {
         continue;
       }
 
-      a.flightTime += delta;
       const from = a.group.position.clone();
 
       a.vel.y -= GRAVITY * delta;
@@ -142,9 +176,16 @@ export class ArrowProjectiles {
     }
   }
 
-  /** Checks the player (mob-shot arrow) or the nearest mob (player-shot arrow) along this frame's segment. */
+  /**
+   * Checks the player (mob-shot arrow) or the nearest mob (player-shot arrow)
+   * along this frame's segment. No "ignore the owner briefly" gate is needed
+   * here (unlike LCE's Arrow.cpp) since our shooter/target pairing never
+   * overlaps: a player-shot arrow only ever checks mobs, a mob-shot one only
+   * ever checks the player - the previous version's blanket gate on every
+   * hit (not just self-hits) was silently swallowing close-range shots that
+   * arrived before the gate's window elapsed.
+   */
   private checkEntityHit(a: Arrow, from: THREE.Vector3, to: THREE.Vector3): boolean {
-    if (a.flightTime < OWNER_IGNORE_TIME) return false;
     const speed = a.vel.length();
     const dmgBase = Math.ceil(speed * BASE_DAMAGE);
     const dmg = a.crit ? dmgBase + Math.floor(Math.random() * (dmgBase / 2 + 2)) : dmgBase;
@@ -157,6 +198,9 @@ export class ArrowProjectiles {
       const hit = this.deps.mobManager.raycastMobs(from, dir, dist);
       if (!hit) return false;
       this.deps.mobManager.damage(hit.mobId, dmg, from);
+      // Positive feedback for the player landing a hit - not played on the
+      // reverse case below (a mob's arrow hitting the player already gets
+      // its own hurt sound from playerHealth's damage callback in main.ts).
       this.playHitSound('entity', to);
       return true;
     }
@@ -165,7 +209,6 @@ export class ArrowProjectiles {
     const closest = closestPointOnSegment(from, to, playerPos);
     if (closest.distanceTo(playerPos) > PLAYER_HIT_RADIUS) return false;
     this.deps.onHitPlayer?.(dmg, from);
-    this.playHitSound('entity', to);
     return true;
   }
 
@@ -204,7 +247,9 @@ export class ArrowProjectiles {
     const a = this.arrows[i];
     if (!a) return;
     this.deps.scene.remove(a.group);
-    disposeBlockMesh(a.group);
+    // No dispose here: geometry/material are shared across every in-flight
+    // arrow (getArrowMesh()), not per-instance - disposing them would break
+    // every other arrow still flying.
     this.arrows.splice(i, 1);
   }
 }
