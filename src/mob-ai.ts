@@ -122,7 +122,7 @@ export function updateAI(mob: Mob, delta: number, deps: MobAiDeps): void {
  */
 function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
   const playerPos = deps.getPlayerPos?.();
-  const pos = mob.model.getGroup().position;
+  const pos = mob.pos;
   if (!playerPos) {
     mob.chasing = false;
     mob.attackTimer = 0;
@@ -256,7 +256,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
   if (mob.attackTimer > 0) mob.attackTimer -= delta;
 
   const playerPos = deps.getPlayerPos?.();
-  const pos = mob.model.getGroup().position;
+  const pos = mob.pos;
   if (!playerPos) {
     mob.chasing = false;
     mob.rangedSeeTimer = 0;
@@ -342,7 +342,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
  * escape from a hole deeper than a mob can physically jump.
  */
 function pickWanderTarget(mob: Mob, deps: MobAiDeps): void {
-  const pos = mob.model.getGroup().position;
+  const pos = mob.pos;
   const angle = Math.random() * Math.PI * 2;
   const radius = WANDER_RADIUS_MIN + Math.random() * (WANDER_RADIUS_MAX - WANDER_RADIUS_MIN);
   const goalX = pos.x + Math.sin(angle) * radius;
@@ -363,7 +363,7 @@ function pickWanderTarget(mob: Mob, deps: MobAiDeps): void {
  * current escape path runs out while still panicking.
  */
 function pickFleeTarget(mob: Mob, deps: MobAiDeps): void {
-  const pos = mob.model.getGroup().position;
+  const pos = mob.pos;
   const baseAngle = Math.atan2(mob.fleeDir.x, mob.fleeDir.z);
   const angle = baseAngle + (Math.random() - 0.5) * FLEE_REPATH_CONE;
   const radius = FLEE_RADIUS_MIN + Math.random() * (FLEE_RADIUS_MAX - FLEE_RADIUS_MIN);
@@ -384,7 +384,7 @@ function pickFleeTarget(mob: Mob, deps: MobAiDeps): void {
 /** Scans a handful of random nearby spots for dry, standable footing and heads straight there. */
 function trySwimToShore(mob: Mob, deps: MobAiDeps): void {
   if (!deps.isWater) return;
-  const pos = mob.model.getGroup().position;
+  const pos = mob.pos;
   for (let i = 0; i < 8; i++) {
     const angle = Math.random() * Math.PI * 2;
     const radius = 3 + Math.random() * 3;

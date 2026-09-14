@@ -81,6 +81,14 @@ export type Mob = {
   id: number;
   kind: MobKind;
   model: AnyMobModel;
+  // Authoritative position - a plain Vector3 with no scene attachment, NOT
+  // the render mesh's transform. AI/physics (mob-ai.ts/mob-physics.ts) read
+  // and write this directly; MobManager.update() is the single place that
+  // copies it onto model.getGroup().position afterward for rendering. This
+  // split (state independent of any THREE.Scene/mesh) is what would let a
+  // future server run mob simulation headless, the same way player-physics.ts
+  // already does for the player.
+  pos: THREE.Vector3;
   velocity: THREE.Vector3;
   health: number;
   maxHealth: number;
@@ -186,6 +194,7 @@ export class MobManager {
       id,
       kind,
       model,
+      pos: pos.clone(),
       velocity: new THREE.Vector3(),
       health: stats.maxHealth,
       maxHealth: stats.maxHealth,
@@ -231,7 +240,7 @@ export class MobManager {
   /** Current world position of a mob by id, or null if it's gone. */
   getPosition(id: number): THREE.Vector3 | null {
     const mob = this.mobs.find((m) => m.id === id);
-    return mob ? mob.model.getGroup().position : null;
+    return mob ? mob.pos : null;
   }
 
   /** Silent despawn (no drops, no death animation) - for a mob that wandered into an unloaded chunk. */
@@ -260,9 +269,8 @@ export class MobManager {
   countNear(pos: THREE.Vector3, radius: number, filter?: (mob: { kind: MobKind; pos: THREE.Vector3 }) => boolean): number {
     let n = 0;
     for (const mob of this.mobs) {
-      const p = mob.model.getGroup().position;
-      if (Math.hypot(p.x - pos.x, p.z - pos.z) > radius) continue;
-      if (filter && !filter({ kind: mob.kind, pos: p })) continue;
+      if (Math.hypot(mob.pos.x - pos.x, mob.pos.z - pos.z) > radius) continue;
+      if (filter && !filter({ kind: mob.kind, pos: mob.pos })) continue;
       n++;
     }
     return n;
@@ -272,7 +280,7 @@ export class MobManager {
   countAll(filter: (mob: { kind: MobKind; pos: THREE.Vector3 }) => boolean): number {
     let n = 0;
     for (const mob of this.mobs) {
-      if (filter({ kind: mob.kind, pos: mob.model.getGroup().position })) n++;
+      if (filter({ kind: mob.kind, pos: mob.pos })) n++;
     }
     return n;
   }
@@ -290,8 +298,7 @@ export class MobManager {
     let best: MobRaycastHit | null = null;
     for (const mob of this.mobs) {
       if (mob.dying) continue;
-      const feet = mob.model.getGroup().position;
-      const hit = rayCapsuleDistance(origin, dir, feet, mob.height, mob.radius);
+      const hit = rayCapsuleDistance(origin, dir, mob.pos, mob.height, mob.radius);
       if (hit !== null && hit <= maxDist && (!best || hit < best.distance)) {
         best = { mobId: mob.id, kind: mob.kind, distance: hit };
       }
@@ -325,8 +332,7 @@ export class MobManager {
     if (this.soundManager && this.inSoundRange(mob, fromPos)) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
     mob.model.hurt(); // 0.2s red flash
 
-    const pos = mob.model.getGroup().position;
-    const pushDir = new THREE.Vector2(pos.x - fromPos.x, pos.z - fromPos.z);
+    const pushDir = new THREE.Vector2(mob.pos.x - fromPos.x, mob.pos.z - fromPos.z);
     if (pushDir.lengthSq() < 1e-6) pushDir.set(Math.random() - 0.5, Math.random() - 0.5);
     pushDir.normalize();
 
@@ -381,20 +387,23 @@ export class MobManager {
       this.updateFire(mob, delta, getSkyExposure, getBlockId);
       if (mob.dying) continue; // fire just killed it this frame - death handled next tick
 
-      const group = mob.model.getGroup();
+      // Sync the render mesh from the authoritative plain position that AI/
+      // physics just updated - mob.pos is the source of truth, the mesh
+      // transform is a pure mirror of it from here on.
+      mob.model.getGroup().position.copy(mob.pos);
+
       const moving = mob.path !== null && mob.pathIndex < mob.path.length;
       mob.model.setWalking(moving);
 
       if (getLight) {
-        const p = group.position;
-        const level = getLight(Math.round(p.x), Math.round(p.y + mob.height / 2), Math.round(p.z));
+        const level = getLight(Math.round(mob.pos.x), Math.round(mob.pos.y + mob.height / 2), Math.round(mob.pos.z));
         mob.model.setLightLevel(level / 15);
       }
       mob.model.setOnFire(mob.onFire);
       mob.model.update(delta); // resolves this frame's colour (light tint, or a hurt/fire tint on top)
       this.updateSounds(mob, delta, moving, listenerPos);
 
-      mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
+      mob.box.position.set(mob.pos.x, mob.pos.y + mob.height / 2, mob.pos.z);
     }
   }
 
@@ -404,7 +413,7 @@ export class MobManager {
    * for two specific block ids instead of "is solid".
    */
   private touchesFireOrLava(mob: Mob, getBlockId: (x: number, y: number, z: number) => BlockId): boolean {
-    const p = mob.model.getGroup().position;
+    const p = mob.pos;
     const x0 = Math.round(p.x - mob.radius), x1 = Math.round(p.x + mob.radius);
     const z0 = Math.round(p.z - mob.radius), z1 = Math.round(p.z + mob.radius);
     const y0 = Math.round(p.y + 0.05), y1 = Math.round(p.y + mob.height - 0.05);
@@ -437,7 +446,7 @@ export class MobManager {
     getSkyExposure?: (x: number, y: number, z: number) => number,
     getBlockId?: (x: number, y: number, z: number) => BlockId,
   ): void {
-    const p = mob.model.getGroup().position;
+    const p = mob.pos;
 
     const sunBurning = isHostileKind(mob.kind) && !!getSkyExposure
       && getSkyExposure(Math.round(p.x), Math.round(p.y + mob.height), Math.round(p.z)) >= 12
@@ -476,7 +485,7 @@ export class MobManager {
    * handful of already-sunlit zombies per frame, not every zombie.
    */
   private hasSolidCoverAbove(mob: Mob): boolean {
-    const p = mob.model.getGroup().position;
+    const p = mob.pos;
     const x = Math.round(p.x);
     const z = Math.round(p.z);
     for (let y = Math.round(p.y + mob.height) + 1; y < SKY_SCAN_MAX_Y; y += 1) {
@@ -488,24 +497,23 @@ export class MobManager {
   /** True if `pos` is within MOB_SOUND_RADIUS of `mob` (horizontal + vertical distance). No listener position given -> always audible (e.g. no player reference available). */
   private inSoundRange(mob: Mob, pos?: THREE.Vector3): boolean {
     if (!pos) return true;
-    const p = mob.model.getGroup().position;
-    return p.distanceTo(pos) <= MOB_SOUND_RADIUS;
+    return mob.pos.distanceTo(pos) <= MOB_SOUND_RADIUS;
   }
 
   /** Death animation (topples over its Z axis, red-tinted), then drops + a smoke burst + removal. */
   private updateDeath(mob: Mob, delta: number, index: number): void {
     updatePhysics(mob, delta, this.isSolid, this.isWater); // still falls/lands, just no AI movement
+    mob.model.getGroup().position.copy(mob.pos); // sync - see the comment in update()
     mob.model.setWalking(false);
     mob.model.update(delta);
 
     mob.deathTimer -= delta;
     const t = Math.min(1, 1 - Math.max(mob.deathTimer, 0) / DEATH_SPIN_DURATION);
-    const group = mob.model.getGroup();
-    group.rotation.z = (Math.PI / 2) * t;
-    mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
+    mob.model.getGroup().rotation.z = (Math.PI / 2) * t;
+    mob.box.position.set(mob.pos.x, mob.pos.y + mob.height / 2, mob.pos.z);
 
     if (mob.deathTimer <= 0) {
-      const pos = group.position.clone();
+      const pos = mob.pos.clone();
       pos.y += mob.height / 2;
       for (const drop of rollDrops(mob.kind, mob.onFire)) this.onDrop?.(drop.id, drop.count, pos);
       this.onDeath?.(pos);

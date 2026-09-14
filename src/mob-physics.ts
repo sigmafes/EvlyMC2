@@ -48,15 +48,14 @@ export function overlapsSolid(isSolid: IsSolidFn, x: number, feetY: number, z: n
  * teleport there, zeroing velocity, instead of leaving it wedged forever.
  */
 export function tryEscapeStuck(mob: Mob, isSolid: IsSolidFn): boolean {
-  const group = mob.model.getGroup();
-  if (!overlapsSolid(isSolid, group.position.x, group.position.y, group.position.z, mob.radius, mob.height)) return false;
-  const x = Math.round(group.position.x);
-  const z = Math.round(group.position.z);
-  const startY = Math.floor(group.position.y);
+  if (!overlapsSolid(isSolid, mob.pos.x, mob.pos.y, mob.pos.z, mob.radius, mob.height)) return false;
+  const x = Math.round(mob.pos.x);
+  const z = Math.round(mob.pos.z);
+  const startY = Math.floor(mob.pos.y);
   const MAX_SCAN = 256;
   for (let y = startY; y < startY + MAX_SCAN; y += 1) {
     if (!isSolid(x, y, z) && !isSolid(x, y + 1, z)) {
-      group.position.set(x, y + 0.5, z);
+      mob.pos.set(x, y + 0.5, z);
       mob.velocity.set(0, 0, 0);
       mob.grounded = false;
       return true;
@@ -73,8 +72,7 @@ export function tryEscapeStuck(mob: Mob, isSolid: IsSolidFn): boolean {
  * ground snap (sample the block below, land on its top) for velocity.y.
  */
 export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWater?: IsWaterFn): void {
-  const group = mob.model.getGroup();
-  const y = group.position.y;
+  const y = mob.pos.y;
 
   if (Math.abs(mob.velocity.x) > 0.001 || Math.abs(mob.velocity.z) > 0.001) {
     // Only a block that's still solid one step higher counts as "truly
@@ -87,10 +85,10 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
     // the path away before it ever got the chance to clear the obstacle.
     let stuckGrounded = false;
 
-    const tryX = group.position.x + mob.velocity.x * delta;
-    if (!overlapsSolid(isSolid, tryX, y, group.position.z, mob.radius, mob.height)) {
-      group.position.x = tryX;
-    } else if (mob.grounded && !overlapsSolid(isSolid, tryX, y + 1, group.position.z, mob.radius, mob.height)) {
+    const tryX = mob.pos.x + mob.velocity.x * delta;
+    if (!overlapsSolid(isSolid, tryX, y, mob.pos.z, mob.radius, mob.height)) {
+      mob.pos.x = tryX;
+    } else if (mob.grounded && !overlapsSolid(isSolid, tryX, y + 1, mob.pos.z, mob.radius, mob.height)) {
       mob.velocity.y = JUMP_FORCE;
       mob.grounded = false;
     } else if (mob.grounded) {
@@ -110,10 +108,10 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
       stuckGrounded = true;
     }
 
-    const tryZ = group.position.z + mob.velocity.z * delta;
-    if (!overlapsSolid(isSolid, group.position.x, y, tryZ, mob.radius, mob.height)) {
-      group.position.z = tryZ;
-    } else if (mob.grounded && !overlapsSolid(isSolid, group.position.x, y + 1, tryZ, mob.radius, mob.height)) {
+    const tryZ = mob.pos.z + mob.velocity.z * delta;
+    if (!overlapsSolid(isSolid, mob.pos.x, y, tryZ, mob.radius, mob.height)) {
+      mob.pos.z = tryZ;
+    } else if (mob.grounded && !overlapsSolid(isSolid, mob.pos.x, y + 1, tryZ, mob.radius, mob.height)) {
       mob.velocity.y = JUMP_FORCE;
       mob.grounded = false;
     } else if (mob.grounded) {
@@ -131,22 +129,22 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
     }
   }
 
-  const feetX = Math.round(group.position.x);
-  const feetZ = Math.round(group.position.z);
-  const feetBlockYNow = Math.round(group.position.y);
+  const feetX = Math.round(mob.pos.x);
+  const feetZ = Math.round(mob.pos.z);
+  const feetBlockYNow = Math.round(mob.pos.y);
   mob.inWater = !!isWater && (isWater(feetX, feetBlockYNow, feetZ) || isWater(feetX, feetBlockYNow + 1, feetZ));
 
   if (mob.inWater) {
     // Float toward the surface instead of sinking, and skip the normal
     // ground-snap while submerged.
     mob.velocity.y = Math.min(mob.velocity.y + WATER_BUOYANCY * delta, WATER_RISE_SPEED);
-    group.position.y += mob.velocity.y * delta;
+    mob.pos.y += mob.velocity.y * delta;
     mob.grounded = false;
     return;
   }
 
   mob.velocity.y -= GRAVITY * delta;
-  let nextY = group.position.y + mob.velocity.y * delta;
+  let nextY = mob.pos.y + mob.velocity.y * delta;
 
   // Ceiling check while rising (knockback's KNOCKBACK_UP, or a step-up
   // JUMP_FORCE, launched into a low gap): unlike the downward/ground case
@@ -156,21 +154,21 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
   // back down through the same solid cell, get read as "standing on" the
   // block it was embedded in - stuck floating inside it, immobile. Clamp the
   // rise to whatever this frame's overlap check will still allow instead.
-  if (mob.velocity.y > 0 && overlapsSolid(isSolid, group.position.x, nextY, group.position.z, mob.radius, mob.height)) {
+  if (mob.velocity.y > 0 && overlapsSolid(isSolid, mob.pos.x, nextY, mob.pos.z, mob.radius, mob.height)) {
     mob.velocity.y = 0;
-    nextY = group.position.y;
+    nextY = mob.pos.y;
   }
 
   // Blocks are centred on integer coordinates (span [n-0.5, n+0.5] - see
   // chunk.ts's BlockCollider), so the ground block's top surface sits at
   // its own index + 0.5, not +1.
   const feetBlockY = Math.floor(nextY - 0.05);
-  if (mob.velocity.y <= 0 && isSolid(Math.round(group.position.x), feetBlockY, Math.round(group.position.z))) {
-    group.position.y = feetBlockY + 0.5;
+  if (mob.velocity.y <= 0 && isSolid(Math.round(mob.pos.x), feetBlockY, Math.round(mob.pos.z))) {
+    mob.pos.y = feetBlockY + 0.5;
     mob.velocity.y = 0;
     mob.grounded = true;
   } else {
-    group.position.y = nextY;
+    mob.pos.y = nextY;
     mob.grounded = false;
   }
 }
@@ -222,10 +220,9 @@ export function moveHorizontal(mob: Mob, dirX: number, dirZ: number, speed: numb
 /** Steps `mob` toward its current path waypoint, advancing to the next one once close enough. */
 export function followPath(mob: Mob, speed: number, delta: number): void {
   if (!mob.path || mob.pathIndex >= mob.path.length) return;
-  const group = mob.model.getGroup();
   const wp = mob.path[mob.pathIndex];
-  const dx = wp.x - group.position.x;
-  const dz = wp.z - group.position.z;
+  const dx = wp.x - mob.pos.x;
+  const dz = wp.z - mob.pos.z;
   const dist = Math.hypot(dx, dz);
   if (dist < WAYPOINT_REACH_DIST) {
     mob.pathIndex++;

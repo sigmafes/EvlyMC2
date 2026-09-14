@@ -26,6 +26,8 @@ const SAVE_INTERVAL = 5;    // seconds between periodic persistence snapshots
 type Entity = {
   group: THREE.Group;
   box: THREE.LineSegments;
+  /** Authoritative position - plain data, not the mesh's transform. See update(): the mesh is synced FROM this each frame, same split as mob-manager.ts's Mob.pos. */
+  pos: THREE.Vector3;
   vel: THREE.Vector3;
   restY: number;
   id: number;
@@ -117,7 +119,7 @@ export class DroppedItems {
     box.position.copy(pos);
     this.scene.add(box);
 
-    this.entities.push({ group, box, vel, restY: pos.y, id, count, age, grounded: false, pendingChunk });
+    this.entities.push({ group, box, pos: pos.clone(), vel, restY: pos.y, id, count, age, grounded: false, pendingChunk });
   }
 
   /**
@@ -134,7 +136,7 @@ export class DroppedItems {
       const e = this.entities[i];
 
       if (e.pendingChunk) {
-        if (!this.isChunkLoaded || !this.isChunkLoaded(Math.round(e.group.position.x), Math.round(e.group.position.z))) {
+        if (!this.isChunkLoaded || !this.isChunkLoaded(Math.round(e.pos.x), Math.round(e.pos.z))) {
           continue; // stay frozen (no gravity/age) until its terrain actually exists
         }
         e.pendingChunk = false;
@@ -143,7 +145,7 @@ export class DroppedItems {
       e.age += delta;
       if (e.age >= DESPAWN) { this.removeAt(i); continue; }
 
-      const p = e.group.position;
+      const p = e.pos;
       // Undo last frame's cosmetic idle bob before running physics against blocks.
       if (e.grounded) p.y = e.restY;
 
@@ -164,7 +166,11 @@ export class DroppedItems {
       e.vel.x *= drag;
       e.vel.z *= drag;
 
-      // --- spin + idle bob (cosmetic only) ---
+      // Sync the mesh from the authoritative plain position the physics
+      // above just moved - e.pos is the source of truth from here on.
+      e.group.position.copy(p);
+
+      // --- spin + idle bob (cosmetic only, mesh-only - doesn't feed back into e.pos) ---
       // The bob rides entirely ABOVE the resting height so the low point sits
       // flush on the block instead of sinking through it.
       e.group.rotation.y += delta * 1.6;
@@ -195,7 +201,7 @@ export class DroppedItems {
         const o = this.entities[j];
         if (o.id !== e.id) continue;
         if (e.count + o.count > maxStackOf(e.id)) continue;
-        if (e.group.position.distanceToSquared(o.group.position) > MERGE_RANGE * MERGE_RANGE) continue;
+        if (e.pos.distanceToSquared(o.pos) > MERGE_RANGE * MERGE_RANGE) continue;
         o.count += e.count;
         o.age = Math.min(o.age, e.age);
         this.removeAt(i);
@@ -216,9 +222,9 @@ export class DroppedItems {
     return this.entities.map((e) => ({
       id: e.id,
       count: e.count,
-      x: e.group.position.x,
-      y: e.grounded ? e.restY : e.group.position.y,
-      z: e.group.position.z,
+      x: e.pos.x,
+      y: e.grounded ? e.restY : e.pos.y,
+      z: e.pos.z,
       age: e.age,
     }));
   }
