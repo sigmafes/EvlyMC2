@@ -1313,6 +1313,13 @@ body.touch #crosshair {
   pointer-events: none;
 }
 #mp-health[hidden] { display: none; }
+
+/* Touch aims freeform from wherever the finger is, same reasoning as
+   singleplayer's own #crosshair rule above - a fixed centre crosshair would
+   be misleading once TouchControls is driving multiplayer-game.ts. */
+body.touch #mp-crosshair {
+  display: none;
+}
 #access-gate-panel {
   width: min(360px, 88vw);
   display: flex;

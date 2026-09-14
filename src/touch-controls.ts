@@ -122,6 +122,17 @@ export class TouchControls {
     this.lookLayer.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
+  /** Full teardown - removes the on-screen DOM entirely and clears input
+   * state, for a caller (e.g. multiplayer-game.ts) whose session can start
+   * and stop repeatedly on the same page, unlike singleplayer's one-shot
+   * lifetime where a TouchControls just lives as long as the tab does. */
+  destroy(): void {
+    this.setGameplayVisible(false);
+    document.body.classList.remove('touch');
+    this.root.remove();
+    this.lookLayer.remove();
+  }
+
   /** Hide the movement/look controls while a full-screen menu is open. */
   setGameplayVisible(visible: boolean): void {
     this.gameplay.hidden = !visible;

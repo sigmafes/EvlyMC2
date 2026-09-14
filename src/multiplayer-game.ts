@@ -4,6 +4,7 @@ import { BlockId, createBlockMaterials, type BlockMaterials } from './block';
 import { Chunk, CHUNK_SIZE } from './chunk';
 import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui } from './is-touch';
+import { TouchControls } from './touch-controls';
 import type { EntitySnapshot } from './net/protocol';
 
 /**
@@ -255,14 +256,24 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   };
   document.addEventListener('mousemove', onMouseMove);
 
+  // --- Touch (Android/mobile) input state - see TouchControls wiring below.
+  // Mirrors main.ts's desktop-vs-touch split: keyboard/mouse drive `keys`
+  // directly, touch drives these instead, and sendInput() merges both so
+  // either input method (or both, on a hybrid device) works.
+  let touchMoveX = 0, touchMoveZ = 0;
+  let touchJump = false, touchSprint = false, touchSneak = false;
+  /** Freeform aim point (NDC), wherever the finger currently is - unlike the
+   * mouse's fixed centre crosshair. Cleared (null) when no finger is down. */
+  let touchAimNdc: THREE.Vector2 | null = null;
+
   // Same block-position-from-hit formula as raycast.ts's resolveBlockPosition
   // (minus its fire-plane special case, not relevant here): nudge the hit
   // point slightly INTO the face along its normal before rounding, so it
   // lands on the block that was actually hit rather than its neighbour.
   const raycaster = new THREE.Raycaster();
-  const onMouseDown = (e: MouseEvent) => {
-    if (document.pointerLockElement !== canvas) { lockPointer(canvas); return; }
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  /** Shared by the mouse's click handler and touch's tap/hold/attack handlers - `ndc` is (0,0) for the mouse's fixed centre crosshair, or the finger's freeform aim point for touch. */
+  function performInteraction(ndc: THREE.Vector2, action: 'break' | 'place' | 'attack'): boolean {
+    raycaster.setFromCamera(ndc, camera);
     // Entity hitboxes take priority over terrain at the same/closer distance -
     // attacking a mob standing right against a wall shouldn't accidentally
     // break the wall instead just because intersectObjects happened to order
@@ -272,28 +283,71 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     const entityHitboxes = [...remoteEntities.values()].map((r) => r.hitbox);
     const hits = raycaster.intersectObjects([...chunkMeshes, ...entityHitboxes], false);
     const hit = hits.find((h) => h.distance <= REACH);
-    if (!hit) return;
+    if (!hit) return false;
     const entityId = hit.object.userData.entityId as number | undefined;
-    if (e.button === 0 && entityId !== undefined) {
+    if (action === 'attack') {
       // Mob ids are negative (ServerMobManager); player ids are positive -
       // PvP is deliberately not wired up yet (see world-do.ts's attack
       // handler), so this just doesn't send anything for a player target.
-      if (entityId < 0) client.send({ type: 'attack', targetId: entityId });
-      return;
+      if (entityId === undefined || entityId >= 0) return false;
+      client.send({ type: 'attack', targetId: entityId });
+      return true;
     }
-    if (!hit.face) return;
+    if (entityId !== undefined || !hit.face) return false;
     const normal = hit.face.normal;
-    if (e.button === 0) {
+    if (action === 'break') {
       const b = hit.point.clone().addScaledVector(normal, -0.01).round();
       client.send({ type: 'breakBlock', x: b.x, y: b.y, z: b.z });
-    } else if (e.button === 2 && entityId === undefined) {
+    } else {
       const p = hit.point.clone().addScaledVector(normal, 0.5).round();
       client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: PLACE_BLOCK_ID, face: 0 });
+    }
+    return true;
+  }
+
+  const CENTER_NDC = new THREE.Vector2(0, 0);
+  const onMouseDown = (e: MouseEvent) => {
+    if (document.pointerLockElement !== canvas) { lockPointer(canvas); return; }
+    if (e.button === 0) {
+      // A left-click first tries an attack (mob under the crosshair); if that
+      // misses, it falls back to breaking whatever block is under it instead.
+      if (!performInteraction(CENTER_NDC, 'attack')) performInteraction(CENTER_NDC, 'break');
+    } else if (e.button === 2) {
+      performInteraction(CENTER_NDC, 'place');
     }
   };
   const onContextMenu = (e: MouseEvent) => e.preventDefault();
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('contextmenu', onContextMenu);
+
+  const touchControls = TouchControls.isTouchDevice()
+    ? new TouchControls({
+        onMoveAxis: (x, z) => { touchMoveX = x; touchMoveZ = z; },
+        onJump: (held) => { touchJump = held; },
+        onSneak: (on) => { touchSneak = on; },
+        onSprint: (on) => { touchSprint = on; },
+        onLook: (dx, dy) => {
+          yaw -= dx * MOUSE_SENSITIVITY;
+          pitch -= dy * MOUSE_SENSITIVITY;
+          pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+        },
+        onTapPlace: () => { if (touchAimNdc) performInteraction(touchAimNdc, 'place'); },
+        onBreakStart: () => { if (touchAimNdc) performInteraction(touchAimNdc, 'break'); },
+        onBreakEnd: () => {}, // breaking is instant server-side (no mining time yet) - nothing to stop
+        onAttackTry: () => (touchAimNdc ? performInteraction(touchAimNdc, 'attack') : false),
+        onAimMove: (clientX, clientY) => {
+          const rect = canvas.getBoundingClientRect();
+          const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+          const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+          touchAimNdc = touchAimNdc ? touchAimNdc.set(ndcX, ndcY) : new THREE.Vector2(ndcX, ndcY);
+        },
+        onAimEnd: () => { touchAimNdc = null; },
+        onInventory: () => {}, // no inventory in multiplayer yet - see the module doc comment
+        onThirdPerson: () => {}, // no third-person camera in multiplayer yet
+        onChat: () => {}, // no chat UI in multiplayer yet (chat messages only go to devtools console)
+        onPause: () => disconnect('Disconnected'),
+      })
+    : null;
 
   const onResize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -343,6 +397,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     canvas.removeEventListener('mousedown', onMouseDown);
     canvas.removeEventListener('contextmenu', onContextMenu);
     window.removeEventListener('resize', onResize);
+    touchControls?.destroy();
     document.exitPointerLock();
     canvas.hidden = true;
     crosshair.hidden = true;
@@ -399,18 +454,20 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   function sendInput(now: number): void {
     if (now - lastSend < SEND_INTERVAL_MS) return;
     lastSend = now;
-    let moveX = 0, moveZ = 0;
+    let moveX = touchMoveX, moveZ = touchMoveZ;
     if (keys.has('KeyW')) moveZ -= 1;
     if (keys.has('KeyS')) moveZ += 1;
     if (keys.has('KeyA')) moveX -= 1;
     if (keys.has('KeyD')) moveX += 1;
+    moveX = THREE.MathUtils.clamp(moveX, -1, 1);
+    moveZ = THREE.MathUtils.clamp(moveZ, -1, 1);
     client.send({
       type: 'input',
       seq: ++seq,
       moveX, moveZ,
-      wantJump: keys.has('Space'),
-      sprinting: keys.has('ControlLeft'),
-      sneaking: keys.has('ShiftLeft'),
+      wantJump: keys.has('Space') || touchJump,
+      sprinting: keys.has('ControlLeft') || touchSprint,
+      sneaking: keys.has('ShiftLeft') || touchSneak,
       yaw, pitch,
       dtMs: SEND_INTERVAL_MS,
     });
