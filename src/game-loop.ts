@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { DayNightCycle, DayNightState } from './day-night-cycle';
+import { updateFireOverlayAnimation } from './fire-overlay';
 import { UnderwaterManager, UnderwaterState } from './underwater-manager';
 import type { LightEngine } from './light-engine';
 import type { PlayerController } from './player';
@@ -83,6 +84,7 @@ export class GameLoop {
     ); // build queued chunks, time-budgeted (adaptive - see FrameBudget)
     this.world.updateLeavesDecay(cappedDelta);
     this.world.updateWaterAnimation(elapsedTime);
+    updateFireOverlayAnimation(elapsedTime);
     this.world.updateWater(cappedDelta, this.player.state.position.x, this.player.state.position.z);
     this.world.updateFire(cappedDelta, this.player.state.position.x, this.player.state.position.z);
 

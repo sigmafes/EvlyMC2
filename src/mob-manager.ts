@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { BlockId } from './block';
 import { MobModel, BipedMobModel, type QuadrupedSpec, type BipedSpec } from './mob-model';
 import { playMobSound } from './mob-sounds';
 import type { SoundManager } from './sound-manager';
@@ -22,6 +23,7 @@ type AnyMobModel = {
   setLightLevel(level01: number): void;
   hurt(): void;
   setDying(on: boolean): void;
+  setOnFire(on: boolean): void;
   update(delta: number): void;
   setAttacking?(on: boolean): void;
 };
@@ -53,8 +55,9 @@ const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpe
   skeleton: { maxHealth: 20, walkSpeed: 2.0, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
 };
 
-const BURN_DAMAGE_INTERVAL = 1;  // seconds between sunlight-burn ticks
+const BURN_DAMAGE_INTERVAL = 1;  // seconds between fire-damage ticks
 const BURN_DAMAGE = 1;
+const FIRE_AFTERBURN_TICKS = 8;  // ticks of damage that still land after losing contact with lava/fire/sun, then it goes out
 const SKY_SCAN_MAX_Y = 156;      // above chunk.ts's CHUNK_HEIGHT (152) - a column open all the way up here really has no roof
 const STEP_INTERVAL = 0.45;
 const IDLE_SOUND_MIN = 4;
@@ -112,8 +115,12 @@ export type Mob = {
   // Ranged hostile AI (skeleton): seconds of continuous line-of-sight on the
   // target, accumulated toward RANGED_SIGHT_REQUIRED before the first shot.
   rangedSeeTimer: number;
-  // Sunlight burn (zombie/skeleton): ticks damage while exposed, independent of combat.
-  burning: boolean;
+  // Fire (sunlight for zombie/skeleton, or lava/fire contact for any mob):
+  // ticks damage while exposed AND for fireTicksLeft ticks after losing
+  // exposure (the "after-burn"), independent of combat. `onFire` also drives
+  // the model's orange tint + flame overlay and (dead) whether drops cook.
+  onFire: boolean;
+  fireTicksLeft: number;
   burnTimer: number;
   // Death
   dying: boolean;
@@ -161,7 +168,8 @@ export class MobManager {
 
   spawn(kind: MobKind, spec: MobSpec, pos: THREE.Vector3, yaw: number): number {
     const stats = MOB_STATS[kind];
-    const model: AnyMobModel = isBipedKind(kind) ? new BipedMobModel(spec as BipedSpec) : new MobModel(spec as QuadrupedSpec);
+    const hitbox = { radius: stats.radius, height: stats.height };
+    const model: AnyMobModel = isBipedKind(kind) ? new BipedMobModel(spec as BipedSpec, hitbox) : new MobModel(spec as QuadrupedSpec, hitbox);
     const group = model.getGroup();
     group.position.copy(pos);
     group.rotation.y = yaw;
@@ -203,7 +211,8 @@ export class MobManager {
       leapCooldown: 0,
       knockbackTimer: 0,
       rangedSeeTimer: 0,
-      burning: false,
+      onFire: false,
+      fireTicksLeft: 0,
       burnTimer: 0,
       dying: false,
       deathTimer: 0,
@@ -339,8 +348,10 @@ export class MobManager {
     delta: number,
     getLight?: (x: number, y: number, z: number) => number,
     listenerPos?: THREE.Vector3,
-    /** Raw sky exposure 0..15 (sun only, ignores torches) at a position - drives zombie sunlight burn. */
+    /** Raw sky exposure 0..15 (sun only, ignores torches) at a position - drives zombie/skeleton sunlight burn. */
     getSkyExposure?: (x: number, y: number, z: number) => number,
+    /** Block id at a position - drives lava/fire contact catching any mob on fire. */
+    getBlockId?: (x: number, y: number, z: number) => BlockId,
   ): void {
     // Reverse iteration: updateDeath() may splice a finished mob out mid-loop.
     for (let i = this.mobs.length - 1; i >= 0; i--) {
@@ -354,8 +365,8 @@ export class MobManager {
       tryEscapeStuck(mob, this.isSolid);
       updateAI(mob, delta, this.aiDeps);
       updatePhysics(mob, delta, this.isSolid, this.isWater);
-      if ((mob.kind === 'zombie' || mob.kind === 'skeleton') && getSkyExposure) this.updateBurn(mob, delta, getSkyExposure);
-      if (mob.dying) continue; // burn just killed it this frame - death handled next tick
+      this.updateFire(mob, delta, getSkyExposure, getBlockId);
+      if (mob.dying) continue; // fire just killed it this frame - death handled next tick
 
       const group = mob.model.getGroup();
       const moving = mob.path !== null && mob.pathIndex < mob.path.length;
@@ -366,7 +377,8 @@ export class MobManager {
         const level = getLight(Math.round(p.x), Math.round(p.y + mob.height / 2), Math.round(p.z));
         mob.model.setLightLevel(level / 15);
       }
-      mob.model.update(delta); // resolves this frame's colour (light tint, or a hurt flash on top)
+      mob.model.setOnFire(mob.onFire);
+      mob.model.update(delta); // resolves this frame's colour (light tint, or a hurt/fire tint on top)
       this.updateSounds(mob, delta, moving, listenerPos);
 
       mob.box.position.set(group.position.x, group.position.y + mob.height / 2, group.position.z);
@@ -374,24 +386,62 @@ export class MobManager {
   }
 
   /**
-   * Sunlight burn (zombie): catches fire once sky exposure at its head hits
-   * BURN_LIGHT_THRESHOLD (dawn - see main.ts's getSkyExposure), ticking
-   * BURN_DAMAGE every BURN_DAMAGE_INTERVAL until it dies or steps back into
-   * shade/underground. Independent of combat - reuses the same damage() path
-   * so hurt sound/flash/knockback-free death all just work. Water douses it
-   * immediately (mob.inWater, already tracked by updatePhysics), and any
-   * solid block directly overhead blocks the sun outright regardless of how
-   * exposed the sky is laterally - checked last since it's the only one of
-   * the three gates that isn't a cheap flag/lookup already in hand.
+   * True if any part of the mob's hitbox column overlaps a LAVA or FIRE
+   * block - same idea as overlapsSolid() in mob-physics.ts, just checking
+   * for two specific block ids instead of "is solid".
    */
-  private updateBurn(mob: Mob, delta: number, getSkyExposure: (x: number, y: number, z: number) => number): void {
+  private touchesFireOrLava(mob: Mob, getBlockId: (x: number, y: number, z: number) => BlockId): boolean {
     const p = mob.model.getGroup().position;
-    const exposure = getSkyExposure(Math.round(p.x), Math.round(p.y + mob.height), Math.round(p.z));
-    mob.burning = exposure >= 12 && !mob.inWater && !this.hasSolidCoverAbove(mob);
-    if (!mob.burning) { mob.burnTimer = 0; return; }
+    const x0 = Math.round(p.x - mob.radius), x1 = Math.round(p.x + mob.radius);
+    const z0 = Math.round(p.z - mob.radius), z1 = Math.round(p.z + mob.radius);
+    const y0 = Math.round(p.y + 0.05), y1 = Math.round(p.y + mob.height - 0.05);
+    for (let x = x0; x <= x1; x++) {
+      for (let z = z0; z <= z1; z++) {
+        for (let y = y0; y <= y1; y++) {
+          const id = getBlockId(x, y, z);
+          if (id === BlockId.LAVA || id === BlockId.FIRE) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Fire: sunlight (zombie/skeleton only, once sky exposure at its head hits
+   * the burn threshold - see main.ts's getSkyExposure) or lava/fire block
+   * contact (any mob). Keeps ticking BURN_DAMAGE every BURN_DAMAGE_INTERVAL
+   * for FIRE_AFTERBURN_TICKS after exposure ends, then goes out - same
+   * "still burning a few seconds after leaving the fire" behaviour as the
+   * player (see main.ts's playerOnFire). Independent of combat - reuses the
+   * same damage() path so hurt sound/flash/knockback-free death all just
+   * work. Water douses it immediately (mob.inWater, already tracked by
+   * updatePhysics), and any solid block directly overhead blocks the sun
+   * outright regardless of how exposed the sky is laterally.
+   */
+  private updateFire(
+    mob: Mob,
+    delta: number,
+    getSkyExposure?: (x: number, y: number, z: number) => number,
+    getBlockId?: (x: number, y: number, z: number) => BlockId,
+  ): void {
+    const p = mob.model.getGroup().position;
+
+    const sunBurning = isHostileKind(mob.kind) && !!getSkyExposure
+      && getSkyExposure(Math.round(p.x), Math.round(p.y + mob.height), Math.round(p.z)) >= 12
+      && !mob.inWater && !this.hasSolidCoverAbove(mob);
+    const touchingFire = !mob.inWater && !!getBlockId && this.touchesFireOrLava(mob, getBlockId);
+
+    // Exposed right now - top the after-burn counter back up so it doesn't
+    // start ticking down until contact is actually lost.
+    if (sunBurning || touchingFire) mob.fireTicksLeft = FIRE_AFTERBURN_TICKS;
+
+    mob.onFire = mob.fireTicksLeft > 0;
+    if (!mob.onFire) { mob.burnTimer = 0; return; }
+
     mob.burnTimer -= delta;
     if (mob.burnTimer <= 0) {
       mob.burnTimer = BURN_DAMAGE_INTERVAL;
+      mob.fireTicksLeft -= 1;
       // Passing the mob's own position as "fromPos" made every burn tick's
       // hurt/death sound check (damage() -> inSoundRange(mob, fromPos)) measure
       // a distance of zero, so it was always "audible" no matter how far the
@@ -444,7 +494,7 @@ export class MobManager {
     if (mob.deathTimer <= 0) {
       const pos = group.position.clone();
       pos.y += mob.height / 2;
-      for (const drop of rollDrops(mob.kind)) this.onDrop?.(drop.id, drop.count, pos);
+      for (const drop of rollDrops(mob.kind, mob.onFire)) this.onDrop?.(drop.id, drop.count, pos);
       this.onDeath?.(pos);
       this.removeAt(index);
     }

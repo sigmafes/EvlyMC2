@@ -7,6 +7,7 @@ import {
   getAtlasMaterial, getOverlayMaterial, getSkinAtlasMaterial, applySkinTexture, resetSkinTexture,
   buildArmGeometry, buildArmMesh, buildPlayerModelParts, type PlayerModelParts,
 } from './player-model-geometry';
+import { createFireOverlay } from './fire-overlay';
 
 export type ModelAdjustments = {
   head: { x: number; y: number; z: number };
@@ -76,6 +77,12 @@ export class PlayerModel {
   private static readonly HURT_TINT_STRENGTH = 0.75;
   private static readonly HURT_RED = new THREE.Color(1, 0, 0);
   private static readonly hurtTintScratch = new THREE.Color();
+  // On fire (see setOnFire()) - same 50%-orange body tint + animated "+"
+  // flame overlay the mob models use (fire-overlay.ts).
+  private onFire = false;
+  private readonly fireOverlay: THREE.Group;
+  private static readonly FIRE_TINT_STRENGTH = 0.5;
+  private static readonly FIRE_ORANGE = new THREE.Color(1, 0.4, 0);
   // Death animation (same treatment as MobModel: topple over Z while
   // permanently red-tinted - see startDeath()/updateDeathAnimation()).
   private dying = false;
@@ -95,6 +102,8 @@ export class PlayerModel {
     this.parts = buildPlayerModelParts(this.group);
     this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', this.slimArms);
     this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', this.slimArms);
+    this.fireOverlay = createFireOverlay(0.35, 1.8);
+    this.group.add(this.fireOverlay);
   }
 
   /** Toggle slim ("Alex") arms. Rebuilds both arm meshes. */
@@ -483,6 +492,12 @@ export class PlayerModel {
     this.hurtFlashTimer = PlayerModel.HURT_FLASH_DURATION;
   }
 
+  /** On fire (lava/fire contact or the after-burn that follows it): tints the body orange and shows the animated "+" flame overlay. Call every frame with the current state. */
+  setOnFire(on: boolean): void {
+    this.onFire = on;
+    this.fireOverlay.visible = on;
+  }
+
   /** Starts the death animation (same treatment as MobModel): topple over Z while staying red-tinted. Call once, the instant the player dies. */
   startDeath(): void {
     this.dying = true;
@@ -524,6 +539,10 @@ export class PlayerModel {
       // Non-emissive: tint the lit base colour toward red instead of
       // overriding it outright, so the flash still darkens in shade.
       PlayerModel.hurtTintScratch.setScalar(b).lerp(PlayerModel.HURT_RED, PlayerModel.HURT_TINT_STRENGTH);
+      atlas.color.copy(PlayerModel.hurtTintScratch);
+      overlay.color.copy(PlayerModel.hurtTintScratch);
+    } else if (this.onFire) {
+      PlayerModel.hurtTintScratch.setScalar(b).lerp(PlayerModel.FIRE_ORANGE, PlayerModel.FIRE_TINT_STRENGTH);
       atlas.color.copy(PlayerModel.hurtTintScratch);
       overlay.color.copy(PlayerModel.hurtTintScratch);
     } else {

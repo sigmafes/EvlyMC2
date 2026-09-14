@@ -414,6 +414,13 @@ const playerHealth = new PlayerHealth(
 const lastHurtSoundAt: Record<string, number> = {};
 let lavaTimer = 0;
 let fireTimer = 0;
+// "on_fire" after-burn: still takes damage for a while after leaving contact
+// with lava/fire, same idea as mob-manager.ts's fireTicksLeft.
+const PLAYER_FIRE_AFTERBURN_TICKS = 8;
+const PLAYER_FIRE_TICK_INTERVAL = 1;
+let playerFireTicksLeft = 0;
+let playerFireTickTimer = 0;
+let playerOnFire = false;
 
 // Breath: drowning damage while the head is underwater (LCE Mob::aiStep).
 const playerAir = new PlayerAir(() => {
@@ -575,6 +582,7 @@ function animate() {
       (x, y, z) => lightEngine.getRawBrightness(x, y, z),
       player.state.position,
       (x, y, z) => lightEngine.getSkyExposure(x, y, z),
+      (x, y, z) => world.getBlock(x, y, z),
     );
 
     mobSpawning.update(delta);
@@ -617,6 +625,28 @@ function animate() {
     } else {
       fireTimer = 0;
     }
+
+    // "on_fire" mode: touching lava/fire tops the after-burn counter back up
+    // (so it doesn't start draining until contact is actually lost), then it
+    // keeps ticking PLAYER_FIRE_AFTERBURN_TICKS times, 1 damage/tick, before
+    // going out - same visual (orange tint + flame overlay) and damage
+    // pattern as mob-manager.ts's mob.onFire.
+    if (inLava || inFire) {
+      playerFireTicksLeft = PLAYER_FIRE_AFTERBURN_TICKS;
+    }
+    playerOnFire = playerFireTicksLeft > 0;
+    if (playerOnFire) {
+      playerFireTickTimer += delta;
+      if (playerFireTickTimer >= PLAYER_FIRE_TICK_INTERVAL) {
+        playerFireTickTimer -= PLAYER_FIRE_TICK_INTERVAL;
+        playerFireTicksLeft -= 1;
+        playerHealth.damage(1, { ignoreInvuln: true, cause: 'fire' });
+        hud.setHealth(playerHealth.current);
+      }
+    } else {
+      playerFireTickTimer = 0;
+    }
+    playerModel.setOnFire(playerOnFire);
 
     ambient.update(player.state.position, delta);
     playerAir.update(delta, loopState.underwater.isUnderwater);

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { applyAtlasUVs, applyFaceShading, type FaceRects, type FaceFlips } from './atlas-box';
 import { buildItemMesh, tintByLight } from './block-preview';
+import { createFireOverlay } from './fire-overlay';
 
 const DEG = Math.PI / 180;
 
@@ -130,13 +131,19 @@ export class MobModel {
   private lightLevel01 = 1;
   private hurtFlashTimer = 0;
   private dying = false;
+  private onFire = false;
+  private readonly fireOverlay: THREE.Group;
   private static readonly HURT_FLASH_DURATION = 0.2;
   private static readonly HURT_TINT_STRENGTH = 0.75;
   private static readonly HURT_RED = new THREE.Color(1, 0, 0);
+  private static readonly FIRE_TINT_STRENGTH = 0.5;
+  private static readonly FIRE_ORANGE = new THREE.Color(1, 0.4, 0);
 
-  constructor(private readonly spec: QuadrupedSpec) {
+  constructor(private readonly spec: QuadrupedSpec, hitbox: { radius: number; height: number }) {
     const texture = getMobTexture(spec.texturePath);
     this.material = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true });
+    this.fireOverlay = createFireOverlay(hitbox.radius, hitbox.height);
+    this.group.add(this.fireOverlay);
 
     this.group.add(buildBox(spec.body, spec.textureW, spec.textureH, this.material));
 
@@ -209,6 +216,12 @@ export class MobModel {
     this.dying = on;
   }
 
+  /** On fire (sunlight burn or lava/fire contact): tints the body orange and shows the animated "+" flame overlay. */
+  setOnFire(on: boolean): void {
+    this.onFire = on;
+    this.fireOverlay.visible = on;
+  }
+
   /** Advance idle/walk animation. Call once per frame. */
   update(delta: number): void {
     this.idleTime += delta;
@@ -219,6 +232,11 @@ export class MobModel {
       // Non-emissive: tint the lit base colour toward red instead of
       // overriding it outright, so the flash still darkens in shade.
       const tinted = new THREE.Color().setScalar(b).lerp(MobModel.HURT_RED, MobModel.HURT_TINT_STRENGTH);
+      this.material.color.copy(tinted);
+      if (this.overlayMaterial) this.overlayMaterial.color.copy(tinted);
+      for (const m of this.extraMaterials) m.color.copy(tinted);
+    } else if (this.onFire) {
+      const tinted = new THREE.Color().setScalar(b).lerp(MobModel.FIRE_ORANGE, MobModel.FIRE_TINT_STRENGTH);
       this.material.color.copy(tinted);
       if (this.overlayMaterial) this.overlayMaterial.color.copy(tinted);
       for (const m of this.extraMaterials) m.color.copy(tinted);
@@ -305,11 +323,15 @@ export class BipedMobModel {
   private lightLevel01 = 1;
   private hurtFlashTimer = 0;
   private dying = false;
+  private onFire = false;
+  private readonly fireOverlay: THREE.Group;
   private static readonly HURT_FLASH_DURATION = 0.2;
   private static readonly HURT_TINT_STRENGTH = 0.75;
   private static readonly HURT_RED = new THREE.Color(1, 0, 0);
+  private static readonly FIRE_TINT_STRENGTH = 0.5;
+  private static readonly FIRE_ORANGE = new THREE.Color(1, 0.4, 0);
 
-  constructor(private readonly spec: BipedSpec) {
+  constructor(private readonly spec: BipedSpec, hitbox: { radius: number; height: number }) {
     const texture = getMobTexture(spec.texturePath);
     // alphaTest (not `transparent` - no sorting/blending needed for a hard
     // cutout) so a skin with genuine alpha holes - the skeleton's ribcage
@@ -317,6 +339,8 @@ export class BipedMobModel {
     // those pixels solid. DoubleSide so the inside of a cutout isn't just a
     // black void from the back.
     this.material = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    this.fireOverlay = createFireOverlay(hitbox.radius, hitbox.height);
+    this.group.add(this.fireOverlay);
 
     this.group.add(buildBox(spec.body, spec.textureW, spec.textureH, this.material));
 
@@ -392,6 +416,12 @@ export class BipedMobModel {
     this.dying = on;
   }
 
+  /** On fire (sunlight burn or lava/fire contact): tints the body orange and shows the animated "+" flame overlay. */
+  setOnFire(on: boolean): void {
+    this.onFire = on;
+    this.fireOverlay.visible = on;
+  }
+
   update(delta: number): void {
     this.idleTime += delta;
 
@@ -399,6 +429,9 @@ export class BipedMobModel {
     if (this.hurtFlashTimer > 0 || this.dying) {
       this.hurtFlashTimer = Math.max(0, this.hurtFlashTimer - delta);
       const tinted = new THREE.Color().setScalar(b).lerp(BipedMobModel.HURT_RED, BipedMobModel.HURT_TINT_STRENGTH);
+      this.material.color.copy(tinted);
+    } else if (this.onFire) {
+      const tinted = new THREE.Color().setScalar(b).lerp(BipedMobModel.FIRE_ORANGE, BipedMobModel.FIRE_TINT_STRENGTH);
       this.material.color.copy(tinted);
     } else {
       this.material.color.setScalar(b);

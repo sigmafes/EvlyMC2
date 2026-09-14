@@ -11,13 +11,17 @@ const ri = (min: number, max: number) => min + Math.floor(Math.random() * (max -
  * leather, pig gives 0-2 raw porkchop, sheep gives a flat 1 wool + 1 raw
  * mutton. Rolled independently per item, same "may give nothing" pattern as
  * getDrops() in drops.ts.
+ *
+ * `wasOnFire`: true if the mob was still on fire (mob.onFire) at the moment
+ * it died - meat drops come out already cooked, same as vanilla killing an
+ * animal with fire/lava.
  */
-export function rollDrops(kind: MobKind): DropStack[] {
+export function rollDrops(kind: MobKind, wasOnFire = false): DropStack[] {
   switch (kind) {
     case 'cow': {
       const out: DropStack[] = [];
       const beef = ri(0, 2);
-      if (beef > 0) out.push({ id: ItemId.RAW_BEEF, count: beef });
+      if (beef > 0) out.push({ id: wasOnFire ? ItemId.COOKED_BEEF : ItemId.RAW_BEEF, count: beef });
       const leather = ri(0, 1);
       if (leather > 0) out.push({ id: ItemId.LEATHER, count: leather });
       return out;
@@ -25,11 +29,11 @@ export function rollDrops(kind: MobKind): DropStack[] {
     case 'pig': {
       const out: DropStack[] = [];
       const pork = ri(0, 2);
-      if (pork > 0) out.push({ id: ItemId.RAW_PORKCHOP, count: pork });
+      if (pork > 0) out.push({ id: wasOnFire ? ItemId.COOKED_PORKCHOP : ItemId.RAW_PORKCHOP, count: pork });
       return out;
     }
     case 'sheep':
-      return [{ id: BlockId.WOOL, count: 1 }, { id: ItemId.RAW_MUTTON, count: 1 }];
+      return [{ id: BlockId.WOOL, count: 1 }, { id: wasOnFire ? ItemId.COOKED_MUTTON : ItemId.RAW_MUTTON, count: 1 }];
     case 'zombie': {
       const out: DropStack[] = [];
       const flesh = ri(0, 2);
