@@ -13,9 +13,11 @@ import type { MobKind } from './game/mob-manager';
 import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from './game/day-night-math';
 import { createEmptyInventory, addToInventory, removeFromSlot, removeItemsAnywhere, countInInventory, moveOrMergeSlot, TOTAL_SLOTS } from './game/inventory';
 import { getDrops } from '../../src/drops';
-import { isBlock } from '../../src/item';
+import { isBlock, maxStackOf } from '../../src/item';
 import type { InventorySlot } from '../../src/inventory';
 import { RECIPES, type Recipe } from '../../src/crafting';
+import { FurnaceManager } from '../../src/furnace';
+import { emptyFurnace, type FurnaceState } from '../../src/block-data';
 
 export interface Env {
   WORLD_DO: DurableObjectNamespace;
@@ -52,6 +54,8 @@ type Session = {
   /** Server-authoritative inventory - see game/inventory.ts's doc comment for why it's a hand-rolled minimal helper set instead of importing src/inventory.ts's own (DOM-heavy) Inventory class. */
   inventory: InventorySlot[];
   selectedSlot: number;
+  /** Position of the furnace GUI this session currently has open, or null - drives which furnace's state gets pushed to it every tick (see the class's tick() and sendFurnaceState()). */
+  openFurnace: { x: number; y: number; z: number } | null;
 };
 
 /**
@@ -94,6 +98,33 @@ export class WorldDO implements DurableObject {
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
   private readonly mobs = new ServerMobManager();
+  /**
+   * Furnace smelting state, keyed "x,y,z" - separate from `edits` (which only
+   * tracks the BlockId itself) since a furnace's input/fuel/output/cook
+   * progress is per-instance state a plain block id can't hold. In-memory
+   * only for now (unlike edits, not persisted to DO storage) - a furnace
+   * mid-smelt loses its progress if this DO instance is evicted for
+   * inactivity. Real persistence would mirror the edits map's storage.put
+   * pattern; skipped for this first pass.
+   */
+  private readonly furnaces = new Map<string, FurnaceState>();
+  /** Same FurnaceManager class singleplayer's furnace.ts runs (pure logic, no DOM) - see this.tick()'s call to it. */
+  private readonly furnaceManager = new FurnaceManager({
+    eachFurnace: (cb) => {
+      for (const [key, s] of this.furnaces) {
+        const [x, y, z] = key.split(',').map(Number);
+        cb(x, y, z, s);
+      }
+    },
+    setFurnaceState: (x, y, z, s) => {
+      const key = `${x},${y},${z}`;
+      if (s) this.furnaces.set(key, s); else this.furnaces.delete(key);
+    },
+    // The lit/unlit texture swap is purely visual (client-side block state)
+    // and there's no protocol field for it yet - a real follow-up, not
+    // load-bearing for the furnace actually smelting correctly.
+    setBlockData: () => {},
+  });
   private mobsSpawned = false;
   /**
    * Authoritative day/night clock (day-night-math.ts - the same pure cycle
@@ -229,6 +260,22 @@ export class WorldDO implements DurableObject {
           this.sendInventory(session);
         }
         break;
+      case 'furnaceOpen':
+        // Anyone can peek at any furnace's contents - same trust level as
+        // breakBlock/placeBlock already have (no ownership/claims system).
+        if (this.getBlockAt(msg.x, msg.y, msg.z) !== BlockId.FURNACE) return;
+        session.openFurnace = { x: msg.x, y: msg.y, z: msg.z };
+        this.sendFurnaceState(session);
+        break;
+      case 'furnaceClose':
+        session.openFurnace = null;
+        break;
+      case 'furnaceInsert':
+        this.handleFurnaceInsert(session, msg.x, msg.y, msg.z, msg.target);
+        break;
+      case 'furnaceTakeOutput':
+        this.handleFurnaceTakeOutput(session, msg.x, msg.y, msg.z);
+        break;
       case 'chat':
         this.broadcast({ type: 'chat', from: session.name, text: msg.text });
         break;
@@ -326,6 +373,66 @@ export class WorldDO implements DurableObject {
     this.sendInventory(session);
   }
 
+  private furnaceKey(x: number, y: number, z: number): string {
+    return `${x},${y},${z}`;
+  }
+
+  private getOrCreateFurnace(x: number, y: number, z: number): FurnaceState {
+    const key = this.furnaceKey(x, y, z);
+    let state = this.furnaces.get(key);
+    if (!state) {
+      state = emptyFurnace();
+      this.furnaces.set(key, state);
+    }
+    return state;
+  }
+
+  private sendFurnaceState(session: Session): void {
+    if (!session.openFurnace) return;
+    const { x, y, z } = session.openFurnace;
+    this.send(session.ws, { type: 'furnaceState', x, y, z, state: this.getOrCreateFurnace(x, y, z) });
+  }
+
+  /**
+   * Moves the player's SELECTED hotbar slot's whole stack into the
+   * furnace's input or fuel slot. Same item already there -> merge (up to
+   * maxStack, leftover stays in the player's slot); different item -> the
+   * furnace's current occupant goes back into the player's inventory first
+   * (never silently destroyed) before the new stack goes in.
+   */
+  private handleFurnaceInsert(session: Session, x: number, y: number, z: number, target: 'input' | 'fuel'): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.FURNACE) return;
+    const held = session.inventory[session.selectedSlot];
+    if (held.id === null) return;
+    const furnace = this.getOrCreateFurnace(x, y, z);
+    const slot = furnace[target];
+
+    if (slot && slot.id === held.id) {
+      const max = maxStackOf(slot.id);
+      const room = max - slot.count;
+      if (room <= 0) return;
+      const moved = Math.min(room, held.count ?? 0);
+      slot.count += moved;
+      removeFromSlot(held, moved);
+    } else {
+      if (slot) addToInventory(session.inventory, slot.id, slot.count); // give back whatever was there, never destroy it
+      furnace[target] = { id: held.id, count: held.count ?? 0 };
+      removeFromSlot(held, Infinity);
+    }
+    this.sendInventory(session);
+    this.sendFurnaceState(session);
+  }
+
+  private handleFurnaceTakeOutput(session: Session, x: number, y: number, z: number): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.FURNACE) return;
+    const furnace = this.getOrCreateFurnace(x, y, z);
+    if (!furnace.output) return;
+    addToInventory(session.inventory, furnace.output.id, furnace.output.count);
+    furnace.output = null;
+    this.sendInventory(session);
+    this.sendFurnaceState(session);
+  }
+
   private onJoin(ws: WebSocket, msg: Extract<ClientMessage, { type: 'join' }>): void {
     if (msg.protocolVersion !== PROTOCOL_VERSION) {
       this.send(ws, { type: 'rejected', reason: `protocol mismatch: server is v${PROTOCOL_VERSION}` });
@@ -373,6 +480,7 @@ export class WorldDO implements DurableObject {
       skin,
       inventory: createEmptyInventory(),
       selectedSlot: 0,
+      openFurnace: null,
     };
     this.sessions.set(ws, session);
 
@@ -451,6 +559,14 @@ export class WorldDO implements DurableObject {
       onAttackPlayer: (playerId, damage) => this.hurtPlayer(playerId, damage),
       onShootArrow: (playerId, damage) => this.hurtPlayer(playerId, damage),
     });
+
+    this.furnaceManager.tick(dt);
+    // Only sessions that actually have a furnace GUI open need the gauge
+    // updates - broadcasting every furnace to everyone would scale badly
+    // and nobody else is looking at it anyway.
+    for (const [, session] of this.sessions) {
+      if (session.openFurnace) this.sendFurnaceState(session);
+    }
 
     const entities: EntitySnapshot[] = [
       ...[...this.sessions.values()].map((s) => ({

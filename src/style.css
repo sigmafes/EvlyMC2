@@ -1894,6 +1894,55 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
   pointer-events: none;
 }
 
+/* Furnace GUI (right-click a placed furnace) - input/output/fuel slots plus
+   the cook/fuel-burn gauges, and two "insert selected hotbar slot" buttons
+   instead of a real per-item drag (see multiplayer-game.ts's furnaceEl doc
+   comment). */
+#mp-furnace {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+#mp-furnace[hidden] { display: none; }
+#mp-furnace-panel {
+  display: grid;
+  grid-template-columns: 60px 60px 60px;
+  grid-auto-rows: 60px;
+  gap: 8px;
+  align-items: center;
+  justify-items: center;
+  padding: 16px;
+  background: rgba(20, 20, 20, 0.85);
+  border: 2px solid #000;
+  color: #fff;
+  font-size: 12px;
+}
+#mp-furnace-panel button:not(.inventory-slot) {
+  grid-column: span 3;
+  width: 100%;
+  padding: 6px;
+  background: #444;
+  color: #fff;
+  border: 1px solid #000;
+  cursor: pointer;
+  font-family: 'Tricraft', sans-serif;
+}
+.mp-furnace-bar {
+  width: 52px;
+  height: 8px;
+  background: #000;
+  border: 1px solid #222;
+}
+.mp-furnace-bar > div {
+  height: 100%;
+  width: 0%;
+  background: #4caf50;
+}
+
 body.touch .touch-btn {
   pointer-events: auto;
   touch-action: none;

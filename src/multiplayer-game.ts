@@ -14,6 +14,7 @@ import { getBlockSound } from './block-sounds';
 import { playMobSound } from './mob-sounds';
 import type { MobKind } from './mob-manager';
 import { renderSlot, createEmptySlot, HOTBAR_SIZE, TOTAL_SLOTS, type InventorySlot } from './inventory';
+import { COOK_SECONDS } from './smelting';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot } from './net/protocol';
 
@@ -510,6 +511,73 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     if (open) { renderCraftMenu(); unlockPointerForGui(); } else { lockPointer(canvas); }
   }
 
+  /**
+   * Furnace GUI: right-click a placed furnace block to open it. Simplified
+   * from a real drag-and-drop slot grid (same reasoning as the craft menu
+   * above) - "Meter combustible"/"Meter para fundir" take the player's
+   * currently SELECTED hotbar slot's whole stack into that furnace slot
+   * instead of a per-item drag, and clicking the output slot collects it.
+   */
+  const furnaceEl = document.createElement('div');
+  furnaceEl.id = 'mp-furnace';
+  furnaceEl.hidden = true;
+  const furnaceInputSlot = document.createElement('button');
+  const furnaceFuelSlot = document.createElement('button');
+  const furnaceOutputSlot = document.createElement('button');
+  for (const btn of [furnaceInputSlot, furnaceFuelSlot, furnaceOutputSlot]) btn.className = 'inventory-slot';
+  const furnaceInsertInputBtn = document.createElement('button');
+  furnaceInsertInputBtn.textContent = 'Meter para fundir';
+  const furnaceInsertFuelBtn = document.createElement('button');
+  furnaceInsertFuelBtn.textContent = 'Meter combustible';
+  const furnaceCookBar = document.createElement('div');
+  furnaceCookBar.className = 'mp-furnace-bar';
+  const furnaceCookFill = document.createElement('div');
+  furnaceCookBar.appendChild(furnaceCookFill);
+  const furnaceLitBar = document.createElement('div');
+  furnaceLitBar.className = 'mp-furnace-bar';
+  const furnaceLitFill = document.createElement('div');
+  furnaceLitBar.appendChild(furnaceLitFill);
+  const furnacePanel = document.createElement('div');
+  furnacePanel.id = 'mp-furnace-panel';
+  furnacePanel.append(
+    furnaceInputSlot, furnaceCookBar, furnaceOutputSlot,
+    furnaceFuelSlot, furnaceLitBar,
+    furnaceInsertInputBtn, furnaceInsertFuelBtn,
+  );
+  furnaceEl.appendChild(furnacePanel);
+  document.body.appendChild(furnaceEl);
+  let furnacePos: { x: number; y: number; z: number } | null = null;
+  let furnaceOpenState = false;
+  function renderFurnace(state: { input: { id: number; count: number } | null; fuel: { id: number; count: number } | null; output: { id: number; count: number } | null; cookTime: number; litTime: number; litDuration: number }): void {
+    renderSlot(furnaceInputSlot, state.input ? { id: state.input.id, name: '', count: state.input.count } : createEmptySlot());
+    renderSlot(furnaceFuelSlot, state.fuel ? { id: state.fuel.id, name: '', count: state.fuel.count } : createEmptySlot());
+    renderSlot(furnaceOutputSlot, state.output ? { id: state.output.id, name: '', count: state.output.count } : createEmptySlot());
+    furnaceCookFill.style.width = `${Math.min(1, state.cookTime / COOK_SECONDS) * 100}%`;
+    furnaceLitFill.style.width = `${state.litDuration > 0 ? (state.litTime / state.litDuration) * 100 : 0}%`;
+  }
+  function setFurnaceOpen(open: boolean, pos?: { x: number; y: number; z: number }): void {
+    furnaceOpenState = open;
+    furnaceEl.hidden = !open;
+    if (open && pos) {
+      furnacePos = pos;
+      client.send({ type: 'furnaceOpen', x: pos.x, y: pos.y, z: pos.z });
+      unlockPointerForGui();
+    } else {
+      if (furnacePos) client.send({ type: 'furnaceClose' });
+      furnacePos = null;
+      lockPointer(canvas);
+    }
+  }
+  furnaceInsertInputBtn.addEventListener('click', () => {
+    if (furnacePos) client.send({ type: 'furnaceInsert', ...furnacePos, target: 'input' });
+  });
+  furnaceInsertFuelBtn.addEventListener('click', () => {
+    if (furnacePos) client.send({ type: 'furnaceInsert', ...furnacePos, target: 'fuel' });
+  });
+  furnaceOutputSlot.addEventListener('click', () => {
+    if (furnacePos) client.send({ type: 'furnaceTakeOutput', ...furnacePos });
+  });
+
   let yaw = 0;
   let pitch = 0;
   let seq = 0;
@@ -521,9 +589,14 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const onKeyDown = (e: KeyboardEvent) => {
     keys.add(e.code);
     if (e.code === 'Escape') disconnect('Disconnected');
-    if (e.code === 'KeyC') { if (backpackOpen) setBackpackOpen(false); setCraftMenuOpen(!craftMenuOpen); return; }
-    if (e.code === 'KeyE') { if (craftMenuOpen) setCraftMenuOpen(false); setBackpackOpen(!backpackOpen); return; }
-    if (craftMenuOpen || backpackOpen) return; // don't move/select slots while a menu has the pointer
+    if (e.code === 'KeyC') { if (backpackOpen) setBackpackOpen(false); if (furnaceOpenState) setFurnaceOpen(false); setCraftMenuOpen(!craftMenuOpen); return; }
+    if (e.code === 'KeyE') {
+      if (craftMenuOpen) setCraftMenuOpen(false);
+      if (furnaceOpenState) { setFurnaceOpen(false); return; } // E closes the furnace instead of opening the backpack while it's up
+      setBackpackOpen(!backpackOpen);
+      return;
+    }
+    if (craftMenuOpen || backpackOpen || furnaceOpenState) return; // don't move/select slots while a menu has the pointer
     const digitIndex = DIGIT_CODES.indexOf(e.code);
     if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
     if (e.code === 'KeyQ') client.send({ type: 'dropItem' });
@@ -583,6 +656,15 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       const b = hit.point.clone().addScaledVector(normal, -0.01).round();
       client.send({ type: 'breakBlock', x: b.x, y: b.y, z: b.z });
     } else {
+      // Right-clicking an existing FURNACE block opens its GUI instead of
+      // placing a new block against it - same "existing block under the
+      // crosshair" coordinate the break branch uses, not the neighbouring
+      // spot a new block would land in.
+      const existing = hit.point.clone().addScaledVector(normal, -0.01).round();
+      if (getBlock(existing.x, existing.y, existing.z) === BlockId.FURNACE) {
+        setFurnaceOpen(true, { x: existing.x, y: existing.y, z: existing.z });
+        return true;
+      }
       // The server ignores this blockId and places whatever is actually in
       // the player's selected inventory slot (world-do.ts's handlePlaceBlock
       // doc comment) - sent here only because the protocol message still
@@ -801,6 +883,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     hotbarEl.remove();
     craftMenuEl.remove();
     backpackEl.remove();
+    furnaceEl.remove();
     for (const [, p] of remoteEntities) removeEntityAvatar(p);
     // Chunk geometries are real GPU resources (BufferGeometry) - renderer.dispose()
     // below doesn't free those on its own, so a reconnect in the same page
@@ -899,6 +982,9 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     onCraftableRecipes: (recipes) => {
       craftableRecipes = recipes;
       if (craftMenuOpen) renderCraftMenu();
+    },
+    onFurnaceState: (x, y, z, state) => {
+      if (furnacePos && furnacePos.x === x && furnacePos.y === y && furnacePos.z === z) renderFurnace(state);
     },
     onChat: (from, text) => console.log(`[chat] ${from}: ${text}`),
     onClose: (reason) => disconnect(reason),

@@ -1,6 +1,7 @@
 import type { BlockId } from '../block';
 import type { InventorySlot } from '../inventory';
 import type { MobKind } from '../mob-manager';
+import type { FurnaceState } from '../block-data';
 
 /**
  * Fase 4 of the multiplayer migration plan: the wire contract between a
@@ -99,6 +100,13 @@ export type ClientMessage =
   | { type: 'craft'; recipeIndex: number }
   /** Backpack (E) slot click: move/merge whatever is in `from` into `to` - same-id stacks merge (up to maxStack, leftover stays in `from`), otherwise the two slots swap. Both are indices into the same 36-slot inventory (0..8 hotbar, 9..35 backpack) - there's no separate "held item cursor" state to track over the network, each click is a complete, self-contained move. */
   | { type: 'moveSlot'; from: number; to: number }
+  /** Right-clicking a placed furnace block opens its GUI - the server starts including this position in the periodic `furnaceState` pushes to this session (see world-do.ts's Session.openFurnace) until furnaceClose. */
+  | { type: 'furnaceOpen'; x: number; y: number; z: number }
+  | { type: 'furnaceClose' }
+  /** Moves the player's currently SELECTED hotbar slot's whole stack into that furnace's input or fuel slot (merging if it already holds the same item) - simplified from a real per-slot drag the same way the craft menu simplifies the crafting grid (see protocol.ts's `craft` doc comment). */
+  | { type: 'furnaceInsert'; x: number; y: number; z: number; target: 'input' | 'fuel' }
+  /** Collects the furnace's finished output stack into the player's inventory. */
+  | { type: 'furnaceTakeOutput'; x: number; y: number; z: number }
   | { type: 'attack'; targetId: number }
   | { type: 'shootBow'; power: number; dir: Vec3 }
   | { type: 'chat'; text: string }
@@ -137,6 +145,8 @@ export type ServerMessage =
   | { type: 'dayTime'; elapsed: number }
   /** Every RECIPES (src/crafting.ts) index this player currently has ingredients for, sent whenever the inventory changes - drives the craft menu's list (see multiplayer-game.ts). `out` is included so the client can render the result icon without needing its own copy of RECIPES. */
   | { type: 'craftableRecipes'; recipes: { index: number; out: { id: number; count: number } }[] }
+  /** Pushed periodically (every tick, while the session has this furnace open via furnaceOpen) so the GUI's cook/fuel gauges animate smoothly - see world-do.ts's Session.openFurnace. */
+  | { type: 'furnaceState'; x: number; y: number; z: number; state: FurnaceState }
   | { type: 'chat'; from: string; text: string }
   | { type: 'pong'; clientTimeMs: number; serverTimeMs: number };
 
@@ -145,6 +155,7 @@ export function isClientMessageType(type: string): type is ClientMessage['type']
   return (
     [
       'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft', 'moveSlot',
+      'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
       'attack', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);
@@ -155,7 +166,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'craftableRecipes', 'chat', 'pong',
+      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
 }

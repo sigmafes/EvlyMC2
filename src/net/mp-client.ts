@@ -1,5 +1,6 @@
 import { PROTOCOL_VERSION, isServerMessageType, type ClientMessage, type ServerMessage } from './protocol';
 import type { InventorySlot } from '../inventory';
+import type { FurnaceState } from '../block-data';
 
 export type MpClientHandlers = {
   onWelcome: (msg: Extract<ServerMessage, { type: 'welcome' }>) => void;
@@ -11,6 +12,7 @@ export type MpClientHandlers = {
   onDayTime: (elapsed: number) => void;
   onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number) => void;
   onCraftableRecipes: (recipes: { index: number; out: { id: number; count: number } }[]) => void;
+  onFurnaceState: (x: number, y: number, z: number, state: FurnaceState) => void;
   onChat: (from: string, text: string) => void;
   onClose: (reason: string) => void;
 };
@@ -52,6 +54,7 @@ export class MpClient {
         case 'dayTime': handlers.onDayTime(msg.elapsed); break;
         case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex); break;
         case 'craftableRecipes': handlers.onCraftableRecipes(msg.recipes); break;
+        case 'furnaceState': handlers.onFurnaceState(msg.x, msg.y, msg.z, msg.state); break;
         case 'chat': handlers.onChat(msg.from, msg.text); break;
         default: break; // chunkData/pong: not used by this client yet
       }
