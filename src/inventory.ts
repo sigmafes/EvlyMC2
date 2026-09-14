@@ -95,9 +95,12 @@ function sameSource(a: SlotSource, b: SlotSource): boolean {
   return a.kind === 'stored' || a.grid === (b as { grid: CraftingGrid }).grid;
 }
 
-const slots: InventorySlot[] = Array.from({ length: TOTAL_SLOTS }, createEmptySlot);
-
 export class Inventory {
+  // Per-instance now (was a module-level singleton) - multiplayer step: a
+  // server or a multi-player client needs one Inventory per player, not one
+  // shared array for the whole process. main.ts still creates exactly one
+  // for the local player, so singleplayer behaves identically.
+  private readonly slots: InventorySlot[] = Array.from({ length: TOTAL_SLOTS }, createEmptySlot);
   /** Elements sharing the same slot index (hotbar slots are mirrored in the backpack view). */
   private readonly elementsByIndex: HTMLButtonElement[][] = [];
   private readonly backpackPanel: HTMLElement;
@@ -139,7 +142,7 @@ export class Inventory {
     const backpackHotbar = document.querySelector<HTMLElement>('#backpack-hotbar')!;
     this.backpackPanel = document.querySelector<HTMLElement>('#backpack')!;
 
-    slots.forEach((slot, index) => {
+    this.slots.forEach((slot, index) => {
       const isHotbar = index < HOTBAR_SIZE;
       const element = this.createSlotElement(slot, index, isHotbar);
       this.elementsByIndex[index] = [element];
@@ -204,7 +207,7 @@ export class Inventory {
   attachExtraSlots(elements: (HTMLElement | null)[]) {
     elements.forEach((el, index) => {
       if (!el || index >= TOTAL_SLOTS) return;
-      renderSlot(el, slots[index]);
+      renderSlot(el, this.slots[index]);
       this.slotSourceByEl.set(el as HTMLElement, { kind: 'stored', index });
       el.addEventListener('click', () => this.handleStoredClick(index));
       el.addEventListener('contextmenu', (event) => {
@@ -220,7 +223,7 @@ export class Inventory {
   /** Re-render every registered slot element + the 2x2 grid (WebGL-context warm-up / GUI open). */
   refreshAll() {
     for (let i = 0; i < this.elementsByIndex.length; i++) {
-      for (const el of this.elementsByIndex[i] ?? []) renderSlot(el, slots[i]);
+      for (const el of this.elementsByIndex[i] ?? []) renderSlot(el, this.slots[i]);
     }
     this.craftGrid.refresh();
   }
@@ -237,7 +240,7 @@ export class Inventory {
   countItem(id: number): number {
     let total = 0;
     for (let i = 0; i < TOTAL_SLOTS; i++) {
-      if (slots[i].id === id) total += slots[i].count ?? 1;
+      if (this.slots[i].id === id) total += this.slots[i].count ?? 1;
     }
     return total;
   }
@@ -247,7 +250,7 @@ export class Inventory {
     if (this.countItem(id) < count) return false;
     let left = count;
     for (let i = 0; i < TOTAL_SLOTS && left > 0; i++) {
-      const s = slots[i];
+      const s = this.slots[i];
       if (s.id !== id) continue;
       const take = Math.min(s.count ?? 1, left);
       const next = (s.count ?? 1) - take;
@@ -262,7 +265,7 @@ export class Inventory {
    * into the world. Returns what was removed, or null if the slot was empty.
    */
   dropSelected(all: boolean): InventorySlot | null {
-    const slot = slots[this.selectedIndex];
+    const slot = this.slots[this.selectedIndex];
     if (slot.id === null) return null;
     const have = slot.count ?? 1;
     const take = all ? have : 1;
@@ -316,7 +319,7 @@ export class Inventory {
 
     // Hover tooltip with the block's name (Grass, Dirt, ...).
     element.addEventListener('mousemove', (event) => {
-      const current = slots[index];
+      const current = this.slots[index];
       if (current.id !== null && !this.heldItem) {
         showTooltip(current.name, event.clientX, event.clientY);
       } else {
@@ -332,7 +335,7 @@ export class Inventory {
   // --- Slot access via a SlotSource -------------------------------------------
 
   private readSlot(src: NonNullable<SlotSource>): InventorySlot {
-    if (src.kind === 'stored') return slots[src.index];
+    if (src.kind === 'stored') return this.slots[src.index];
     if (src.kind === 'craft') return src.grid.get(src.index);
     return src.ext.read();
   }
@@ -349,24 +352,24 @@ export class Inventory {
    */
   setSlot(index: number, block: InventorySlot | null) {
     if (index < 0 || index >= TOTAL_SLOTS) return;
-    slots[index] = normalizeSlot(block);
+    this.slots[index] = normalizeSlot(block);
     for (const element of this.elementsByIndex[index] ?? []) {
-      renderSlot(element, slots[index]);
+      renderSlot(element, this.slots[index]);
     }
     if (index === this.selectedIndex) {
-      this.announceHeld(slots[index]);
-      this.onSelect(slots[index].id);
+      this.announceHeld(this.slots[index]);
+      this.onSelect(this.slots[index].id);
     }
   }
 
   /** Read-only view of a stored slot. */
   getSlot(index: number): InventorySlot {
-    return slots[index];
+    return this.slots[index];
   }
 
   /** Remove one item from the selected hotbar slot (called after placing a block). */
   consumeSelected() {
-    const slot = slots[this.selectedIndex];
+    const slot = this.slots[this.selectedIndex];
     if (slot.id === null) return;
     const next = (slot.count ?? 1) - 1;
     this.setSlot(this.selectedIndex, next > 0 ? { ...slot, count: next } : null);
@@ -378,7 +381,7 @@ export class Inventory {
    * that isn't a tool.
    */
   damageSelected(amount = 1): boolean {
-    const slot = slots[this.selectedIndex];
+    const slot = this.slots[this.selectedIndex];
     const uses = maxDurability(slot.id);
     if (uses <= 0) return false;
     const damage = (slot.damage ?? 0) + amount;
@@ -397,7 +400,7 @@ export class Inventory {
   private tryAdd(item: InventorySlot): number {
     let left = item.count ?? 1;
     for (let i = 0; i < TOTAL_SLOTS && left > 0; i++) {
-      const s = slots[i];
+      const s = this.slots[i];
       if (s.id !== item.id) continue;
       const moved = Math.min(maxStackOf(s.id) - (s.count ?? 1), left);
       if (moved > 0) {
@@ -406,7 +409,7 @@ export class Inventory {
       }
     }
     for (let i = 0; i < TOTAL_SLOTS && left > 0; i++) {
-      if (slots[i].id === null) {
+      if (this.slots[i].id === null) {
         this.setSlot(i, { ...item, count: left });
         left = 0;
       }
@@ -417,7 +420,7 @@ export class Inventory {
   /** Snapshot of every slot + the selected hotbar index, for world save. */
   serialize(): { slots: InventorySlot[]; selectedIndex: number } {
     return {
-      slots: slots.map((s) => ({ ...s })),
+      slots: this.slots.map((s) => ({ ...s })),
       selectedIndex: this.selectedIndex,
     };
   }
@@ -425,9 +428,9 @@ export class Inventory {
   /** Restore a snapshot from serialize() (used when a world is loaded). */
   load(data: { slots: InventorySlot[]; selectedIndex?: number }) {
     for (let i = 0; i < TOTAL_SLOTS; i++) {
-      slots[i] = normalizeSlot(data.slots[i] ?? null);
+      this.slots[i] = normalizeSlot(data.slots[i] ?? null);
       for (const element of this.elementsByIndex[i] ?? []) {
-        renderSlot(element, slots[i]);
+        renderSlot(element, this.slots[i]);
       }
     }
     this.select(Math.min(Math.max(data.selectedIndex ?? 0, 0), HOTBAR_SIZE - 1));
@@ -540,7 +543,7 @@ export class Inventory {
     const src: SlotSource = { kind: 'stored', index };
     if (this.heldItem) {
       this.placeHeld(src);
-    } else if (slots[index].id !== null) {
+    } else if (this.slots[index].id !== null) {
       this.pickUpFrom(src);
     } else if (index < HOTBAR_SIZE) {
       this.select(index);
@@ -729,7 +732,7 @@ export class Inventory {
 
   private select(index: number) {
     if (index < 0 || index >= HOTBAR_SIZE) return;
-    const slot = slots[index];
+    const slot = this.slots[index];
     this.selectedIndex = index;
     this.elementsByIndex.forEach((elements, elementIndex) => {
       elements.forEach((element) => element.classList.toggle('selected', elementIndex === index));
