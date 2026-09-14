@@ -7,6 +7,7 @@ import type {
 import { PROTOCOL_VERSION, isClientMessageType } from '../../src/net/protocol';
 import { BlockId } from '../../src/block';
 import { ServerTerrain } from './terrain';
+import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
 import type { MobKind } from '../../src/mob-manager';
 
@@ -216,7 +217,17 @@ export class WorldDO implements DurableObject {
     const spawn: Vec3 = { x: 0, y: this.findSpawnEyeY(0, 0), z: 0 };
     let physics!: PlayerPhysics;
     const getBlocks = () => this.getBlocksNear(physics.state.position);
-    physics = new PlayerPhysics(getBlocks);
+    // isWater wires up swimming (buoyancy/stroke-up, see player-physics.ts) -
+    // without it a player just free-falls through water blocks like air,
+    // which is what made a spawn that happens to land underwater
+    // unswimmable. isSolidBlockAt (6th param) lets it scan an arbitrary
+    // range to escape if ever embedded in terrain, same as singleplayer.
+    physics = new PlayerPhysics(
+      getBlocks, undefined,
+      (x, y, z) => this.isWaterAt(x, y, z),
+      undefined, undefined,
+      (x, y, z) => this.isSolidAt(x, y, z),
+    );
     physics.setSpawn(spawn.x, spawn.y, spawn.z);
 
     const session: Session = {
@@ -271,6 +282,7 @@ export class WorldDO implements DurableObject {
 
     this.mobs.update(dt, {
       isSolid: (x, y, z) => this.isSolidAt(x, y, z),
+      isWater: (x, y, z) => this.isWaterAt(x, y, z),
       players: [...this.sessions.values()].map((s) => ({ id: s.id, pos: s.physics.state.position })),
       onAttackPlayer: (playerId, damage) => this.hurtPlayer(playerId, damage),
       onShootArrow: (playerId, damage) => this.hurtPlayer(playerId, damage),
@@ -353,6 +365,13 @@ export class WorldDO implements DurableObject {
     return this.terrain!.isSolid(x, y, z);
   }
 
+  /** Edits take priority over generated terrain, same as isSolidAt - so a player who fills in a lake (or digs a new pool) gets correct swimming behaviour there too, not just on untouched terrain. */
+  private isWaterAt(x: number, y: number, z: number): boolean {
+    const edit = this.edits.get(`${x},${y},${z}`);
+    if (edit !== undefined) return edit === BlockId.WATER;
+    return this.terrain!.getBlock(x, y, z) === BlockId.WATER;
+  }
+
   /** Solid-block AABBs near `pos`, in the exact {id,x,y,z,collider:Box3} shape PlayerPhysics expects (chunk.ts's BlockCollider). */
   private getBlocksNear(pos: THREE.Vector3): BlockCollider[] {
     const colliders: BlockCollider[] = [];
@@ -375,10 +394,13 @@ export class WorldDO implements DurableObject {
     return colliders;
   }
 
-  /** Scans down from a safe height for the first solid block at (x,z), so a fresh player's spawn actually sits on the real terrain surface instead of a hardcoded height. */
+  /** Scans down from a safe height for the first solid block at (x,z), so a fresh player's spawn actually sits on the real terrain surface instead of a hardcoded height. If that surface is underwater (a lake/ocean floor), spawns at the water's surface instead of its floor - swimming now works (isWater is wired into PlayerPhysics, see onJoin), but there's no reason to make every fresh spawn start with an unrequested swim up from the bottom. */
   private findSpawnEyeY(x: number, z: number): number {
     for (let y = 140; y >= 0; y--) {
-      if (this.isSolidAt(x, y, z)) return y + 2.25; // +0.5 (block top) + 1.75 (player-physics.ts's eyeHeight)
+      if (this.isSolidAt(x, y, z)) {
+        const groundY = y <= WATER_LEVEL ? WATER_LEVEL : y;
+        return groundY + 2.25; // +0.5 (block top) + 1.75 (player-physics.ts's eyeHeight)
+      }
     }
     return 2.25; // no solid ground found in range (shouldn't happen) - fall back to the old flat-world constant
   }

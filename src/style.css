@@ -1814,6 +1814,15 @@ body.touch #touch-ui {
 }
 body.touch #touch-gameplay[hidden] { display: none; }
 
+/* Multiplayer mounts TouchControls straight into <body> (see
+   multiplayer-game.ts) instead of #game-shell, and its own scene sits at
+   z-index 900+ (#mp-canvas/#mp-crosshair/#mp-hint/#mp-health) - well above
+   these controls' singleplayer-tuned z-index of 1/6. Without this override
+   #mp-canvas would sit on top and swallow every touch before it reached
+   #touch-look/#touch-ui underneath. */
+body.mp-touch.touch #touch-look { z-index: 950; }
+body.mp-touch.touch #touch-ui { z-index: 951; }
+
 body.touch .touch-btn {
   pointer-events: auto;
   touch-action: none;

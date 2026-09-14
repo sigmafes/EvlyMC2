@@ -93,6 +93,12 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const gameShell = document.querySelector<HTMLElement>('#game-shell')!;
   const previousGameShellDisplay = gameShell.style.display;
   gameShell.style.display = 'none';
+  // Touch controls mount straight into <body> here (see the TouchControls
+  // call below) instead of #game-shell, so their usual z-indices (tuned to
+  // sit under singleplayer's hotbar/inventory) would land BELOW #mp-canvas's
+  // z-index:900 and never receive a touch. This class raises them above it -
+  // see the body.mp-touch rules in style.css.
+  document.body.classList.add('mp-touch');
 
   canvas.hidden = false;
   crosshair.hidden = false;
@@ -346,7 +352,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
         onThirdPerson: () => {}, // no third-person camera in multiplayer yet
         onChat: () => {}, // no chat UI in multiplayer yet (chat messages only go to devtools console)
         onPause: () => disconnect('Disconnected'),
-      })
+      }, document.body) // not #game-shell (default) - that's hidden entirely above, which would hide these controls too
     : null;
 
   const onResize = () => {
@@ -398,6 +404,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     canvas.removeEventListener('contextmenu', onContextMenu);
     window.removeEventListener('resize', onResize);
     touchControls?.destroy();
+    document.body.classList.remove('mp-touch');
     document.exitPointerLock();
     canvas.hidden = true;
     crosshair.hidden = true;

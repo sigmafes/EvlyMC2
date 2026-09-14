@@ -73,10 +73,16 @@ export class TouchControls {
     this.root.style.setProperty('--tc-btn-opacity', String(clamped / 100));
   }
 
-  constructor(private readonly cb: TouchControlsCallbacks) {
+  /** `container` overrides where the on-screen controls mount - defaults to
+   * `#game-shell` (singleplayer). A caller that hides `#game-shell` entirely
+   * (multiplayer-game.ts does, to keep singleplayer's HUD from bleeding into
+   * its own scene) must pass a container that stays visible, or its own
+   * `display:none` hides these controls too even though they're logically
+   * unrelated to that HUD. */
+  constructor(private readonly cb: TouchControlsCallbacks, container?: Element | null) {
     document.body.classList.add('touch');
 
-    const shell = document.querySelector('#game-shell') ?? document.body;
+    const shell = container ?? document.querySelector('#game-shell') ?? document.body;
 
     // The look layer is a separate root: it must sit BELOW the hotbar (so hotbar
     // taps work) while the buttons sit ABOVE the inventory panel. One container
