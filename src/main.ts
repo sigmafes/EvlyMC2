@@ -25,6 +25,7 @@ import { FurnaceManager } from './furnace';
 import { MobManager } from './mob-manager';
 import { ArrowProjectiles, powerToSpeed } from './arrow-projectiles';
 import { SKELETON_SHOT_POWER } from './mob-ai';
+import { getFireFrameIndex } from './fire-overlay';
 import { ItemId } from './item';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
@@ -63,6 +64,7 @@ keepFullscreenOnGesture();
 linkPwaManifest();
 const diagnosticsPanel = document.querySelector<HTMLElement>('#diagnostics-panel')!;
 const underwaterOverlay = document.querySelector<HTMLElement>('#underwater-overlay')!;
+const fireScreenOverlay = document.querySelector<HTMLElement>('#fire-screen-overlay')!;
 const scene = new THREE.Scene();
 const daySkyColor = new THREE.Color(0x8cb9ff);
 const nightSkyColor = new THREE.Color(0x020017);
@@ -655,6 +657,10 @@ function animate() {
       playerFireTickTimer = 0;
     }
     playerModel.setOnFire(playerOnFire);
+    fireScreenOverlay.classList.toggle('active', playerOnFire);
+    if (playerOnFire) {
+      fireScreenOverlay.style.backgroundPositionY = `-${getFireFrameIndex(clock.elapsedTime) * 96}px`;
+    }
 
     ambient.update(player.state.position, delta);
     playerAir.update(delta, loopState.underwater.isUnderwater);

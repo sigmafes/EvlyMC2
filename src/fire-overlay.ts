@@ -15,6 +15,11 @@ import * as THREE from 'three';
 const FRAME_COUNT = 32; // matches fireTex's own strip layout in block.ts
 const FRAMES_PER_SECOND = 20; // matches block.ts's fire animation speed
 
+/** Current animation frame index (0..FRAME_COUNT-1) for a given elapsed time - shared by the 3D overlay's texture scroll and the first-person screen overlay's CSS background-position, so both stay in sync. */
+export function getFireFrameIndex(time: number): number {
+  return Math.floor(time * FRAMES_PER_SECOND) % FRAME_COUNT;
+}
+
 let sharedTexture: THREE.Texture | null = null;
 let sharedMaterial: THREE.MeshBasicMaterial | null = null;
 let crossGeometry: THREE.PlaneGeometry | null = null;
@@ -94,6 +99,6 @@ export function createFireOverlay(radius: number, height: number, feetYOffset = 
 export function updateFireOverlayAnimation(time: number): void {
   const texture = sharedTexture;
   if (!texture) return;
-  const frame = Math.floor(time * FRAMES_PER_SECOND) % FRAME_COUNT;
+  const frame = getFireFrameIndex(time);
   texture.offset.y = (FRAME_COUNT - 1 - frame) / FRAME_COUNT;
 }

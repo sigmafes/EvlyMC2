@@ -423,6 +423,37 @@ body {
   opacity: 1;
 }
 
+/* First-person "on fire" tell: the same animated fire strip the FIRE block
+   and the 3D flame overlay use (fire-overlay.ts), tiled across the bottom
+   third of the screen. z-index 1, same tier as #underwater-overlay - below
+   the hotbar/hud/crosshair (z-index 2+) so those stay fully readable, above
+   the game canvas (which is where the first-person hand itself is actually
+   drawn, being part of the 3D scene - there's no DOM layer "under the hand"
+   to place this in, so sitting below the UI chrome is the closest
+   equivalent, same as vanilla's own fire overlay). JS drives
+   background-position-y frame-by-frame - see updateFireScreenOverlay() in
+   main.ts. */
+#fire-screen-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 34vh;
+  z-index: 1;
+  background-image: url('../textures/atlas/fire_atlas.png');
+  background-repeat: repeat-x;
+  background-position: left bottom;
+  background-size: 96px 3072px; /* 16x512 source, 32 frames of 16x16 - scaled 6x so each frame is 96px */
+  image-rendering: pixelated;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+#fire-screen-overlay.active {
+  opacity: 0.8;
+}
+
 #pause-menu {
   position: fixed;
   inset: 0;
