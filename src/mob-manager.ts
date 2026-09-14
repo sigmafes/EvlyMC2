@@ -388,7 +388,14 @@ export class MobManager {
     mob.burnTimer -= delta;
     if (mob.burnTimer <= 0) {
       mob.burnTimer = BURN_DAMAGE_INTERVAL;
-      this.damage(mob.id, BURN_DAMAGE, p, false); // sunlight has no attacker position to shove away from
+      // Passing the mob's own position as "fromPos" made every burn tick's
+      // hurt/death sound check (damage() -> inSoundRange(mob, fromPos)) measure
+      // a distance of zero, so it was always "audible" no matter how far the
+      // player actually was - every burning mob on the map could be heard at
+      // once. The real player position is what that range check needs; it's
+      // unused for anything else here since knockback=false skips the
+      // shove-direction code that fromPos would otherwise feed.
+      this.damage(mob.id, BURN_DAMAGE, this.getPlayerPos?.() ?? p, false);
     }
   }
 
