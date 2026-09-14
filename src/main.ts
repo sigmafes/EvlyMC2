@@ -660,6 +660,9 @@ function animate() {
   // UI and debug updates
   debugOverlay.update();
   interaction.update(delta);
+  const bowDraw = interaction.getBowDrawProgress();
+  player.setAimProgress(bowDraw);
+  hand.setBowDraw(bowDraw);
   particles.update(delta, camera);
   smokeParticles.update(delta);
   blockInspector.update();

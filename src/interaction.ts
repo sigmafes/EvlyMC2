@@ -301,6 +301,12 @@ export class BlockInteraction {
     this.bowDrawTime = 0;
   }
 
+  /** Current draw progress 0..1 (0 while not drawing), for the FOV zoom and the bow's pull-stage texture. */
+  getBowDrawProgress(): number {
+    if (!this.drawingBow) return 0;
+    return THREE.MathUtils.clamp(this.bowDrawTime / BOW_MAX_DRAW, 0, 1);
+  }
+
   private updateDrawingBow(delta: number): void {
     if (!this.drawingBow) return;
     if (this.selectedItemId !== ItemId.BOW || !this.engaged) {

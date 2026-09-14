@@ -3,7 +3,7 @@ import { buildArmGeometry, getSkinAtlasMaterial } from './player-model';
 import { buildBlockMesh, buildItemMesh, disposeBlockMesh } from './block-preview';
 import { BLOCK_CATALOG } from './creative-palette';
 import { BlockId } from './block';
-import { ITEMS, isBlock } from './item';
+import { ITEMS, isBlock, ItemId } from './item';
 import type { InventorySlot } from './inventory';
 
 const DEG = Math.PI / 180;
@@ -73,6 +73,8 @@ export class FirstPersonHand {
   private equipTarget = 1;
   // Eat animation progress 0..1 (LCE ItemInHandRenderer UseAnim_eat).
   private eatProgress = 0;
+  // Bow draw stage (bow_pull_0/1/2.png), null = not drawing / not holding a bow.
+  private bowPullStage: 0 | 1 | 2 | null = null;
 
   private bobCtx: HandBobContext | null = null;
 
@@ -104,6 +106,7 @@ export class FirstPersonHand {
       this.held = null;
     }
     this.heldIsBlock = false;
+    this.bowPullStage = null;
     if (id === BlockId.TORCH) {
       // Not a cube in the world (two thin crossed quads) - hold it like a tool/
       // item (pixel-extruded from its texture) instead of the heavy block pose.
@@ -145,6 +148,25 @@ export class FirstPersonHand {
   /** Eat animation progress, 0 = not eating, 1 = about to finish. */
   setEatProgress(t01: number): void {
     this.eatProgress = THREE.MathUtils.clamp(t01, 0, 1);
+  }
+
+  /**
+   * Bow draw progress 0..1 (0 = not drawing). Swaps the held bow's texture
+   * through its three pull stages (bow_pull_0 -> 1 -> 2 at full draw), same
+   * thirds LCE's ItemInHandRenderer uses for the bow's `useTicks` remaining.
+   */
+  setBowDraw(progress01: number): void {
+    if (this.heldId !== ItemId.BOW) return;
+    const stage: 0 | 1 | 2 | null = progress01 <= 0 ? null : progress01 < 0.65 ? 0 : progress01 < 0.9 ? 1 : 2;
+    if (stage === this.bowPullStage) return;
+    this.bowPullStage = stage;
+    if (!this.held) return;
+    this.root.remove(this.held);
+    disposeBlockMesh(this.held);
+    const texture = stage == null ? ITEMS[ItemId.BOW].texture : `items/bow_pull_${stage}.png`;
+    this.held = buildItemMesh(texture);
+    this.held.scale.setScalar(0.85);
+    this.root.add(this.held);
   }
 
   /** Advance timers and recompose the pose. Call once per frame. */

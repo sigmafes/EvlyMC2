@@ -47,6 +47,9 @@ export class PlayerController {
   /** True while a UI (inventory) blocks movement input; physics still runs so the world doesn't freeze. */
   private movementLocked = false;
   private lastFootstepTime = 0;
+  /** Bow draw progress 0..1, fed in each frame by BlockInteraction - zooms the FOV in while aiming. */
+  private aimProgress = 0;
+  private static readonly AIM_MIN_FOV = 20;
   /** Eased downward camera offset while sneaking (blocks). */
   private crouchCam = 0;
   private static readonly CROUCH_CAM_DROP = 0.3;
@@ -98,6 +101,11 @@ export class PlayerController {
   /** When disabled, the player stops driving the camera (used by free camera mode). */
   setCameraControlEnabled(enabled: boolean) {
     this.cameraControlEnabled = enabled;
+  }
+
+  /** Bow draw progress 0..1 (0 = not drawing) - eases the FOV down toward AIM_MIN_FOV as it rises. */
+  setAimProgress(progress: number) {
+    this.aimProgress = THREE.MathUtils.clamp(progress, 0, 1);
   }
 
   // --- Touch / on-screen controls -----------------------------------------
@@ -250,7 +258,8 @@ export class PlayerController {
       this.applyViewBob();
     }
     if (this.camera instanceof THREE.PerspectiveCamera) {
-      const targetFov = this.baseFov + (this.sprinting ? 8 : 0);
+      const unaimedFov = this.baseFov + (this.sprinting ? 8 : 0);
+      const targetFov = THREE.MathUtils.lerp(unaimedFov, PlayerController.AIM_MIN_FOV, this.aimProgress);
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 8, 0.016);
       this.camera.updateProjectionMatrix();
     }
