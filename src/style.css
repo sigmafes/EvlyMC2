@@ -1221,6 +1221,82 @@ body.touch #crosshair {
   font-family: 'Tricraft', sans-serif;
 }
 #access-gate[hidden] { display: none; }
+
+#multiplayer-connect {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #202020;
+  background-image: url('../gui/bg.png');
+  background-repeat: repeat;
+  background-size: 64px 64px;
+  background-blend-mode: multiply;
+  image-rendering: pixelated;
+}
+#multiplayer-connect[hidden] { display: none; }
+#multiplayer-connect-panel {
+  width: min(360px, 88vw);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  text-align: center;
+}
+#multiplayer-connect-panel h1 {
+  margin: 0;
+  color: #ffffff;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
+}
+#multiplayer-connect-message {
+  margin: 0 0 6px;
+  color: #ffff55;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
+  font-size: 14px;
+}
+#multiplayer-connect-message.mp-error { color: #ff5555; }
+
+#mp-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+#mp-canvas[hidden] { display: none; }
+#mp-crosshair {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  z-index: 5;
+  pointer-events: none;
+}
+#mp-crosshair[hidden] { display: none; }
+#mp-crosshair::before, #mp-crosshair::after {
+  content: '';
+  position: absolute;
+  background: #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+}
+#mp-crosshair::before { left: 7px; top: 0; width: 2px; height: 16px; }
+#mp-crosshair::after { top: 7px; left: 0; width: 16px; height: 2px; }
+#mp-hint {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  color: #fff;
+  font-size: 12px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+#mp-hint[hidden] { display: none; }
 #access-gate-panel {
   width: min(360px, 88vw);
   display: flex;

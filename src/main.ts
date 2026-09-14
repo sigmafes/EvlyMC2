@@ -792,7 +792,12 @@ animate();
 // Returning from a world via "Leave World" reloads the page and skips the intro.
 function showMainMenu() {
   document.querySelector<HTMLElement>('#main-menu')!.hidden = false;
-  new MainMenu({ onSingleplayer: () => { void startGame(); } });
+  new MainMenu({
+    onSingleplayer: () => { void startGame(); },
+    onMultiplayer: (serverUrl, worldId, playerName) => {
+      void import('./multiplayer-game').then((m) => m.startMultiplayer(serverUrl, worldId, playerName));
+    },
+  });
 }
 
 let skipIntro = false;

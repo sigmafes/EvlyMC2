@@ -173,7 +173,15 @@ export class WorldDO implements DurableObject {
     }
 
     const id = this.nextId++;
-    const spawn: Vec3 = { x: 0, y: 2, z: 0 };
+    // y=2.25: state.position is EYE height (playerEyeHeight=1.75 in
+    // player-physics.ts), and the flat ground plane's top surface sits at
+    // y=0.5 (blocks span n-0.5..n+0.5) - so feet = eyeY - 1.75 must clear
+    // 0.5. The previous y=2 put feet at 0.25, INSIDE the ground block,
+    // which made resolveHorizontalCollisions() cascade the embedded player
+    // sideways through every adjacent ground column in a single tick (the
+    // "1.8 in one tick" bug from the first smoke test - not a physics bug,
+    // just a bad spawn constant).
+    const spawn: Vec3 = { x: 0, y: 2.25, z: 0 };
     let physics!: PlayerPhysics;
     const getBlocks = () => this.getBlocksNear(physics.state.position);
     physics = new PlayerPhysics(getBlocks);
@@ -189,6 +197,14 @@ export class WorldDO implements DurableObject {
     this.sessions.set(ws, session);
 
     this.send(ws, { type: 'welcome', playerId: id, worldSeed: 0, spawn, tickRateHz: TICK_HZ });
+    // Catch this client up on every edit made before it connected - our
+    // placeholder world has no chunk system yet (see the class doc comment),
+    // so there's no chunkData to send; replaying each edit as its own
+    // blockChanged is simple and correct at this world's current tiny scale.
+    for (const [key, id2] of this.edits) {
+      const [x, y, z] = key.split(',').map(Number);
+      this.send(ws, { type: 'blockChanged', x, y, z, blockId: id2 });
+    }
     this.broadcast({ type: 'chat', from: 'server', text: `${session.name} joined` }, ws);
     this.ensureTicking();
   }

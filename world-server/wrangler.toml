@@ -9,7 +9,11 @@ class_name = "WorldDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["WorldDO"]
+# SQLite-backed storage - this is what makes Durable Objects usable on the
+# free Workers plan (the older KV-backed storage, "new_classes", requires
+# Workers Paid). Functionally identical for what WorldDO does (state.storage
+# get/put/list).
+new_sqlite_classes = ["WorldDO"]
 
 [vars]
 # Comma-separated list of origins allowed to open a WebSocket to a world.

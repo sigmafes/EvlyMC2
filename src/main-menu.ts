@@ -29,6 +29,7 @@ const MUSIC_SILENCE_MS = 15_000;
 
 type MainMenuHandlers = {
   onSingleplayer: () => void;
+  onMultiplayer: (serverUrl: string, worldId: string, playerName: string) => void;
 };
 
 /**
@@ -134,6 +135,8 @@ export class MainMenu {
       if (!button) return;
       if (button.dataset.action === 'singleplayer') {
         this.openWorldSelect(handlers);
+      } else if (button.dataset.action === 'multiplayer') {
+        this.openMultiplayerConnect(handlers);
       } else if (button.dataset.action === 'options') {
         this.optionsRoot.hidden = false;
       } else if (button.id === 'open-player-options') {
@@ -193,6 +196,51 @@ export class MainMenu {
       });
     }
     this.worldSelect.open();
+  }
+
+  /** Fase 6: a minimal connect form (server URL + name) - see multiplayer-game.ts. */
+  private openMultiplayerConnect(handlers: MainMenuHandlers) {
+    const screen = document.querySelector<HTMLElement>('#multiplayer-connect')!;
+    const message = document.querySelector<HTMLElement>('#multiplayer-connect-message')!;
+    const form = document.querySelector<HTMLFormElement>('#multiplayer-connect-form')!;
+    const urlInput = document.querySelector<HTMLInputElement>('#mp-server-url')!;
+    const nameInput = document.querySelector<HTMLInputElement>('#mp-player-name')!;
+    const cancelBtn = document.querySelector<HTMLButtonElement>('#multiplayer-connect-cancel')!;
+
+    try {
+      const savedUrl = localStorage.getItem('evlymc-mp-server-url');
+      if (savedUrl) urlInput.value = savedUrl;
+    } catch { /* private mode */ }
+    nameInput.value = loadPlayerName();
+    message.textContent = 'Connect to a world server';
+    message.classList.remove('mp-error');
+
+    this.root.hidden = true;
+    screen.hidden = false;
+
+    const onSubmit = (event: Event) => {
+      event.preventDefault();
+      const url = urlInput.value.trim();
+      const name = nameInput.value.trim() || 'Player';
+      const match = url.match(/\/world\/([A-Za-z0-9_-]+)\/?$/);
+      if (!url || !match) {
+        message.textContent = 'Enter a URL ending in /world/<id>, e.g. wss://host/world/myworld';
+        message.classList.add('mp-error');
+        return;
+      }
+      try { localStorage.setItem('evlymc-mp-server-url', url); } catch { /* private mode */ }
+      enterFullscreen();
+      this.dispose();
+      handlers.onMultiplayer(url, match[1], name);
+    };
+    const onCancel = () => {
+      screen.hidden = true;
+      this.root.hidden = false;
+      form.removeEventListener('submit', onSubmit);
+      cancelBtn.removeEventListener('click', onCancel);
+    };
+    form.addEventListener('submit', onSubmit);
+    cancelBtn.addEventListener('click', onCancel);
   }
 
   private startMusic = () => {

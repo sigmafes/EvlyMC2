@@ -48,6 +48,27 @@
         </form>
       </div>
     </section>
+    <section id="multiplayer-connect" hidden>
+      <div id="multiplayer-connect-panel">
+        <h1>Multiplayer</h1>
+        <p id="multiplayer-connect-message">Connect to a world server</p>
+        <form id="multiplayer-connect-form" class="access-gate-form">
+          <label class="access-gate-row" for="mp-server-url">
+            <span>Server URL</span>
+            <input id="mp-server-url" type="text" autocomplete="off" spellcheck="false" placeholder="wss://your-server/world/id" />
+          </label>
+          <label class="access-gate-row" for="mp-player-name">
+            <span>Name</span>
+            <input id="mp-player-name" type="text" maxlength="16" autocomplete="off" spellcheck="false" />
+          </label>
+          <button class="mc-button" type="submit"><span>Connect</span></button>
+          <button class="mc-button" type="button" id="multiplayer-connect-cancel"><span>Back</span></button>
+        </form>
+      </div>
+    </section>
+    <canvas id="mp-canvas" hidden></canvas>
+    <div id="mp-crosshair" hidden aria-hidden="true"></div>
+    <div id="mp-hint" hidden>Multiplayer (server-authoritative preview) - Esc to disconnect</div>
     <section id="intro" hidden>
       <div id="intro-bg"></div>
       <video id="intro-video" playsinline></video>
@@ -65,7 +86,7 @@
         </div>
         <div id="menu-buttons">
           <button class="mc-button" data-action="singleplayer" type="button"><span>Singleplayer</span></button>
-          <button class="mc-button" data-action="multiplayer" type="button" disabled><span>Multiplayer</span></button>
+          <button class="mc-button" data-action="multiplayer" type="button"><span>Multiplayer</span></button>
           <button class="mc-button" id="open-player-options" type="button"><span>Customize</span></button>
           <button class="mc-button" data-action="options" type="button"><span>Options</span></button>
         </div>
