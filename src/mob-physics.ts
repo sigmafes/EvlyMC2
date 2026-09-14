@@ -146,7 +146,20 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
   }
 
   mob.velocity.y -= GRAVITY * delta;
-  const nextY = group.position.y + mob.velocity.y * delta;
+  let nextY = group.position.y + mob.velocity.y * delta;
+
+  // Ceiling check while rising (knockback's KNOCKBACK_UP, or a step-up
+  // JUMP_FORCE, launched into a low gap): unlike the downward/ground case
+  // below, nothing here previously stopped upward motion at all, so a mob
+  // hit inside a 2-block gap with a solid block right above it would sail
+  // its head straight into that block and, once gravity brought its feet
+  // back down through the same solid cell, get read as "standing on" the
+  // block it was embedded in - stuck floating inside it, immobile. Clamp the
+  // rise to whatever this frame's overlap check will still allow instead.
+  if (mob.velocity.y > 0 && overlapsSolid(isSolid, group.position.x, nextY, group.position.z, mob.radius, mob.height)) {
+    mob.velocity.y = 0;
+    nextY = group.position.y;
+  }
 
   // Blocks are centred on integer coordinates (span [n-0.5, n+0.5] - see
   // chunk.ts's BlockCollider), so the ground block's top surface sits at
