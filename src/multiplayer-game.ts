@@ -8,6 +8,11 @@ import { TouchControls } from './touch-controls';
 import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials } from './player-model';
 import { loadPlayerSkinDataUrl } from './player-skin';
 import { LightEngine, type LightWorld } from './light-engine';
+import { SkyRenderer } from './sky-renderer';
+import { SoundManager } from './sound-manager';
+import { getBlockSound } from './block-sounds';
+import { playMobSound } from './mob-sounds';
+import type { MobKind } from './mob-manager';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot } from './net/protocol';
 
@@ -88,6 +93,8 @@ type RemoteEntity = {
    */
   moveDeltaX: number;
   moveDeltaZ: number;
+  /** EntityKind ('player' or a MobKind) - kept so onEntityRemoved/onState can look up the right sound (playMobSound) without the server having to resend it. */
+  kind: string;
 };
 
 /** Rough colour-coding per MOB kind, until real per-mob models/skins are wired into the multiplayer client (out of scope for this pass - see the module doc comment). Players get a real PlayerModel instead - see makeEntityAvatar. */
@@ -156,6 +163,21 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  // Sun/moon/stars/clouds/horizon glow - same class singleplayer's main.ts
+  // uses, driven every frame from applyDayNightState() below with the same
+  // timeOfDay the flat sky/fog colour already tracks.
+  const skyRenderer = new SkyRenderer(scene, camera);
+  // Purely local/reactive - each client plays its own sounds for whatever it
+  // already sees over the wire (blockChanged, a health drop, entityRemoved),
+  // same as singleplayer's interaction.ts/mob-manager.ts do, just triggered
+  // from network messages instead of local mining/AI code. No protocol
+  // changes needed. initialize() needs a user gesture first (browser
+  // autoplay policy) - done on the first click/touch that locks the pointer.
+  const soundManager = new SoundManager();
+  // Covers touch too (lockPointer above is desktop-only) - any first tap/click
+  // anywhere satisfies the browser's autoplay-needs-a-gesture policy.
+  const onFirstGesture = () => { void soundManager.initialize(); document.removeEventListener('pointerdown', onFirstGesture); };
+  document.addEventListener('pointerdown', onFirstGesture, { once: true });
 
   // --- Real terrain: generated locally from the seed, not shipped over the
   // network - see the module doc comment. Streams in/out around the player
@@ -314,6 +336,10 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
 
   /** Client's own free-running copy of the server's authoritative day/night clock (see world-do.ts's dayNightElapsed doc comment) - advanced locally every frame for a smooth transition, hard-resynced whenever a `dayTime` message arrives so it can't drift indefinitely. Seeded from `welcome`. */
   let clientDayTime = 0;
+  /** Set on `welcome` - suppresses block sounds for a moment after connecting, so the backlog of every historical edit world-do.ts replays as its own blockChanged right after `welcome` (see onJoin's doc comment there) doesn't play a burst of break/place sounds on join. */
+  let joinedAtMs = 0;
+  /** The local player's own health as of the last `state` tick - a drop triggers Player_hurt, same as remote entities' lastHealth triggers their own hurt cue. */
+  let lastSelfHealth = Infinity;
 
   /**
    * Applies the current point in the day/night cycle to the sky/fog colour,
@@ -325,9 +351,9 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
    * many chunk re-MESHES that need to pick that up across several frames
    * instead of one big hitch.
    */
-  function applyDayNightState(elapsed: number): void {
+  function applyDayNightState(elapsed: number, delta = 0): void {
     const cycleTime = resolveCycleTime(elapsed, 0);
-    const { skyDarken } = computeDayNightState(cycleTime);
+    const { skyDarken, timeOfDay } = computeDayNightState(cycleTime);
     if (lightEngine.setSkyDarken(skyDarken)) {
       relightQueue.length = 0;
       for (const key of chunks.keys()) relightQueue.push(key);
@@ -335,9 +361,25 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     const skyColor = DAY_SKY_COLOR.clone().lerp(NIGHT_SKY_COLOR, skyDarken / NIGHT_SKY_DARKEN);
     scene.background = skyColor;
     fog.color.copy(skyColor);
+    // Sun/moon/stars/clouds/horizon glow on top of the flat sky colour above -
+    // same split singleplayer's main.ts makes (DayNightCycle owns the flat
+    // colour, SkyRenderer draws the celestial bodies over it).
+    skyRenderer.update(timeOfDay, delta);
   }
 
   function applyBlockChange(x: number, y: number, z: number, id: BlockId): void {
+    // Reactive, not optimistic: world-do.ts's setBlock() broadcasts to
+    // EVERY session including whoever sent the edit, so playing a sound here
+    // (once, for every edit - ours and everyone else's alike) instead of
+    // also at the moment performInteraction() sends breakBlock/placeBlock
+    // avoids doubling up our own break/place sound.
+    if (performance.now() - joinedAtMs > 500) {
+      const previousId = getBlock(x, y, z);
+      const sound = id === BlockId.AIR
+        ? getBlockSound(previousId, 'dig')
+        : getBlockSound(id, 'place') ?? getBlockSound(id, 'dig');
+      if (sound) soundManager.playSound(sound);
+    }
     edits.set(`${x},${y},${z}`, id);
     const [cx, cz] = chunkCoordOf(x, z);
     const chunk = chunks.get(`${cx},${cz}`);
@@ -528,7 +570,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     labelLayer.appendChild(label);
     return {
       mesh: model.group, hitbox, label, labelOffsetY: 1.1, playerModel: model, skinMaterials: materials,
-      lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0,
+      lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0, kind: 'player',
     };
   }
 
@@ -575,7 +617,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     labelLayer.appendChild(label);
     return {
       mesh, hitbox: body, label, labelOffsetY: height + 0.3,
-      lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0,
+      lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0, kind,
     };
   }
 
@@ -613,6 +655,8 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     canvas.removeEventListener('contextmenu', onContextMenu);
     window.removeEventListener('resize', onResize);
     touchControls?.destroy();
+    document.removeEventListener('pointerdown', onFirstGesture);
+    soundManager.stopAll();
     document.body.classList.remove('mp-touch');
     document.exitPointerLock();
     canvas.hidden = true;
@@ -626,6 +670,18 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     // below doesn't free those on its own, so a reconnect in the same page
     // session would otherwise leak VRAM for every streamed-in chunk.
     for (const chunk of chunks.values()) chunk.dispose();
+    // SkyRenderer builds a handful of its own GPU resources (star field
+    // geometry, cloud/glow canvas textures, sun/moon planes) that - like the
+    // chunk geometries above - renderer.dispose() below doesn't reach; a
+    // reconnect in the same page session would otherwise leak a small but
+    // real amount of VRAM per attempt instead of just per chunk.
+    scene.traverse((obj) => {
+      if (obj instanceof THREE.Mesh || obj instanceof THREE.Points || obj instanceof THREE.Sprite) {
+        obj.geometry?.dispose();
+        const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const mat of materials) { mat.map?.dispose(); mat.alphaMap?.dispose(); mat.dispose(); }
+      }
+    });
     renderer.dispose();
     unlockPointerForGui();
     connectScreen.hidden = false;
@@ -638,6 +694,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     onWelcome: (msg) => {
       lastServerPos.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
       camera.position.copy(lastServerPos);
+      joinedAtMs = performance.now();
       clientDayTime = msg.dayTime;
       applyDayNightState(clientDayTime);
       void initTerrain(msg.worldSeed);
@@ -646,6 +703,8 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     onState: (msg) => {
       lastServerPos.set(msg.self.pos.x, msg.self.pos.y, msg.self.pos.z);
       healthEl.textContent = '❤ '.repeat(Math.ceil(msg.self.health / 2)).trim() || '💀';
+      if (msg.self.health < lastSelfHealth) soundManager.playRandom('player/Player_hurt', 3, 0.7);
+      lastSelfHealth = msg.self.health;
       const seen = new Set<number>();
       for (const e of msg.entities as EntitySnapshot[]) {
         seen.add(e.id);
@@ -667,11 +726,20 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
         op.mesh.position.set(e.pos.x, e.pos.y, e.pos.z);
         if (!op.playerModel) op.mesh.rotation.y = e.yaw; // players: left to updateRemoteAnimation's eased setOrientation() every frame instead
         op.lastYaw = e.yaw;
-        if (op.playerModel && e.health < op.lastHealth) op.playerModel.hurt();
+        if (e.health < op.lastHealth) {
+          if (op.playerModel) op.playerModel.hurt();
+          else playMobSound(soundManager, op.kind as MobKind, 'hurt', 0.7);
+        }
         op.lastHealth = e.health;
       }
       for (const [id, op] of remoteEntities) {
         if (seen.has(id)) continue;
+        // world-do.ts never sends `entityRemoved` for a mob's death (only for
+        // a player disconnecting) - see attackMob()'s doc comment there - so
+        // a mob silently dropping out of `entities` IS the death signal,
+        // since this server has no despawn/interest-management logic that
+        // would otherwise also drop one out of range.
+        if (!op.playerModel) playMobSound(soundManager, op.kind as MobKind, 'death', 0.8);
         removeEntityAvatar(op);
         remoteEntities.delete(id);
       }
@@ -746,7 +814,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     lastFrameTime = now;
     for (const entity of remoteEntities.values()) updateRemoteAnimation(entity, delta);
     clientDayTime += delta;
-    applyDayNightState(clientDayTime);
+    applyDayNightState(clientDayTime, delta);
     for (let i = 0; i < RELIGHT_CHUNKS_PER_FRAME && relightQueue.length > 0; i++) {
       chunks.get(relightQueue.shift()!)?.rebuildDirty();
     }
