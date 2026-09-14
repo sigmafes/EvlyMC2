@@ -1301,6 +1301,18 @@ body.touch #crosshair {
   pointer-events: none;
 }
 #mp-hint[hidden] { display: none; }
+#mp-health {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 901;
+  color: #ff5555;
+  font-size: 20px;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+#mp-health[hidden] { display: none; }
 #access-gate-panel {
   width: min(360px, 88vw);
   display: flex;

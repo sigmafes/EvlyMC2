@@ -18,6 +18,9 @@ export interface Env {
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
 const MAX_DT_S = 0.1; // same spiral-of-death cap main.ts uses on the client
+const PLAYER_MAX_HEALTH = 20; // LCE/singleplayer's 10 hearts x2 - see player-health.ts
+const PLAYER_MELEE_RANGE = 4; // matches interaction.ts's own melee reach
+const PLAYER_MELEE_DAMAGE = 4; // a plain fixed "punch" - no tool/weapon damage tiers server-side yet
 
 /**
  * Per-connection state. One per joined player. `physics` is the exact same
@@ -44,25 +47,28 @@ type Session = {
  * Cloudflare Durable Object - one instance per world (see index.ts, which
  * routes /world/:worldId to `idFromName(worldId)`).
  *
- * SCOPE OF THIS FIRST VERSION (intentional, see the plan write-up):
+ * CURRENT SCOPE (see the plan write-up for what's still ahead):
  * - Real authoritative movement: every connected player's position comes
  *   from a server-side PlayerPhysics instance, never from a claimed x/y/z.
+ * - Real terrain (ServerTerrain/terrain.ts - the same deterministic Chunk/
+ *   TerrainNoise generator the client uses, headless) drives collision, not
+ *   a placeholder flat plane.
  * - Real block break/place, persisted in Durable Object storage and
  *   broadcast to everyone.
+ * - Mobs (ServerMobManager/mobs.ts) spawned on the real terrain, running
+ *   mob-ai.ts/mob-physics.ts unmodified.
+ * - Combat: melee (attackMob) and hostile mobs hurting the nearest player
+ *   (hurtPlayer, wired through ServerMobManager.update()'s per-mob
+ *   MobAiDeps). A skeleton's shot is a guaranteed instant hit for now - no
+ *   real arrow entity with travel time synced over the network yet. Death
+ *   just resets health and teleports back to spawn, no death screen/
+ *   animation/drops.
  * - Chat, broadcast to everyone.
- * - Collision is a single flat ground plane (solid at y<=0) plus whatever
- *   blocks have been placed/broken, NOT the full terrain generator
- *   (worldgen/*, chunk.ts's cave/ore/tree passes) - those live in `Chunk`,
- *   which today also owns THREE.Scene/mesh construction in its constructor
- *   and can't be instantiated headless yet. Separating Chunk's block DATA
- *   (the Uint8Array + generation passes) from its MESH construction is real
- *   follow-up work, not done here - this DO proves the networking/
- *   authority model end-to-end first, on a simple world, so that follow-up
- *   plugs into a server that already works.
- * - No mobs yet, for the same reason (MobManager's AI/physics are headless
- *   since Fase 1, but spawning/despawning logic assumes the client's
- *   getSkyExposure/getBlockId/chunk-loaded callbacks, which need the real
- *   terrain above to mean anything).
+ *
+ * Still ahead: inventory/crafting/furnace, a real projectile for the
+ * skeleton's arrow, PvP, terrain streaming past the static chunk grid
+ * (multiplayer-game.ts's WORLD_RADIUS_CHUNKS), and death/respawn feedback
+ * beyond a silent teleport.
  */
 export class WorldDO implements DurableObject {
   private readonly sessions = new Map<WebSocket, Session>();
@@ -177,10 +183,17 @@ export class WorldDO implements DurableObject {
       case 'chat':
         this.broadcast({ type: 'chat', from: session.name, text: msg.text });
         break;
-      // 'selectSlot' / 'useItem' / 'attack' / 'shootBow' / 'ping': inventory,
-      // combat and mob interaction are follow-up work (see the class doc
-      // comment) - accepted here so a client sending them doesn't error, but
-      // intentionally not acted on yet.
+      case 'attack':
+        // Mob ids are always negative (ServerMobManager), session ids always
+        // positive (this.nextId starts at 1) - rejecting a non-negative
+        // target is a cheap way to disable PvP for this first pass without
+        // needing a separate protocol field for it.
+        if (msg.targetId < 0) this.attackMob(session, msg.targetId);
+        break;
+      // 'selectSlot' / 'useItem' / 'shootBow' / 'ping': inventory and bow
+      // combat are follow-up work (see the class doc comment) - accepted
+      // here so a client sending them doesn't error, but intentionally not
+      // acted on yet.
       default:
         break;
     }
@@ -211,7 +224,7 @@ export class WorldDO implements DurableObject {
       yaw: 0, pitch: 0,
       intent: { moveX: 0, moveZ: 0, wantJump: false, sprinting: false, sneaking: false },
       lastSeq: 0,
-      health: 20,
+      health: PLAYER_MAX_HEALTH,
     };
     this.sessions.set(ws, session);
 
@@ -256,10 +269,12 @@ export class WorldDO implements DurableObject {
       session.physics.updatePhysics(direction, session.intent.wantJump, session.intent.sprinting, dt);
     }
 
-    // No player-position/combat wiring yet (see mobs.ts's class doc comment) -
-    // mobs just wander like passive animals for this first pass, isSolid is
-    // the only dependency they actually need.
-    this.mobs.update(dt, { isSolid: (x, y, z) => this.isSolidAt(x, y, z) });
+    this.mobs.update(dt, {
+      isSolid: (x, y, z) => this.isSolidAt(x, y, z),
+      players: [...this.sessions.values()].map((s) => ({ id: s.id, pos: s.physics.state.position })),
+      onAttackPlayer: (playerId, damage) => this.hurtPlayer(playerId, damage),
+      onShootArrow: (playerId, damage) => this.hurtPlayer(playerId, damage),
+    });
 
     const entities: EntitySnapshot[] = [
       ...[...this.sessions.values()].map((s) => ({
@@ -268,7 +283,7 @@ export class WorldDO implements DurableObject {
         pos: { x: s.physics.state.position.x, y: s.physics.state.position.y, z: s.physics.state.position.z },
         yaw: s.yaw,
         health: s.health,
-        maxHealth: 20,
+        maxHealth: PLAYER_MAX_HEALTH,
         onFire: false,
         dying: false,
         name: s.name,
@@ -293,6 +308,35 @@ export class WorldDO implements DurableObject {
         // Every other player - not this connection's own entry (it already has `self`).
         entities: entities.filter((e) => e.id !== session.id),
       });
+    }
+  }
+
+  /** Player melee attack on a mob - checked server-side (reach), never trusted from the client. */
+  private attackMob(attacker: Session, targetId: number): void {
+    const mobPos = this.mobs.getPos(targetId);
+    if (!mobPos) return; // already dead/gone
+    if (attacker.physics.state.position.distanceTo(mobPos) > PLAYER_MELEE_RANGE) return;
+    this.mobs.damage(targetId, PLAYER_MELEE_DAMAGE, attacker.physics.state.position);
+  }
+
+  /**
+   * Damage from a mob (melee or "shot") to a specific player. No fall
+   * damage/drowning/fire tracked server-side yet - this is currently the
+   * only source of player damage. On death: reset health and teleport back
+   * to spawn immediately (no death screen/animation - purely a position +
+   * health reset, see the class doc comment for what's still missing).
+   */
+  private hurtPlayer(playerId: number, damage: number): void {
+    for (const session of this.sessions.values()) {
+      if (session.id !== playerId) continue;
+      session.health = Math.max(0, session.health - damage);
+      if (session.health <= 0) {
+        session.health = PLAYER_MAX_HEALTH;
+        const spawn = this.findSpawnEyeY(0, 0);
+        session.physics.setSpawn(0, spawn, 0);
+        this.broadcast({ type: 'chat', from: 'server', text: `${session.name} died` });
+      }
+      return;
     }
   }
 

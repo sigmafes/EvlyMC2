@@ -27,10 +27,12 @@ import type { EntitySnapshot } from './net/protocol';
  * static grid of chunks around spawn, no streaming as the player wanders
  * further out; mobs render as plain colour-coded capsules, not their real
  * skinned models (that needs texture loading this client doesn't do per-mob
- * yet); no combat/drops (mobs.ts's server-side class doc comment); no
- * inventory/crafting/furnace; no client-side
- * prediction (camera POSITION always comes from the server's last `state`
- * message - only look direction is local, for responsiveness). Every one of
+ * yet); melee combat only (left-click an entity's capsule - see onMouseDown),
+ * no bow/ranged attack from the player and no PvP (world-do.ts rejects a
+ * non-negative attack target); health is a plain heart-count string, not the
+ * real HUD; no inventory/crafting/furnace; no client-side prediction (camera
+ * POSITION always comes from the server's last `state` message - only look
+ * direction is local, for responsiveness). Every one of
  * those is a real follow-up, not a corner cut by accident.
  */
 
@@ -44,6 +46,8 @@ const WORLD_RADIUS_CHUNKS = 2;
 
 type RemoteEntity = {
   mesh: THREE.Group;
+  /** The actual raycast target (a Group isn't one) - tagged with `userData.entityId` for onMouseDown's attack-vs-break check. */
+  hitbox: THREE.Mesh;
   label: HTMLDivElement;
   /** How far above mesh.position the name label floats - differs by kind since a player's origin is eye-height but a mob's is feet-height (see makeEntityAvatar). */
   labelOffsetY: number;
@@ -63,6 +67,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const canvas = document.querySelector<HTMLCanvasElement>('#mp-canvas')!;
   const crosshair = document.querySelector<HTMLElement>('#mp-crosshair')!;
   const hint = document.querySelector<HTMLElement>('#mp-hint')!;
+  const healthEl = document.querySelector<HTMLElement>('#mp-health')!;
   const menu = document.querySelector<HTMLElement>('#main-menu')!;
   const connectScreen = document.querySelector<HTMLElement>('#multiplayer-connect')!;
   // #game-shell (singleplayer's HUD/hotbar/crosshair/chat/game-canvas) is
@@ -80,6 +85,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   canvas.hidden = false;
   crosshair.hidden = false;
   hint.hidden = false;
+  healthEl.hidden = false;
   menu.hidden = true;
   connectScreen.hidden = true;
 
@@ -176,14 +182,30 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const onMouseDown = (e: MouseEvent) => {
     if (document.pointerLockElement !== canvas) { lockPointer(canvas); return; }
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    const hits = raycaster.intersectObjects(chunkMeshes, false);
+    // Entity hitboxes take priority over terrain at the same/closer distance -
+    // attacking a mob standing right against a wall shouldn't accidentally
+    // break the wall instead just because intersectObjects happened to order
+    // it second. Both lists go through in one call so `hits` is already
+    // sorted by distance; explicitly preferring an entity within REACH over
+    // a same-ray terrain hit further away.
+    const entityHitboxes = [...remoteEntities.values()].map((r) => r.hitbox);
+    const hits = raycaster.intersectObjects([...chunkMeshes, ...entityHitboxes], false);
     const hit = hits.find((h) => h.distance <= REACH);
-    if (!hit || !hit.face) return;
+    if (!hit) return;
+    const entityId = hit.object.userData.entityId as number | undefined;
+    if (e.button === 0 && entityId !== undefined) {
+      // Mob ids are negative (ServerMobManager); player ids are positive -
+      // PvP is deliberately not wired up yet (see world-do.ts's attack
+      // handler), so this just doesn't send anything for a player target.
+      if (entityId < 0) client.send({ type: 'attack', targetId: entityId });
+      return;
+    }
+    if (!hit.face) return;
     const normal = hit.face.normal;
     if (e.button === 0) {
       const b = hit.point.clone().addScaledVector(normal, -0.01).round();
       client.send({ type: 'breakBlock', x: b.x, y: b.y, z: b.z });
-    } else if (e.button === 2) {
+    } else if (e.button === 2 && entityId === undefined) {
       const p = hit.point.clone().addScaledVector(normal, 0.5).round();
       client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: PLACE_BLOCK_ID, face: 0 });
     }
@@ -210,7 +232,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
    * capsule sits centred above it instead - getting this backwards would
    * plant one of the two either floating or waist-deep in the ground.
    */
-  function makeEntityAvatar(kind: string, name: string): RemoteEntity {
+  function makeEntityAvatar(id: number, kind: string, name: string): RemoteEntity {
     const isPlayer = kind === 'player';
     const height = isPlayer ? 1.8 : kind === 'zombie' || kind === 'skeleton' ? 1.9 : 1.3;
     const mesh = new THREE.Group();
@@ -219,13 +241,14 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       new THREE.MeshLambertMaterial({ color: ENTITY_COLOR[kind] ?? 0xffffff }),
     );
     body.position.y = isPlayer ? -0.9 : height / 2;
+    body.userData.entityId = id; // read by onMouseDown to tell an attack target apart from terrain
     mesh.add(body);
     scene.add(mesh);
     const label = document.createElement('div');
     label.textContent = name;
     label.style.cssText = 'position:absolute;color:#fff;font:12px Tricraft,sans-serif;text-shadow:1px 1px 0 #000;transform:translate(-50%,-100%);white-space:nowrap;';
     labelLayer.appendChild(label);
-    return { mesh, label, labelOffsetY: isPlayer ? 1.1 : height + 0.3 };
+    return { mesh, hitbox: body, label, labelOffsetY: isPlayer ? 1.1 : height + 0.3 };
   }
 
   const messageEl = document.querySelector<HTMLElement>('#multiplayer-connect-message')!;
@@ -243,6 +266,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     canvas.hidden = true;
     crosshair.hidden = true;
     hint.hidden = true;
+    healthEl.hidden = true;
     gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
     for (const [, p] of remoteEntities) { scene.remove(p.mesh); p.label.remove(); }
@@ -263,11 +287,12 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     onRejected: (reason) => disconnect(`Rejected: ${reason}`),
     onState: (msg) => {
       lastServerPos.set(msg.self.pos.x, msg.self.pos.y, msg.self.pos.z);
+      healthEl.textContent = '❤ '.repeat(Math.ceil(msg.self.health / 2)).trim() || '💀';
       const seen = new Set<number>();
       for (const e of msg.entities as EntitySnapshot[]) {
         seen.add(e.id);
         let op = remoteEntities.get(e.id);
-        if (!op) { op = makeEntityAvatar(e.kind, e.name ?? e.kind); remoteEntities.set(e.id, op); }
+        if (!op) { op = makeEntityAvatar(e.id, e.kind, e.name ?? e.kind); remoteEntities.set(e.id, op); }
         op.mesh.position.set(e.pos.x, e.pos.y, e.pos.z);
         op.mesh.rotation.y = e.yaw;
       }
