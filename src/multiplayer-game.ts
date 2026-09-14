@@ -23,9 +23,19 @@ import type { EntitySnapshot } from './net/protocol';
  * collision. Both sides agree on the world's shape without a byte of terrain
  * ever crossing the network - only edits (breakBlock/placeBlock) do.
  *
- * Still-limited scope (matches world-do.ts's own documented scope): a fixed
- * static grid of chunks around spawn, no streaming as the player wanders
- * further out; mobs render as plain colour-coded capsules, not their real
+ * Terrain streams in/out as the player moves (updateStreaming() below) -
+ * generated a few chunks per frame within VIEW_RADIUS_CHUNKS, unloaded once
+ * well outside it, same "why bother" reasoning as singleplayer's own
+ * ChunkManager: an infinite world can't all be resident at once. Server-side
+ * collision (world-server/src/terrain.ts) was ALREADY effectively unbounded
+ * since Fase "terreno real" (it generates any chunk a physics query touches,
+ * with no view-radius limit) - this just brings the client's rendering up to
+ * the same "walk anywhere" standard the server's physics already had, so a
+ * player doesn't end up standing on real (solid) ground that a fixed static
+ * grid simply never rendered.
+ *
+ * Still-limited scope (matches world-do.ts's own documented scope): mobs
+ * render as plain colour-coded capsules, not their real
  * skinned models (that needs texture loading this client doesn't do per-mob
  * yet); melee combat only (left-click an entity's capsule - see onMouseDown),
  * no bow/ranged attack from the player and no PvP (world-do.ts rejects a
@@ -41,8 +51,9 @@ const SEND_INTERVAL_MS = 1000 / TICK_HZ;
 const MOUSE_SENSITIVITY = 0.0022;
 const PLACE_BLOCK_ID = BlockId.STONE;
 const REACH = 5;
-/** 5x5 chunks (80x80 blocks) centred on the origin - static for this first version, see the module doc comment. */
-const WORLD_RADIUS_CHUNKS = 2;
+const VIEW_RADIUS_CHUNKS = 3; // 7x7 chunks (112x112 blocks) around the player, kept loaded
+const UNLOAD_MARGIN_CHUNKS = 1; // a chunk isn't unloaded until it's this far PAST the view radius, so walking back and forth right at the edge doesn't thrash load/unload every frame
+const CHUNKS_PER_FRAME = 1; // generation+meshing is real CPU work - spread across frames like singleplayer's own FrameBudget, not all at once
 
 type RemoteEntity = {
   mesh: THREE.Group;
@@ -102,10 +113,16 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   renderer.setSize(window.innerWidth, window.innerHeight);
 
   // --- Real terrain: generated locally from the seed, not shipped over the
-  // network - see the module doc comment. Populated once `welcome` arrives
-  // with the seed (generateWorld() below); until then the scene is just sky.
+  // network - see the module doc comment. Streams in/out around the player
+  // once `welcome` gives the seed (initTerrain() below); until materials
+  // finish loading, updateStreaming() is a no-op and the scene is just sky.
   const chunks = new Map<string, Chunk>();
-  const chunkMeshes: THREE.Mesh[] = [];
+  let chunkMeshes: THREE.Mesh[] = [];
+  /** Every block edit this client has ever seen (from blockChanged, including the backlog world-do.ts replays right after `welcome`), kept forever - not just "pending" - so a chunk unloaded and later reloaded still shows every edit made in it, not just ones that arrived while it happened to not exist yet. */
+  const edits = new Map<string, BlockId>();
+  const loadQueue: string[] = [];
+  const queuedKeys = new Set<string>();
+  let lastPlayerChunkKey = '';
   let terrainNoise: TerrainNoise | null = null;
   let materials: BlockMaterials | null = null;
   let worldSeed = 0;
@@ -119,31 +136,95 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     return chunk ? chunk.getBlock(x, y, z) : BlockId.AIR;
   }
 
-  async function generateWorld(seed: number): Promise<void> {
-    worldSeed = seed;
-    materials = await createBlockMaterials();
-    terrainNoise = new TerrainNoise(seed);
-    for (let cx = -WORLD_RADIUS_CHUNKS; cx <= WORLD_RADIUS_CHUNKS; cx++) {
-      for (let cz = -WORLD_RADIUS_CHUNKS; cz <= WORLD_RADIUS_CHUNKS; cz++) {
-        const chunk = new Chunk(
-          scene, materials, cx, cz,
-          getBlock, // cross-chunk reads during generation - AIR for a neighbour not generated yet in this loop, same tolerance singleplayer's own incremental streaming already has
-          terrainNoise.sample.bind(terrainNoise), terrainNoise, seed,
-        );
-        chunks.set(`${cx},${cz}`, chunk);
-      }
-    }
+  function rebuildChunkMeshList(): void {
+    chunkMeshes = [];
     for (const chunk of chunks.values()) {
-      chunk.rebuildDirty();
       for (const sc of chunk.subchunks) chunkMeshes.push(sc.mesh);
     }
   }
 
+  async function initTerrain(seed: number): Promise<void> {
+    worldSeed = seed;
+    materials = await createBlockMaterials();
+    terrainNoise = new TerrainNoise(seed);
+  }
+
+  function generateChunk(cx: number, cz: number): void {
+    if (!terrainNoise || !materials) return;
+    const key = `${cx},${cz}`;
+    if (chunks.has(key)) return;
+    const chunk = new Chunk(
+      scene, materials, cx, cz,
+      getBlock, // cross-chunk reads during generation - AIR for a neighbour not generated yet, same tolerance singleplayer's own incremental streaming already has
+      terrainNoise.sample.bind(terrainNoise), terrainNoise, worldSeed,
+    );
+    // Replay every edit that lands inside this chunk - covers both "arrived
+    // before this chunk ever existed" and "this chunk was unloaded and is
+    // now being regenerated from scratch".
+    for (const [ekey, id] of edits) {
+      const [ex, ey, ez] = ekey.split(',').map(Number);
+      if (ex >= chunk.minX && ex < chunk.minX + CHUNK_SIZE && ez >= chunk.minZ && ez < chunk.minZ + CHUNK_SIZE) {
+        chunk.setBlockData(ex, ey, ez, id);
+      }
+    }
+    chunk.rebuildDirty();
+    chunks.set(key, chunk);
+    rebuildChunkMeshList();
+  }
+
+  function unloadChunk(key: string): void {
+    const chunk = chunks.get(key);
+    if (!chunk) return;
+    chunk.dispose();
+    chunks.delete(key);
+    rebuildChunkMeshList();
+  }
+
+  /** Queues newly-in-range chunks and drops far-out-of-range ones - only recomputed when the player actually crosses into a different chunk, not every frame. */
+  function updateStreaming(): void {
+    if (!terrainNoise || !materials) return;
+    const [pcx, pcz] = chunkCoordOf(lastServerPos.x, lastServerPos.z);
+    const playerKey = `${pcx},${pcz}`;
+    if (playerKey !== lastPlayerChunkKey) {
+      lastPlayerChunkKey = playerKey;
+      for (let dx = -VIEW_RADIUS_CHUNKS; dx <= VIEW_RADIUS_CHUNKS; dx++) {
+        for (let dz = -VIEW_RADIUS_CHUNKS; dz <= VIEW_RADIUS_CHUNKS; dz++) {
+          const k = `${pcx + dx},${pcz + dz}`;
+          if (!chunks.has(k) && !queuedKeys.has(k)) { loadQueue.push(k); queuedKeys.add(k); }
+        }
+      }
+      const unloadRadius = VIEW_RADIUS_CHUNKS + UNLOAD_MARGIN_CHUNKS;
+      for (const k of [...chunks.keys()]) {
+        const [cx, cz] = k.split(',').map(Number);
+        if (Math.abs(cx - pcx) > unloadRadius || Math.abs(cz - pcz) > unloadRadius) unloadChunk(k);
+      }
+      // Drop anything still queued that fell out of range before its turn came up.
+      for (let i = loadQueue.length - 1; i >= 0; i--) {
+        const [cx, cz] = loadQueue[i].split(',').map(Number);
+        if (Math.abs(cx - pcx) > VIEW_RADIUS_CHUNKS || Math.abs(cz - pcz) > VIEW_RADIUS_CHUNKS) {
+          queuedKeys.delete(loadQueue[i]);
+          loadQueue.splice(i, 1);
+        }
+      }
+      loadQueue.sort((a, b) => {
+        const [ax, az] = a.split(',').map(Number);
+        const [bx, bz] = b.split(',').map(Number);
+        return (ax - pcx) ** 2 + (az - pcz) ** 2 - ((bx - pcx) ** 2 + (bz - pcz) ** 2);
+      });
+    }
+    for (let i = 0; i < CHUNKS_PER_FRAME && loadQueue.length > 0; i++) {
+      const k = loadQueue.shift()!;
+      queuedKeys.delete(k);
+      const [cx, cz] = k.split(',').map(Number);
+      generateChunk(cx, cz);
+    }
+  }
+
   function applyBlockChange(x: number, y: number, z: number, id: BlockId): void {
+    edits.set(`${x},${y},${z}`, id);
     const [cx, cz] = chunkCoordOf(x, z);
     const chunk = chunks.get(`${cx},${cz}`);
-    if (!chunk) return; // outside the static grid this first version generates - see WORLD_RADIUS_CHUNKS
-    if (chunk.setBlock(x, y, z, id)) chunk.rebuildDirty(Infinity, y);
+    if (chunk && chunk.setBlock(x, y, z, id)) chunk.rebuildDirty(Infinity, y);
   }
 
   const remoteEntities = new Map<number, RemoteEntity>();
@@ -270,6 +351,10 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
     for (const [, p] of remoteEntities) { scene.remove(p.mesh); p.label.remove(); }
+    // Chunk geometries are real GPU resources (BufferGeometry) - renderer.dispose()
+    // below doesn't free those on its own, so a reconnect in the same page
+    // session would otherwise leak VRAM for every streamed-in chunk.
+    for (const chunk of chunks.values()) chunk.dispose();
     renderer.dispose();
     unlockPointerForGui();
     connectScreen.hidden = false;
@@ -282,7 +367,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     onWelcome: (msg) => {
       lastServerPos.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
       camera.position.copy(lastServerPos);
-      void generateWorld(msg.worldSeed);
+      void initTerrain(msg.worldSeed);
     },
     onRejected: (reason) => disconnect(`Rejected: ${reason}`),
     onState: (msg) => {
@@ -353,6 +438,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     camera.position.copy(lastServerPos);
     camera.rotation.set(pitch, yaw, 0, 'YXZ');
     sendInput(now);
+    updateStreaming();
     updateLabels();
     if (materials) materials.updateWaterAnimation(now / 1000);
     renderer.render(scene, camera);
