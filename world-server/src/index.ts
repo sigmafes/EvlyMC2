@@ -10,9 +10,13 @@ export { WorldDO };
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const match = url.pathname.match(/^\/world\/([A-Za-z0-9_-]{1,64})$/);
+    // /stats/<worldId> answers with that world's load report as JSON (see
+    // WorldDO.stats) - how many players/mobs/chunks it's carrying and whether
+    // its 20Hz tick is keeping up. Routed to the same Durable Object as the
+    // world itself, since that's where the numbers live.
+    const match = url.pathname.match(/^\/(?:world|stats)\/([A-Za-z0-9_-]{1,64})$/);
     if (!match) {
-      return new Response('Usage: connect a WebSocket to /world/<worldId>', { status: 404 });
+      return new Response('Usage: connect a WebSocket to /world/<worldId>, or GET /stats/<worldId>', { status: 404 });
     }
     const id = env.WORLD_DO.idFromName(match[1]);
     const stub = env.WORLD_DO.get(id);

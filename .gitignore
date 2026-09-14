@@ -10,6 +10,10 @@ world-server/dist/
 dist/
 tsconfig.tsbuildinfo
 
+# Wrangler local secrets (AUTH_SECRET for the access/world workers) - never commit
+.dev.vars
+**/.dev.vars
+
 # Local Claude Code settings (launch.json is shared, settings.local.json is not)
 .claude/settings.local.json
 

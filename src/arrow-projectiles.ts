@@ -68,6 +68,23 @@ let tailMaterial: THREE.MeshBasicMaterial | null = null;
 let hitboxGeo: THREE.BufferGeometry | null = null;
 let hitboxMat: THREE.LineBasicMaterial | null = null;
 
+/**
+ * The arrow entity mesh. Exported so the multiplayer client renders the exact
+ * same arrow from the server's snapshots instead of building a second,
+ * slightly-different one of its own - the geometry/material are module-level
+ * singletons shared by every arrow, so this is cheap to call per projectile
+ * (and correspondingly must never be disposed per-instance).
+ */
+export function createArrowMesh(): THREE.Group {
+  return getArrowMesh();
+}
+
+/** Point an arrow mesh along `yaw`/`pitch` - the same heading convention the server sends in ArrowSnapshot (forward is local -Z). */
+export function orientArrowMesh(group: THREE.Object3D, yaw: number, pitch: number): void {
+  group.rotation.y = yaw;
+  group.rotation.x = pitch;
+}
+
 function getArrowMesh(): THREE.Group {
   if (!crossGeometry) {
     // Plane built with its width (mapped to UV.u, the texture's 16-wide

@@ -10,11 +10,40 @@ import { savePlayerName } from './player-skin';
 // whitelist removal actually takes effect.
 const UNLOCK_KEY = 'evlymc-account-session';
 const ACCOUNT_NAME_KEY = 'evlymc-account-name';
+/**
+ * The signed token proving which account this is, for the world server to
+ * check on join (see net/auth-token.ts). sessionStorage like the unlock flag,
+ * and for the same reason: it should not outlive the tab.
+ */
+const PLAY_TOKEN_KEY = 'evlymc-play-token';
+
+function savePlayToken(token: string | null): void {
+  try {
+    if (token) sessionStorage.setItem(PLAY_TOKEN_KEY, token);
+    else sessionStorage.removeItem(PLAY_TOKEN_KEY);
+  } catch {
+    /* private mode / storage disabled - multiplayer will ask them to log in again */
+  }
+}
+
+/** The current play token, or '' if there isn't one. Multiplayer sends this on join; without it the server refuses the connection. */
+export function loadPlayToken(): string {
+  try {
+    return sessionStorage.getItem(PLAY_TOKEN_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
 const API_BASE = 'https://evlymc-access.mrfierrocarrilgames.workers.dev';
 
 function isUnlocked(): boolean {
   try {
-    return sessionStorage.getItem(UNLOCK_KEY) === '1';
+    // The play token counts as part of being logged in, not as an extra: a
+    // session unlocked before tokens existed (or one whose token was cleared)
+    // would otherwise sail past this gate and then be turned away by the world
+    // server with a confusing "log in again" it has no way to act on. Sending
+    // them back here produces a fresh token.
+    return sessionStorage.getItem(UNLOCK_KEY) === '1' && !!sessionStorage.getItem(PLAY_TOKEN_KEY);
   } catch {
     return false;
   }
@@ -29,7 +58,7 @@ function markUnlocked(username: string): void {
   }
 }
 
-type ApiResult = { ok: true; username: string } | { ok: false; error: string };
+type ApiResult = { ok: true; username: string; token: string | null } | { ok: false; error: string };
 
 async function callApi(path: '/login' | '/register', username: string, password: string): Promise<ApiResult> {
   try {
@@ -38,11 +67,12 @@ async function callApi(path: '/login' | '/register', username: string, password:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-    const data = (await res.json().catch(() => null)) as { ok?: boolean; username?: string; error?: string } | null;
+    const data = (await res.json().catch(() => null)) as
+      { ok?: boolean; username?: string; token?: string | null; error?: string } | null;
     if (!res.ok || !data?.ok) {
       return { ok: false, error: data?.error ?? 'Something went wrong' };
     }
-    return { ok: true, username: data.username ?? username };
+    return { ok: true, username: data.username ?? username, token: data.token ?? null };
   } catch {
     return { ok: false, error: 'Could not reach the server - check your connection' };
   }
@@ -105,9 +135,10 @@ export function waitForAccessGate(): Promise<void> {
       registerUsername.focus();
     };
 
-    const succeed = (username: string) => {
+    const succeed = (username: string, token: string | null) => {
       markUnlocked(username);
       savePlayerName(username);
+      savePlayToken(token);
       root.hidden = true;
       resolve();
     };
@@ -131,7 +162,7 @@ export function waitForAccessGate(): Promise<void> {
           setMessage(result.error, true);
           return;
         }
-        succeed(result.username);
+        succeed(result.username, result.token);
       });
     });
 

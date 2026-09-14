@@ -1,6 +1,16 @@
+import { signAuthToken } from '../../src/net/auth-token';
+
 export interface Env {
   ACCESS_KV: KVNamespace;
   ALLOWED_ORIGINS: string;
+  /**
+   * Shared HMAC secret this worker signs play tokens with and the world server
+   * verifies them against. Set on BOTH workers with the same value:
+   *   wrangler secret put AUTH_SECRET
+   * Missing here, login still works but issues no token - and the world server
+   * will then refuse the join, which is the safe direction to fail.
+   */
+  AUTH_SECRET?: string;
 }
 
 type Account = {
@@ -177,7 +187,11 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     return json({ ok: false, error: 'Invalid name or password' }, 401, request, env);
   }
 
-  return json({ ok: true, username: account.username }, 200, request, env);
+  // Signed proof of WHO just logged in, for the world server to check on join.
+  // Issued only here, past the password check - it's the one place in the
+  // system that actually knows the person owns this name.
+  const token = env.AUTH_SECRET ? await signAuthToken(account.username, env.AUTH_SECRET) : null;
+  return json({ ok: true, username: account.username, token }, 200, request, env);
 }
 
 export default {

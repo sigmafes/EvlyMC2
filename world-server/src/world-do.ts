@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PlayerPhysics } from './game/player-physics';
 import type { BlockCollider } from '../../src/chunk';
 import type {
-  ClientMessage, ServerMessage, EntitySnapshot, Vec3,
+  ClientMessage, ServerMessage, EntitySnapshot, Vec3, CraftSlotRef,
 } from '../../src/net/protocol';
 import { PROTOCOL_VERSION, isClientMessageType } from '../../src/net/protocol';
 import { BlockId } from '../../src/block';
@@ -11,25 +11,101 @@ import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
 import type { MobKind } from './game/mob-manager';
 import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from './game/day-night-math';
-import { createEmptyInventory, addToInventory, removeFromSlot, removeItemsAnywhere, countInInventory, moveOrMergeSlot, TOTAL_SLOTS } from './game/inventory';
+import { createEmptyInventory, createEmptySlot, describeSlot, addToInventory, removeFromSlot, removeItemsAnywhere, countInInventory, moveOrMergeSlot, moveOrMergeBetween, TOTAL_SLOTS } from './game/inventory';
 import { getDrops } from '../../src/drops';
-import { isBlock, maxStackOf } from '../../src/item';
+import { isBlock, maxStackOf, foodValue } from '../../src/item';
 import type { InventorySlot } from '../../src/inventory';
-import { RECIPES, type Recipe } from '../../src/crafting';
+import { RECIPES, matchRecipe, type Recipe } from '../../src/crafting';
 import { FurnaceManager } from '../../src/furnace';
 import { emptyFurnace, type FurnaceState } from '../../src/block-data';
+import { ServerDroppedItems } from './game/dropped-items';
+import { ServerArrows, powerToSpeed } from './game/arrow-projectiles';
+import { ActiveRegion, chunkCoordOf } from './game/active-region';
+import { WaterEngine, LavaEngine } from './game/water-engine';
+import { FireEngine } from './game/fire-engine';
+import type { FluidWorld } from './game/fluid-world';
+import { SKELETON_SHOT_POWER } from './game/mob-ai';
+import { PlayerAir } from '../../src/player-air';
+import { ItemId } from '../../src/item';
+import { verifyAuthToken } from '../../src/net/auth-token';
+import type { MobRecord } from './mobs';
 
 export interface Env {
   WORLD_DO: DurableObjectNamespace;
   ALLOWED_ORIGINS: string;
+  /**
+   * Shared HMAC secret, the same value the access worker signs play tokens
+   * with (`wrangler secret put AUTH_SECRET` on both). Without it this server
+   * cannot tell one player from another, so it refuses every join rather than
+   * falling back to trusting whatever name it was handed.
+   */
+  AUTH_SECRET?: string;
 }
+
+const MOBS_KEY = 'mobs';
+/** Seconds between routine mob roster writes - see WorldDO.mobsDirty for why this is deliberately slow. */
+const MOB_SAVE_INTERVAL = 30;
+const FURNACES_KEY = 'furnaces';
+/** Seconds between routine furnace writes. A furnace's cook progress changes every tick, so it is never written on change - only on this cadence, plus whenever items go in or out. */
+const FURNACE_SAVE_INTERVAL = 30;
+/** Seconds between routine per-player writes while connected. Disconnecting always writes immediately, so this only bounds how much is lost if the DO is evicted mid-session. */
+const PLAYER_SAVE_INTERVAL = 30;
+
+/**
+ * What survives a player leaving and coming back. Mirrors singleplayer's
+ * PlayerSave (player-store.ts) minus the day/night clock, which is per-world
+ * here and already persisted separately.
+ */
+type PlayerRecord = {
+  slots: InventorySlot[];
+  selectedIndex: number;
+  health: number;
+  x: number; y: number; z: number;
+  yaw: number; pitch: number;
+};
+
+/**
+ * Storage key for a player's save.
+ *
+ * IMPORTANT, and the reason this is a named function rather than an inline
+ * template: identity here is nothing but the `playerName` the client typed in.
+ * The world server has no authentication of its own - the login in
+ * access-worker/ is a separate service this Worker never hears from - so
+ * anyone who joins under your name inherits your inventory and position.
+ *
+ * That is acceptable for a world you share with people you know, and NOT
+ * acceptable for a public one. Closing it needs the access worker to issue
+ * something verifiable (a signed token) and `join` to carry it, which is a
+ * real piece of work across two services rather than a tweak here.
+ */
+const playerKey = (name: string) => `player:${name.trim().toLowerCase()}`;
 
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
+/** How many recent ticks the pacing average covers - 100 at 20Hz is the last 5 seconds, long enough to ride out one slow tick but short enough to react while you're watching. */
+const TICK_SAMPLE_COUNT = 100;
 const MAX_DT_S = 0.1; // same spiral-of-death cap main.ts uses on the client
 const PLAYER_MAX_HEALTH = 20; // LCE/singleplayer's 10 hearts x2 - see player-health.ts
 const PLAYER_MELEE_RANGE = 4; // matches interaction.ts's own melee reach
 const PLAYER_MELEE_DAMAGE = 4; // a plain fixed "punch" - no tool/weapon damage tiers server-side yet
+
+// Environmental damage, mirroring singleplayer's own main.ts loop so falling,
+// drowning and burning cost the same in both modes.
+const FALL_SAFE_DISTANCE = 3.5;  // blocks you can drop without a scratch
+const LAVA_TICK_INTERVAL = 0.5;  // seconds between lava damage ticks
+const LAVA_TICK_DAMAGE = 2;
+const FIRE_TICK_INTERVAL = 0.5;
+const FIRE_TICK_DAMAGE = 1;
+const DROWN_DAMAGE = 2;
+/** Seconds to finish a bite - LCE's 32 ticks, same as singleplayer's interaction.ts. */
+const EAT_DURATION = 1.6;
+/** A skeleton's arrow hits for a flat amount, independent of its shot speed - same value singleplayer's own spawn call passes. */
+const SKELETON_ARROW_DAMAGE = 4;
+/** Side of the square of chunks around the world spawn where players can't hurt each other. Odd so it centres on the spawn chunk. */
+const SPAWN_PROTECTION_CHUNKS = 3;
+/** After leaving the flames a player keeps burning for this many 1-damage ticks, one second apart - same pattern as a mob's onFire. */
+const PLAYER_FIRE_AFTERBURN_TICKS = 8;
+const PLAYER_FIRE_TICK_INTERVAL = 1;
 
 /**
  * Per-connection state. One per joined player. `physics` is the exact same
@@ -56,6 +132,22 @@ type Session = {
   selectedSlot: number;
   /** Position of the furnace GUI this session currently has open, or null - drives which furnace's state gets pushed to it every tick (see the class's tick() and sendFurnaceState()). */
   openFurnace: { x: number; y: number; z: number } | null;
+  /** Breath, run by src/player-air.ts unmodified (pure LCE tick math, no DOM) - drains while the head is submerged and deals drowning damage when it runs out. */
+  air: PlayerAir;
+  /** Seconds of contact accumulated toward the next lava/fire damage tick. Separate counters because lava and fire hit for different amounts, exactly as in singleplayer's own loop. */
+  lavaTimer: number;
+  fireTimer: number;
+  /** After-burn: how many 1-damage ticks are still owed after leaving the flames, and the timer driving them. */
+  fireTicksLeft: number;
+  fireTickTimer: number;
+  /** Currently burning - goes out on the wire in this player's EntitySnapshot so everyone else sees the flames. */
+  onFire: boolean;
+  /** Dead and waiting on the death screen: frozen at 0 health, no physics, no input, and no longer a target for anything, until they send `respawn`. */
+  dead: boolean;
+  /** The crafting grid this player currently has open, or null. `side` is 2 (carried) or 3 (standing at a table); `inputs` is side*side cells that live here, NOT in the inventory, until the grid is closed. */
+  craft: { side: 2 | 3; inputs: InventorySlot[] } | null;
+  /** Mid-bite: which slot is being eaten, what was in it, and how long it's been going. Null when not eating. */
+  eating: { slotIndex: number; itemId: number; elapsed: number } | null;
 };
 
 /**
@@ -73,24 +165,49 @@ type Session = {
  *   broadcast to everyone.
  * - Mobs (ServerMobManager/mobs.ts) spawned on the real terrain, running
  *   mob-ai.ts/mob-physics.ts unmodified.
- * - Combat: melee (attackMob) and hostile mobs hurting the nearest player
- *   (hurtPlayer, wired through ServerMobManager.update()'s per-mob
- *   MobAiDeps). A skeleton's shot is a guaranteed instant hit for now - no
- *   real arrow entity with travel time synced over the network yet. Death
- *   just resets health and teleports back to spawn, no death screen/
- *   animation/drops.
+ * - Combat: melee against mobs (attackMob) and against other players
+ *   (attackPlayer, gated by spawn protection), hostile mobs hurting the
+ *   nearest player, and real arrows with travel time for both the player's
+ *   bow and a skeleton's shot. Death holds the player at 0 health until they
+ *   ask to respawn, so the client has something to put a death screen on.
  * - Chat, broadcast to everyone.
+ * - Inventory/crafting/furnace, all server-held and authoritative.
+ * - Dropped items as real ground entities (game/dropped-items.ts): breaking a
+ *   block or throwing a stack with Q spawns one that falls, collides and is
+ *   vacuumed up by whoever walks over it.
+ * - Mob death: a topple window, then loot rolled from mob-drops.ts. The mob
+ *   roster is persisted to DO storage (see mobsDirty).
+ * - Environmental damage (applyEnvironmentDamage): falling, drowning
+ *   (src/player-air.ts, imported unmodified) and lava/fire with after-burn.
+ * - A bounded simulation region (game/active-region.ts): only chunks within
+ *   a fixed radius of a connected player are ticked at all. Everything else
+ *   freezes in place rather than running unwatched - the main lever on this
+ *   DO's CPU bill. Mob AI already respects it; water and fire will too.
  *
- * Still ahead: inventory/crafting/furnace, a real projectile for the
- * skeleton's arrow, PvP, terrain streaming past the static chunk grid
- * (multiplayer-game.ts's WORLD_RADIUS_CHUNKS), and death/respawn feedback
- * beyond a silent teleport.
+ * - Dynamic water, lava and fire (game/water-engine.ts, game/fire-engine.ts),
+ *   simulated in full but only inside the active region. Every cell they
+ *   change ships as an ordinary block edit, so the client needs no notion of
+ *   a fluid simulation at all.
+ *
+ * - A real 2x2/3x3 crafting grid, eating (with the same 1.6s bite
+ *   singleplayer makes you spend), and cross-session persistence of
+ *   inventory, position and furnaces.
+ *
+ * Note on persistence: a player's save is keyed by the NAME they joined with,
+ * because that is the only identity this Worker has - see playerKey().
  */
 export class WorldDO implements DurableObject {
   private readonly sessions = new Map<WebSocket, Session>();
+  /** Sockets whose join is mid-verification, so a flood of `join` messages can't create several sessions on one connection. */
+  private readonly joining = new Set<WebSocket>();
   private nextId = 1;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private tickCount = 0;
+  /** Tick-pacing samples - see recordTickInterval() for why this measures the gap between ticks rather than the work inside one. */
+  private lastTickAtMs: number | null = null;
+  private readonly tickIntervals = new Array<number>(TICK_SAMPLE_COUNT).fill(0);
+  private tickIntervalIndex = 0;
+  private tickSamplesFilled = 0;
   /** Sparse block edits, "x,y,z" -> BlockId (BlockId.AIR for a broken block). Persisted to DO storage under the same key. */
   private readonly edits = new Map<string, BlockId>();
   private editsLoaded = false;
@@ -98,6 +215,32 @@ export class WorldDO implements DurableObject {
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
   private readonly mobs = new ServerMobManager();
+  /**
+   * Items lying on the ground (game/dropped-items.ts - a headless fork of
+   * singleplayer's DroppedItems, same physics constants). Not persisted to DO
+   * storage yet: an item that's been on the ground longer than its 60s despawn
+   * wouldn't survive anyway, and player-facing persistence is Fase 12's job.
+   */
+  private readonly droppedItems = new ServerDroppedItems();
+  /** Arrows in flight or stuck in walls (game/arrow-projectiles.ts). Not persisted: every one either lands, is recovered, or despawns within a minute. */
+  private readonly arrows = new ServerArrows();
+  /** Which chunks are worth simulating this tick - see game/active-region.ts. */
+  private readonly activeRegion = new ActiveRegion();
+  /**
+   * The world as the fluid/fire engines see it. Their `setBlock` goes through
+   * this.setBlock(), so every cell a flow or a flame changes is persisted and
+   * broadcast as an ordinary block edit - which is why none of this needed a
+   * protocol message of its own. `isInsideWorld` is always true: the server's
+   * terrain is generated from noise and has no horizontal bounds.
+   */
+  private readonly fluidWorld: FluidWorld = {
+    getBlock: (x, y, z) => this.getBlockAt(x, y, z),
+    setBlock: (x, y, z, id) => this.setBlock(x, y, z, id),
+    isInsideWorld: () => true,
+  };
+  private readonly water = new WaterEngine(this.fluidWorld);
+  private readonly lava = new LavaEngine(this.fluidWorld);
+  private readonly fire = new FireEngine(this.fluidWorld);
   /**
    * Furnace smelting state, keyed "x,y,z" - separate from `edits` (which only
    * tracks the BlockId itself) since a furnace's input/fuel/output/cook
@@ -127,6 +270,26 @@ export class WorldDO implements DurableObject {
   });
   private mobsSpawned = false;
   /**
+   * Mob persistence bookkeeping. Positions change every tick, so writing them
+   * through on every change would mean 20 storage writes a second forever -
+   * the single most expensive thing this DO could do for the least benefit.
+   * Instead the whole roster is written on a slow cadence (MOB_SAVE_INTERVAL)
+   * and whenever something structural happens (a death, a spawn): the worst
+   * case after an eviction is that mobs reappear up to that many seconds
+   * back along their wander path, which nobody can tell apart from them
+   * having simply walked there.
+   */
+  private mobsDirty = false;
+  private mobSaveAccum = 0;
+  /** Same slow-cadence pattern as the mobs, for furnaces and for connected players - see MOB_SAVE_INTERVAL's note on why writing on every change would be the wrong trade. */
+  private furnacesDirty = false;
+  private furnaceSaveAccum = 0;
+  private playerSaveAccum = 0;
+  private furnacesLoaded = false;
+  /** Every player save in this world, keyed by playerKey() - kept in memory so onJoin can stay synchronous. */
+  private readonly playerSaves = new Map<string, PlayerRecord>();
+  private playersLoaded = false;
+  /**
    * Authoritative day/night clock (day-night-math.ts - the same pure cycle
    * math singleplayer's DayNightCycle wraps with scene/fog/lightEngine side
    * effects, here run headless). Starts at noon, same default as
@@ -146,19 +309,67 @@ export class WorldDO implements DurableObject {
       const stored = await this.state.storage.list<BlockId>({ prefix: 'edit:' });
       for (const [key, value] of stored) this.edits.set(key.slice('edit:'.length), value);
       this.editsLoaded = true;
+      // Adopt any FIRE block that outlived the engine that lit it. Engine
+      // state is in-memory, so a DO that gets evicted mid-blaze wakes up with
+      // the burning blocks still persisted but nothing tracking them - and
+      // only tracked cells ever age out, so without this they would burn for
+      // the rest of the world's life.
+      for (const [key, value] of this.edits) {
+        if (value !== BlockId.FIRE) continue;
+        const [x, y, z] = key.split(',').map(Number);
+        this.fire.adopt(x, y, z);
+      }
     }
     if (!this.terrain) {
       // index.ts forwards the original request unchanged (see its comment) -
       // re-parse the same /world/:id path here to derive a stable per-world
       // seed, so re-visiting the same worldId always regenerates the same
       // terrain (nothing about the terrain itself is persisted - only edits are).
-      const match = new URL(request.url).pathname.match(/^\/world\/([A-Za-z0-9_-]{1,64})$/);
+      // Either route carries the same world id, and /stats can be the first
+      // request this instance ever sees - deriving the seed from only /world
+      // would leave a stats-first wake-up generating an entirely different
+      // world than the one players then join.
+      const match = new URL(request.url).pathname.match(/^\/(?:world|stats)\/([A-Za-z0-9_-]{1,64})$/);
       this.worldSeed = hashSeed(match?.[1] ?? 'default');
       this.terrain = new ServerTerrain(this.worldSeed);
     }
+    if (!this.playersLoaded) {
+      // Preloaded here rather than fetched inside onJoin, which is synchronous:
+      // making it async would leave a window where the client's first `input`
+      // messages arrive before the session exists and get dropped. A world
+      // has a handful of players, so this is a small read.
+      const stored = await this.state.storage.list<PlayerRecord>({ prefix: 'player:' });
+      for (const [key, value] of stored) this.playerSaves.set(key, value);
+      this.playersLoaded = true;
+    }
+    if (!this.furnacesLoaded) {
+      const saved = await this.state.storage.get<[string, FurnaceState][]>(FURNACES_KEY);
+      for (const [key, state] of saved ?? []) this.furnaces.set(key, state);
+      this.furnacesLoaded = true;
+    }
     if (!this.mobsSpawned) {
-      this.spawnInitialMobs();
+      // Restore whatever was alive when this DO was last evicted; only a world
+      // that has genuinely never been visited gets a fresh initial population,
+      // so a player coming back doesn't find the herd they thinned out
+      // magically restocked.
+      const saved = await this.state.storage.get<MobRecord[]>(MOBS_KEY);
+      if (saved && saved.length > 0) this.mobs.restore(saved);
+      else if (!saved) this.spawnInitialMobs();
       this.mobsSpawned = true;
+    }
+
+    // Load report, for working out how many players this world can actually
+    // hold (see recordTickInterval). Plain GET, no WebSocket upgrade, so it
+    // has to be answered before the upgrade check below.
+    //
+    // Deliberately unauthenticated for now - it exposes only counts, nothing
+    // about who is playing. Worth revisiting before a public deploy though:
+    // requesting it WAKES the Durable Object, so anyone who knows a world id
+    // could keep one billable just by polling this.
+    if (new URL(request.url).pathname.startsWith('/stats/')) {
+      return new Response(JSON.stringify(this.stats(), null, 2), {
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     const origin = request.headers.get('Origin') ?? '';
@@ -207,7 +418,7 @@ export class WorldDO implements DurableObject {
 
   private onMessage(ws: WebSocket, msg: ClientMessage): void {
     if (msg.type === 'join') {
-      this.onJoin(ws, msg);
+      void this.onJoin(ws, msg);
       return;
     }
 
@@ -242,14 +453,22 @@ export class WorldDO implements DurableObject {
         }
         break;
       case 'dropItem':
-        // No world item entity yet - the stack just leaves the inventory
-        // (see protocol.ts's dropItem doc comment). A real follow-up would
-        // spawn a pickable dropped-item entity at the player's position.
-        removeFromSlot(session.inventory[session.selectedSlot], Infinity);
-        this.sendInventory(session);
+        this.handleDropItem(session, msg.dir);
         break;
       case 'craft':
         this.handleCraft(session, msg.recipeIndex);
+        break;
+      case 'craftOpen':
+        this.openCraftGrid(session, msg.table);
+        break;
+      case 'craftClose':
+        this.closeCraftGrid(session);
+        break;
+      case 'craftMove':
+        this.handleCraftMove(session, msg.from, msg.to);
+        break;
+      case 'craftTakeOutput':
+        this.handleCraftTakeOutput(session);
         break;
       case 'moveSlot':
         if (
@@ -281,29 +500,45 @@ export class WorldDO implements DurableObject {
         break;
       case 'attack':
         // Mob ids are always negative (ServerMobManager), session ids always
-        // positive (this.nextId starts at 1) - rejecting a non-negative
-        // target is a cheap way to disable PvP for this first pass without
-        // needing a separate protocol field for it.
+        // positive (this.nextId starts at 1), so the sign picks the branch.
+        if (session.dead) break;
         if (msg.targetId < 0) this.attackMob(session, msg.targetId);
+        else this.attackPlayer(session, msg.targetId);
         break;
-      // 'useItem' / 'shootBow' / 'ping': eating (needs a hunger system) and
-      // bow combat are follow-up work (see the class doc comment) - accepted
-      // here so a client sending them doesn't error, but intentionally not
-      // acted on yet.
+      case 'respawn':
+        this.handleRespawn(session);
+        break;
+      case 'useItem':
+        this.handleUseItem(session, msg.slotIndex);
+        break;
+      case 'shootBow':
+        this.handleShootBow(session, msg.power, msg.dir);
+        break;
+      // 'ping': accepted so a client sending it doesn't error, but this
+      // server doesn't do latency measurement yet.
       default:
         break;
     }
   }
 
-  /** Item drop rolled from getDrops() (same table singleplayer's interaction.ts uses) always harvests for now - no tool/harvest-level gating server-side yet, same "plain fixed punch" scope as PLAYER_MELEE_DAMAGE. */
+  /**
+   * Item drop rolled from getDrops() (same table singleplayer's interaction.ts
+   * uses) always harvests for now - no tool/harvest-level gating server-side
+   * yet, same "plain fixed punch" scope as PLAYER_MELEE_DAMAGE.
+   *
+   * The drop lands as a real ground entity at the block's centre (matching
+   * singleplayer, whose interaction.ts routes every drop through
+   * DroppedItems.spawn) rather than teleporting straight into the breaker's
+   * inventory - so a block broken across the room has to actually be walked
+   * over, and anyone can pick it up, not just whoever swung at it.
+   */
   private handleBreakBlock(session: Session, x: number, y: number, z: number): void {
     const brokenId = this.getBlockAt(x, y, z);
-    this.setBlock(x, y, z, BlockId.AIR);
+    this.setBlockFromPlayer(x, y, z, BlockId.AIR);
     if (brokenId === BlockId.AIR) return;
     for (const drop of getDrops(brokenId, true)) {
-      addToInventory(session.inventory, drop.id, drop.count);
+      this.droppedItems.spawn(drop.id, drop.count, new THREE.Vector3(x, y, z));
     }
-    this.sendInventory(session);
   }
 
   /**
@@ -316,9 +551,70 @@ export class WorldDO implements DurableObject {
   private handlePlaceBlock(session: Session, x: number, y: number, z: number): void {
     const slot = session.inventory[session.selectedSlot];
     if (slot.id === null || !isBlock(slot.id)) return;
-    this.setBlock(x, y, z, slot.id);
+    this.setBlockFromPlayer(x, y, z, slot.id);
     removeFromSlot(slot, 1);
     this.sendInventory(session);
+  }
+
+  /**
+   * Q - throws the selected slot's whole stack out in front of the player as a
+   * real ground entity, mirroring singleplayer's own Q handler (main.ts's
+   * onDropSelected: spawn 0.6 blocks along the look direction, 0.2 below eye
+   * level, thrown along that direction). The client's claimed `dir` is only
+   * used for the throw arc - it can't move the player or reach further than
+   * their own position, so there's nothing to validate beyond normalising it.
+   */
+  private handleDropItem(session: Session, dir: Vec3): void {
+    const slot = session.inventory[session.selectedSlot];
+    if (slot.id === null) return;
+    const count = slot.count ?? 0;
+    if (count <= 0) return;
+
+    const look = new THREE.Vector3(dir.x, dir.y, dir.z);
+    if (look.lengthSq() > 0) look.normalize();
+    const from = session.physics.state.position.clone().addScaledVector(look, 0.6);
+    from.y -= 0.2;
+
+    this.droppedItems.spawn(slot.id, count, from, look);
+    removeFromSlot(slot, Infinity);
+    this.sendInventory(session);
+  }
+
+  /**
+   * Release the bow. The arrow has to actually be in the player's inventory -
+   * checked and spent here rather than trusted from the client, same as every
+   * other inventory-backed action. Mirrors singleplayer's own shootBowFn,
+   * including its *4 on the draw power (a fully-drawn shot was falling short
+   * of vanilla's reach without it).
+   */
+  private handleShootBow(session: Session, power: number, dir: Vec3): void {
+    if (removeItemsAnywhere(session.inventory, ItemId.ARROW, 1) < 1) return;
+
+    const look = new THREE.Vector3(dir.x, dir.y, dir.z);
+    if (look.lengthSq() < 1e-6) return;
+    look.normalize();
+    const from = session.physics.state.position.clone().addScaledVector(look, 0.5);
+    const draw = THREE.MathUtils.clamp(power, 0, 1);
+    this.arrows.spawn(from, look.multiplyScalar(powerToSpeed(draw * 4)), {
+      ownerId: session.id,
+      crit: draw >= 1,
+    });
+    this.sendInventory(session);
+  }
+
+  /**
+   * A skeleton's shot. `targetPos` already carries mob-ai.ts's own arc
+   * compensation, computed against SKELETON_SHOT_POWER - so that constant has
+   * to stay the speed used here too, or the arrow lands somewhere the AI
+   * never aimed. Damage is fixed rather than speed-derived, so the skeleton's
+   * deliberately-buffed shot speed doesn't also buff how hard it hits.
+   */
+  private spawnSkeletonArrow(fromPos: THREE.Vector3, targetPos: THREE.Vector3): void {
+    const dir = targetPos.clone().sub(fromPos);
+    const dist = dir.length();
+    if (dist < 1e-6) return;
+    dir.normalize().multiplyScalar(powerToSpeed(SKELETON_SHOT_POWER));
+    this.arrows.spawn(fromPos, dir, { ownerId: null, fixedDamage: SKELETON_ARROW_DAMAGE });
   }
 
   private sendInventory(session: Session): void {
@@ -373,6 +669,123 @@ export class WorldDO implements DurableObject {
     this.sendInventory(session);
   }
 
+  /**
+   * Start eating whatever is in `slotIndex`, if it's food. Deliberately NOT
+   * instant: the bite takes EAT_DURATION to land, the same 1.6s singleplayer
+   * makes you spend. That timing is the whole cost of eating - now that PvP
+   * exists, healing to full mid-fight with no wind-up would be a real balance
+   * difference between the two modes, not a cosmetic one.
+   *
+   * One request commits to the whole bite (there's no "released the button"
+   * message); it's cancelled by changing slots, by the food leaving the slot,
+   * or by dying - see finishEating().
+   */
+  private handleUseItem(session: Session, slotIndex: number): void {
+    if (session.dead) return;
+    if (slotIndex < 0 || slotIndex >= session.inventory.length) return;
+    const slot = session.inventory[slotIndex];
+    if (slot.id === null || foodValue(slot.id) <= 0) return;
+    if (session.eating?.slotIndex === slotIndex) return; // already chewing this one
+    session.eating = { slotIndex, itemId: slot.id, elapsed: 0 };
+  }
+
+  /** Advance a bite in progress, healing and consuming one item once it completes. */
+  private updateEating(session: Session, dt: number): void {
+    const eating = session.eating;
+    if (!eating) return;
+
+    // Anything that means they're no longer holding that exact food cancels
+    // the bite rather than healing them for something they no longer have.
+    const slot = session.inventory[eating.slotIndex];
+    if (session.dead || session.selectedSlot !== eating.slotIndex || slot?.id !== eating.itemId) {
+      session.eating = null;
+      return;
+    }
+
+    eating.elapsed += dt;
+    if (eating.elapsed < EAT_DURATION) return;
+
+    session.health = Math.min(PLAYER_MAX_HEALTH, session.health + foodValue(eating.itemId));
+    removeFromSlot(slot, 1);
+    session.eating = null;
+    this.sendInventory(session);
+  }
+
+  // --- Real crafting grid (Fase 10) ------------------------------------
+  // The cells live in the session, not in the inventory, exactly like
+  // singleplayer's CraftingGrid holds its own slots. The server owns the
+  // whole thing: it derives the result with matchRecipe() (the same pure
+  // shape-matching singleplayer runs) so the client never needs the recipe
+  // list to render what the cells currently make.
+
+  private openCraftGrid(session: Session, table: { x: number; y: number; z: number } | null): void {
+    // A 3x3 is only granted by an actual crafting table block - checked here
+    // rather than trusted, or any client could just ask for the big grid.
+    const side: 2 | 3 = table && this.getBlockAt(table.x, table.y, table.z) === BlockId.CRAFTING_TABLE ? 3 : 2;
+    if (session.craft) this.closeCraftGrid(session); // never leak the previous grid's contents
+    session.craft = { side, inputs: Array.from({ length: side * side }, () => createEmptySlot()) };
+    this.sendCraftGrid(session);
+  }
+
+  /** Hand every cell back to the inventory before dropping the grid - closing a GUI must never destroy what was staged in it. */
+  private closeCraftGrid(session: Session): void {
+    if (!session.craft) return;
+    for (const slot of session.craft.inputs) {
+      if (slot.id !== null) addToInventory(session.inventory, slot.id, slot.count ?? 0);
+    }
+    session.craft = null;
+    this.send(session.ws, { type: 'craftGridClosed' });
+    this.sendInventory(session);
+  }
+
+  private craftOutputFor(session: Session): InventorySlot {
+    if (!session.craft) return createEmptySlot();
+    const { side, inputs } = session.craft;
+    const result = matchRecipe(inputs.map((s) => s.id), side, side);
+    if (!result) return createEmptySlot();
+    const out = createEmptySlot();
+    const desc = describeSlot(result.id);
+    out.id = result.id;
+    out.name = desc.name;
+    out.sideTexture = desc.sideTexture;
+    out.count = result.count;
+    return out;
+  }
+
+  private sendCraftGrid(session: Session): void {
+    if (!session.craft) return;
+    this.send(session.ws, {
+      type: 'craftGridState',
+      side: session.craft.side,
+      inputs: session.craft.inputs,
+      output: this.craftOutputFor(session),
+    });
+  }
+
+  private handleCraftMove(session: Session, from: CraftSlotRef, to: CraftSlotRef): void {
+    if (!session.craft) return;
+    const arrayFor = (ref: CraftSlotRef) => (ref.zone === 'grid' ? session.craft!.inputs : session.inventory);
+    const inRange = (ref: CraftSlotRef) => ref.index >= 0 && ref.index < arrayFor(ref).length;
+    if (!inRange(from) || !inRange(to)) return;
+    if (from.zone === to.zone && from.index === to.index) return;
+
+    moveOrMergeBetween(arrayFor(from), from.index, arrayFor(to), to.index);
+    this.sendInventory(session);
+    this.sendCraftGrid(session);
+  }
+
+  /** Taking the result consumes ONE item from every occupied cell, same as singleplayer's consumeCraft() - not the whole stack, so holding a full grid crafts repeatedly. */
+  private handleCraftTakeOutput(session: Session): void {
+    if (!session.craft) return;
+    const output = this.craftOutputFor(session);
+    if (output.id === null) return;
+    // Refuse rather than destroy the result if there's nowhere to put it.
+    if (addToInventory(session.inventory, output.id, output.count ?? 0) < (output.count ?? 0)) return;
+    for (const slot of session.craft.inputs) removeFromSlot(slot, 1);
+    this.sendInventory(session);
+    this.sendCraftGrid(session);
+  }
+
   private furnaceKey(x: number, y: number, z: number): string {
     return `${x},${y},${z}`;
   }
@@ -419,6 +832,7 @@ export class WorldDO implements DurableObject {
       furnace[target] = { id: held.id, count: held.count ?? 0 };
       removeFromSlot(held, Infinity);
     }
+    this.furnacesDirty = true; // items moving in or out is worth writing straight away, unlike cook progress
     this.sendInventory(session);
     this.sendFurnaceState(session);
   }
@@ -429,13 +843,42 @@ export class WorldDO implements DurableObject {
     if (!furnace.output) return;
     addToInventory(session.inventory, furnace.output.id, furnace.output.count);
     furnace.output = null;
+    this.furnacesDirty = true;
     this.sendInventory(session);
     this.sendFurnaceState(session);
   }
 
-  private onJoin(ws: WebSocket, msg: Extract<ClientMessage, { type: 'join' }>): void {
+  /**
+   * Async because the join token has to be verified (HMAC, see
+   * net/auth-token.ts). That's local crypto with no network call, so the
+   * window before the session exists is sub-millisecond - at worst the
+   * client's first `input` lands a tick early and is ignored, which costs it
+   * 50ms of standing still and nothing else.
+   */
+  private async onJoin(ws: WebSocket, msg: Extract<ClientMessage, { type: 'join' }>): Promise<void> {
     if (msg.protocolVersion !== PROTOCOL_VERSION) {
       this.send(ws, { type: 'rejected', reason: `protocol mismatch: server is v${PROTOCOL_VERSION}` });
+      ws.close();
+      return;
+    }
+
+    // Claim the socket BEFORE the await: two join messages arriving back to
+    // back would otherwise both get past the verification and build two
+    // sessions on one connection.
+    if (this.joining.has(ws) || this.sessions.has(ws)) return;
+    this.joining.add(ws);
+
+    // Identity comes from the signed token and nowhere else. No secret
+    // configured means this server cannot tell players apart, so it refuses
+    // everyone rather than silently going back to trusting a typed-in name.
+    if (!this.env.AUTH_SECRET) {
+      this.send(ws, { type: 'rejected', reason: 'server is missing AUTH_SECRET - see world-server README' });
+      ws.close();
+      return;
+    }
+    const verifiedName = typeof msg.token === 'string' ? await verifyAuthToken(msg.token, this.env.AUTH_SECRET) : null;
+    if (!verifiedName) {
+      this.send(ws, { type: 'rejected', reason: 'Log in again - your session has expired' });
       ws.close();
       return;
     }
@@ -448,8 +891,16 @@ export class WorldDO implements DurableObject {
     // fixed flat-world y=2 here previously put the player's feet 0.25 blocks
     // INSIDE the ground, which cascaded into the "1.8 in one tick" bug from
     // the first smoke test.)
+    // Returning player: pick up exactly where they left off - position,
+    // inventory, health and selected slot - instead of a fresh spawn with
+    // empty hands. `saved` is null for a name this world has never seen.
+    const name = verifiedName;
+    const saved = this.playerSaves.get(playerKey(name)) ?? null;
+
     const [spawnX, spawnZ] = this.findLandSpawn();
-    const spawn: Vec3 = { x: spawnX, y: this.findSpawnEyeY(spawnX, spawnZ), z: spawnZ };
+    const spawn: Vec3 = saved
+      ? { x: saved.x, y: saved.y, z: saved.z }
+      : { x: spawnX, y: this.findSpawnEyeY(spawnX, spawnZ), z: spawnZ };
     let physics!: PlayerPhysics;
     const getBlocks = () => this.getBlocksNear(physics.state.position);
     // isWater wires up swimming (buoyancy/stroke-up, see player-physics.ts) -
@@ -472,17 +923,32 @@ export class WorldDO implements DurableObject {
     const skin = typeof msg.skin === 'string' && msg.skin.length <= 200_000 ? msg.skin : null;
 
     const session: Session = {
-      ws, id, name: msg.playerName || `Player${id}`, physics,
-      yaw: 0, pitch: 0,
+      ws, id, name, physics,
+      yaw: saved?.yaw ?? 0, pitch: saved?.pitch ?? 0,
       intent: { moveX: 0, moveZ: 0, wantJump: false, sprinting: false, sneaking: false },
       lastSeq: 0,
-      health: PLAYER_MAX_HEALTH,
+      // A save written while they were dying could hold 0 - never restore
+      // someone straight into a corpse they can't respawn out of.
+      health: saved && saved.health > 0 ? saved.health : PLAYER_MAX_HEALTH,
       skin,
-      inventory: createEmptyInventory(),
-      selectedSlot: 0,
+      // Deep-copied, not adopted by reference: the saved record is shared
+      // state, and two sessions joining under the same name (a second tab,
+      // say) would otherwise write into the very same slot objects.
+      inventory: saved ? saved.slots.map((s) => ({ ...s })) : createEmptyInventory(),
+      selectedSlot: saved?.selectedIndex ?? 0,
       openFurnace: null,
+      air: new PlayerAir(() => this.hurtPlayer(id, DROWN_DAMAGE)),
+      lavaTimer: 0,
+      fireTimer: 0,
+      fireTicksLeft: 0,
+      fireTickTimer: 0,
+      onFire: false,
+      dead: false,
+      craft: null,
+      eating: null,
     };
     this.sessions.set(ws, session);
+    this.joining.delete(ws);
 
     this.send(ws, { type: 'welcome', playerId: id, worldSeed: this.worldSeed, spawn, tickRateHz: TICK_HZ, dayTime: this.dayNightElapsed });
     this.sendInventory(session);
@@ -507,8 +973,17 @@ export class WorldDO implements DurableObject {
   }
 
   private onDisconnect(ws: WebSocket): void {
+    this.joining.delete(ws); // may have dropped mid-verification, before any session existed
     const session = this.sessions.get(ws);
     if (!session) return;
+    // Put anything staged in an open crafting grid back in the inventory
+    // first. Today the inventory itself goes with the session anyway, so this
+    // changes nothing visible - it matters the moment Fase 12 persists
+    // inventories, and doing it here means that phase can't forget.
+    this.closeCraftGrid(session);
+    // Save AFTER returning the grid's contents, so what was staged in it is
+    // part of the inventory that gets written rather than lost.
+    this.savePlayer(session);
     this.sessions.delete(ws);
     this.broadcast({ type: 'entityRemoved', id: session.id, reason: 'disconnect' });
     this.broadcast({ type: 'chat', from: 'server', text: `${session.name} left` });
@@ -520,11 +995,63 @@ export class WorldDO implements DurableObject {
 
   private ensureTicking(): void {
     if (this.tickTimer) return;
+    this.lastTickAtMs = null; // starting fresh - don't count the idle gap as an overrun
     this.tickTimer = setInterval(() => this.tick(), TICK_MS);
+  }
+
+  /**
+   * Health metric for "is this world still keeping up", which is what decides
+   * how many players a world can hold.
+   *
+   * It measures the WALL-CLOCK GAP BETWEEN TICKS, not how long a tick's own
+   * work takes. That is deliberate, and not what PLAN-MULTIPLAYER-PORT.md
+   * originally described: Cloudflare freezes timers inside a Worker as a
+   * Spectre mitigation, so Date.now()/performance.now() do not advance across
+   * a stretch of synchronous code. Wrapping the tick body in a timer pair
+   * would read 0ms forever. Consecutive setInterval callbacks are separated
+   * by a real async boundary, so the gap between them does advance - and it
+   * is the more useful number anyway: tick() runs on a FIXED dt, so a tick
+   * that can't be delivered on schedule is a world running in slow motion,
+   * which is exactly the symptom players feel.
+   *
+   * Reading it: the gap should sit at TICK_MS (50ms). Sustained higher means
+   * the world is behind; the plan's guidance is to add players until the
+   * average creeps past ~30-40ms of actual work, i.e. a gap noticeably above
+   * 50ms.
+   */
+  private recordTickInterval(): void {
+    const now = Date.now();
+    const last = this.lastTickAtMs;
+    this.lastTickAtMs = now;
+    if (last === null) return;
+
+    this.tickIntervals[this.tickIntervalIndex] = now - last;
+    this.tickIntervalIndex = (this.tickIntervalIndex + 1) % TICK_SAMPLE_COUNT;
+    if (this.tickSamplesFilled < TICK_SAMPLE_COUNT) this.tickSamplesFilled++;
+  }
+
+  /** Current load picture - served as JSON by /stats/:worldId (see index.ts). */
+  private stats(): Record<string, unknown> {
+    const samples = this.tickIntervals.slice(0, this.tickSamplesFilled);
+    const avg = samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : 0;
+    const peak = samples.length > 0 ? Math.max(...samples) : 0;
+    return {
+      players: this.sessions.size,
+      mobs: this.mobs.count,
+      activeChunks: this.activeRegion.size,
+      droppedItems: this.droppedItems.snapshots().length,
+      arrows: this.arrows.snapshots().length,
+      targetTickMs: TICK_MS,
+      avgTickIntervalMs: Number(avg.toFixed(2)),
+      peakTickIntervalMs: peak,
+      sampleWindowTicks: samples.length,
+      tickCount: this.tickCount,
+    };
   }
 
   private tick(): void {
     this.tickCount++;
+    this.recordTickInterval();
     const dt = Math.min(TICK_MS / 1000, MAX_DT_S);
 
     this.dayNightElapsed += dt;
@@ -546,19 +1073,92 @@ export class WorldDO implements DurableObject {
     }
 
     for (const [, session] of this.sessions) {
+      if (session.dead) continue; // frozen on the death screen - no movement, no further harm
       const direction = new THREE.Vector3(session.intent.moveX, 0, session.intent.moveZ);
       if (direction.lengthSq() > 0) direction.normalize();
       direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), session.yaw);
       session.physics.updatePhysics(direction, session.intent.wantJump, session.intent.sprinting, dt);
+      this.applyEnvironmentDamage(session, dt);
+      this.updateEating(session, dt);
     }
+
+    // Recompute which chunks are worth simulating BEFORE anything consults it
+    // this tick, so a player who just crossed a chunk boundary wakes up their
+    // new surroundings on the same tick they arrive rather than one late.
+    this.activeRegion.update([...this.sessions.values()].map((s) => ({ id: s.id, pos: s.physics.state.position })));
 
     this.mobs.update(dt, {
       isSolid: (x, y, z) => this.isSolidAt(x, y, z),
       isWater: (x, y, z) => this.isWaterAt(x, y, z),
-      players: [...this.sessions.values()].map((s) => ({ id: s.id, pos: s.physics.state.position })),
+      players: this.livePlayers(),
+      isActiveAt: (x, z) => this.activeRegion.isActiveAt(x, z),
       onAttackPlayer: (playerId, damage) => this.hurtPlayer(playerId, damage),
-      onShootArrow: (playerId, damage) => this.hurtPlayer(playerId, damage),
+      onShootArrow: (fromPos, targetPos) => this.spawnSkeletonArrow(fromPos, targetPos),
+      onDeath: (drops, pos) => {
+        for (const drop of drops) this.droppedItems.spawn(drop.id, drop.count, pos);
+        this.mobsDirty = true;
+      },
     });
+
+    this.droppedItems.update(dt, {
+      isSolid: (x, y, z) => this.isSolidAt(x, y, z),
+      players: this.livePlayers(),
+      collect: (playerId, itemId, count) => {
+        const session = this.sessionById(playerId);
+        if (!session) return count; // left the world mid-pickup - the stack stays on the ground
+        return count - addToInventory(session.inventory, itemId, count);
+      },
+      onPickup: (playerId) => {
+        const session = this.sessionById(playerId);
+        if (session) this.sendInventory(session);
+      },
+    });
+
+    this.arrows.update(dt, {
+      isSolid: (x, y, z) => this.isSolidAt(x, y, z),
+      players: this.livePlayers(),
+      raycastMobs: (from, dir, maxDist) => this.mobs.raycast(from, dir, maxDist),
+      onHitMob: (mobId, damage, fromPos) => this.mobs.damage(mobId, damage, fromPos),
+      onHitPlayer: (playerId, damage) => this.hurtPlayer(playerId, damage),
+      collect: (playerId) => {
+        const session = this.sessionById(playerId);
+        if (!session) return false;
+        if (addToInventory(session.inventory, ItemId.ARROW, 1) < 1) return false; // full - the arrow stays where it is
+        this.sendInventory(session);
+        return true;
+      },
+    });
+
+    // Water, lava and fire. Each engine keeps its own tick interval (0.25s,
+    // 1.5s and 1.2s) and skips anything outside the active region, so a flow
+    // or a blaze nobody is near costs nothing at all until someone walks back.
+    const isActiveAt = (x: number, z: number) => this.activeRegion.isActiveAt(x, z);
+    this.water.update(dt, isActiveAt);
+    this.lava.update(dt, isActiveAt);
+    this.fire.update(dt, isActiveAt, this.lava);
+
+    this.mobSaveAccum += dt;
+    if (this.mobSaveAccum >= MOB_SAVE_INTERVAL || this.mobsDirty) {
+      this.mobSaveAccum = 0;
+      this.mobsDirty = false;
+      void this.state.storage.put(MOBS_KEY, this.mobs.toRecords());
+    }
+
+    this.furnaceSaveAccum += dt;
+    if (this.furnaceSaveAccum >= FURNACE_SAVE_INTERVAL || this.furnacesDirty) {
+      this.furnaceSaveAccum = 0;
+      this.furnacesDirty = false;
+      this.saveFurnaces();
+    }
+
+    // Connected players are checkpointed on a slow cadence. Disconnecting
+    // writes immediately (onDisconnect), so this only bounds how much is lost
+    // if the DO is evicted out from under a live session.
+    this.playerSaveAccum += dt;
+    if (this.playerSaveAccum >= PLAYER_SAVE_INTERVAL) {
+      this.playerSaveAccum = 0;
+      for (const session of this.sessions.values()) this.savePlayer(session);
+    }
 
     this.furnaceManager.tick(dt);
     // Only sessions that actually have a furnace GUI open need the gauge
@@ -569,19 +1169,25 @@ export class WorldDO implements DurableObject {
     }
 
     const entities: EntitySnapshot[] = [
-      ...[...this.sessions.values()].map((s) => ({
+      // A dead player drops out of the list entirely rather than standing
+      // frozen where they fell - the client's remove-by-absence pass then
+      // clears their avatar, the same way a mob's does.
+      ...[...this.sessions.values()].filter((s) => !s.dead).map((s) => ({
         id: s.id,
         kind: 'player' as const,
         pos: { x: s.physics.state.position.x, y: s.physics.state.position.y, z: s.physics.state.position.z },
         yaw: s.yaw,
         health: s.health,
         maxHealth: PLAYER_MAX_HEALTH,
-        onFire: false,
+        onFire: s.onFire,
         dying: false,
         name: s.name,
       })),
       ...this.mobs.snapshots(),
     ];
+
+    const droppedItems = this.droppedItems.snapshots();
+    const arrows = this.arrows.snapshots();
 
     for (const [ws, session] of this.sessions) {
       const p = session.physics.state;
@@ -589,6 +1195,8 @@ export class WorldDO implements DurableObject {
         type: 'state',
         tick: this.tickCount,
         ackSeq: session.lastSeq,
+        droppedItems,
+        arrows,
         self: {
           pos: { x: p.position.x, y: p.position.y, z: p.position.z },
           velocity: { x: p.velocity.x, y: p.velocity.y, z: p.velocity.z },
@@ -596,11 +1204,83 @@ export class WorldDO implements DurableObject {
           pitch: session.pitch,
           grounded: p.grounded,
           health: session.health,
+          air: session.air.points,
+          onFire: session.onFire,
         },
         // Every other player - not this connection's own entry (it already has `self`).
         entities: entities.filter((e) => e.id !== session.id),
       });
     }
+  }
+
+  /**
+   * Falling, drowning and burning, mirroring singleplayer's own per-frame
+   * block in main.ts so the world hurts the same in both modes. Runs right
+   * after this session's physics step, since fall distance is only valid for
+   * the tick the landing happened on (PlayerPhysics recomputes `fallImpact`
+   * from scratch every updatePhysics, so there's nothing to "consume" here -
+   * reading it a tick late would just read 0).
+   */
+  private applyEnvironmentDamage(session: Session, dt: number): void {
+    const fall = session.physics.fallImpact;
+    if (fall > FALL_SAFE_DISTANCE) this.hurtPlayer(session.id, Math.ceil(fall - 3));
+
+    const pos = session.physics.state.position;
+    const bx = Math.round(pos.x);
+    const bz = Math.round(pos.z);
+    // Two samples per body, at knee and chest height - the same pair
+    // singleplayer checks, so standing in a single flame block registers
+    // whether it's at your feet or your waist.
+    const atFeet = this.getBlockAt(bx, Math.round(pos.y - 1.4), bz);
+    const atChest = this.getBlockAt(bx, Math.round(pos.y - 0.6), bz);
+    const inLava = atFeet === BlockId.LAVA || atChest === BlockId.LAVA;
+    const inFire = !inLava && (atFeet === BlockId.FIRE || atChest === BlockId.FIRE);
+
+    // Jumping a fresh timer straight to its threshold makes the FIRST frame of
+    // contact hurt immediately, instead of granting a free half second inside
+    // the lava - the else branches reset it the moment contact is lost.
+    if (inLava) {
+      if (session.lavaTimer === 0) session.lavaTimer = LAVA_TICK_INTERVAL;
+      session.lavaTimer += dt;
+      if (session.lavaTimer >= LAVA_TICK_INTERVAL) {
+        session.lavaTimer -= LAVA_TICK_INTERVAL;
+        this.hurtPlayer(session.id, LAVA_TICK_DAMAGE);
+      }
+    } else {
+      session.lavaTimer = 0;
+    }
+
+    if (inFire) {
+      if (session.fireTimer === 0) session.fireTimer = FIRE_TICK_INTERVAL;
+      session.fireTimer += dt;
+      if (session.fireTimer >= FIRE_TICK_INTERVAL) {
+        session.fireTimer -= FIRE_TICK_INTERVAL;
+        this.hurtPlayer(session.id, FIRE_TICK_DAMAGE);
+      }
+    } else {
+      session.fireTimer = 0;
+    }
+
+    // After-burn: contact tops the counter back up (so it only starts draining
+    // once you're clear of the flames), then burns down one damage per second.
+    if (inLava || inFire) session.fireTicksLeft = PLAYER_FIRE_AFTERBURN_TICKS;
+    session.onFire = session.fireTicksLeft > 0;
+    if (session.onFire) {
+      session.fireTickTimer += dt;
+      if (session.fireTickTimer >= PLAYER_FIRE_TICK_INTERVAL) {
+        session.fireTickTimer -= PLAYER_FIRE_TICK_INTERVAL;
+        session.fireTicksLeft -= 1;
+        this.hurtPlayer(session.id, 1);
+      }
+    } else {
+      session.fireTickTimer = 0;
+    }
+
+    // Head-underwater is a plain block test at eye level rather than
+    // singleplayer's UnderwaterManager check, which also accounts for a
+    // flowing block's actual surface height - the server has no flowing water
+    // to account for until the water sim lands (Fase 6b of the port plan).
+    session.air.update(dt, this.isWaterAt(bx, Math.round(pos.y), bz));
   }
 
   /** Player melee attack on a mob - checked server-side (reach), never trusted from the client. */
@@ -612,31 +1292,186 @@ export class WorldDO implements DurableObject {
   }
 
   /**
+   * PvP. Same reach check as hitting a mob, plus spawn protection: no damage
+   * if EITHER party is inside the protected area. Checking the attacker too
+   * (not just the victim) is what stops the obvious abuse of standing safe
+   * inside the zone and picking off everyone walking past its edge.
+   */
+  private attackPlayer(attacker: Session, targetId: number): void {
+    const target = this.sessionById(targetId);
+    if (!target || target === attacker || target.dead) return;
+    const from = attacker.physics.state.position;
+    const to = target.physics.state.position;
+    if (from.distanceTo(to) > PLAYER_MELEE_RANGE) return;
+    if (this.inSpawnProtection(from) || this.inSpawnProtection(to)) return;
+    this.hurtPlayer(target.id, PLAYER_MELEE_DAMAGE, attacker.name);
+  }
+
+  /**
+   * The world's spawn column, resolved once and cached. findLandSpawn() is a
+   * pure function of the terrain (a deterministic spiral out from the origin,
+   * no randomness), so every call already returned the same answer - caching
+   * only avoids re-walking the spiral, and gives spawn protection a single
+   * fixed centre rather than something recomputed per check.
+   */
+  private spawnChunk: [number, number] | null = null;
+
+  /** True if `pos` is inside the SPAWN_PROTECTION_CHUNKS x SPAWN_PROTECTION_CHUNKS block of chunks centred on the world spawn, where players can't hurt each other. */
+  private inSpawnProtection(pos: THREE.Vector3): boolean {
+    if (!this.spawnChunk) {
+      const [sx, sz] = this.findLandSpawn();
+      this.spawnChunk = chunkCoordOf(sx, sz);
+    }
+    const [cx, cz] = chunkCoordOf(pos.x, pos.z);
+    const reach = (SPAWN_PROTECTION_CHUNKS - 1) / 2;
+    return Math.abs(cx - this.spawnChunk[0]) <= reach && Math.abs(cz - this.spawnChunk[1]) <= reach;
+  }
+
+  /**
    * Damage from a mob (melee or "shot") to a specific player. No fall
    * damage/drowning/fire tracked server-side yet - this is currently the
    * only source of player damage. On death: reset health and teleport back
    * to spawn immediately (no death screen/animation - purely a position +
    * health reset, see the class doc comment for what's still missing).
    */
-  private hurtPlayer(playerId: number, damage: number): void {
-    for (const session of this.sessions.values()) {
-      if (session.id !== playerId) continue;
-      session.health = Math.max(0, session.health - damage);
-      if (session.health <= 0) {
-        session.health = PLAYER_MAX_HEALTH;
-        const [sx, sz] = this.findLandSpawn();
-        session.physics.setSpawn(sx, this.findSpawnEyeY(sx, sz), sz);
-        this.broadcast({ type: 'chat', from: 'server', text: `${session.name} died` });
-      }
-      return;
-    }
+  private hurtPlayer(playerId: number, damage: number, killedBy?: string): void {
+    const session = this.sessionById(playerId);
+    if (!session || session.dead) return; // a corpse can't be hurt again
+    session.health = Math.max(0, session.health - damage);
+    if (session.health > 0) return;
+
+    // Stay dead at 0 health instead of respawning on the spot: the client
+    // needs a moment where it IS dead to put a death screen up, and the old
+    // instant reset meant it never saw health reach 0 at all. The actual
+    // respawn happens when they ask for it (handleRespawn).
+    session.dead = true;
+    session.onFire = false; // stop the flames on everyone else's view of the body
+    this.send(session.ws, { type: 'died', killedBy });
+    this.broadcast({
+      type: 'chat', from: 'server',
+      text: killedBy ? `${session.name} was slain by ${killedBy}` : `${session.name} died`,
+    });
   }
 
+  /**
+   * Leave the death screen. Everything the environment was doing to them gets
+   * cleared here, not just health - respawning still out of breath or still
+   * burning would kill them again on dry land.
+   */
+  private handleRespawn(session: Session): void {
+    if (!session.dead) return;
+    session.dead = false;
+    session.health = PLAYER_MAX_HEALTH;
+    const [sx, sz] = this.findLandSpawn();
+    session.physics.setSpawn(sx, this.findSpawnEyeY(sx, sz), sz);
+    session.air.reset();
+    session.lavaTimer = 0;
+    session.fireTimer = 0;
+    session.fireTicksLeft = 0;
+    session.fireTickTimer = 0;
+    session.onFire = false;
+  }
+
+  /** Snapshot a connected player to storage. Called on disconnect (always) and on a slow cadence while they're online. */
+  private savePlayer(session: Session): void {
+    const p = session.physics.state.position;
+    const record: PlayerRecord = {
+      slots: session.inventory,
+      selectedIndex: session.selectedSlot,
+      health: session.health,
+      x: p.x, y: p.y, z: p.z,
+      yaw: session.yaw, pitch: session.pitch,
+    };
+    // The in-memory map has to move in step with storage, not just at wake-up:
+    // onJoin reads from it, so a player who disconnects and comes back inside
+    // the same DO lifetime would otherwise be restored from the stale record
+    // loaded at startup - and then have their real progress overwritten by the
+    // next save. (`slots` aliases the live inventory array, which keeps the
+    // map current between saves; storage.put serialises a snapshot.)
+    this.playerSaves.set(playerKey(session.name), record);
+    void this.state.storage.put(playerKey(session.name), record);
+  }
+
+  private saveFurnaces(): void {
+    void this.state.storage.put(FURNACES_KEY, [...this.furnaces.entries()]);
+  }
+
+  /** Everyone still in play: a dead player waiting on the death screen isn't a target for mobs or arrows, and can't vacuum items up off the ground. */
+  private livePlayers(): { id: number; pos: THREE.Vector3 }[] {
+    const out: { id: number; pos: THREE.Vector3 }[] = [];
+    for (const session of this.sessions.values()) {
+      if (session.dead) continue;
+      out.push({ id: session.id, pos: session.physics.state.position });
+    }
+    return out;
+  }
+
+  private sessionById(playerId: number): Session | null {
+    for (const session of this.sessions.values()) {
+      if (session.id === playerId) return session;
+    }
+    return null;
+  }
+
+  /**
+   * The low-level block write: persist, broadcast, and keep the FIRE engine's
+   * cell list in step (a flame washed away by a flow has to stop being
+   * tracked, or it would burn forever with no block behind it).
+   *
+   * Deliberately does NOT tell the water/lava engines about the change, even
+   * though they call this constantly - `onBlockPlaced` means "a SOURCE was
+   * placed here", so notifying from inside the write would turn every
+   * flowing cell the engine itself lays down into a new source and flood the
+   * world. Player-initiated placement goes through setBlockFromPlayer()
+   * instead. This is the same split singleplayer keeps between World.setBlock
+   * and World.place.
+   */
   private setBlock(x: number, y: number, z: number, id: BlockId): void {
     const key = `${x},${y},${z}`;
     this.edits.set(key, id);
     void this.state.storage.put(`edit:${key}`, id);
     this.broadcast({ type: 'blockChanged', x, y, z, blockId: id });
+    if (id === BlockId.FIRE) this.fire.onFirePlaced(x, y, z);
+    else this.fire.onFireRemoved(x, y, z);
+    if (id === BlockId.WATER || id === BlockId.LAVA) this.resolveLiquidInteractionAt(x, y, z);
+  }
+
+  /**
+   * Water meeting lava turns the lava to stone - obsidian if it was a source,
+   * cobblestone if it was just a flow. Without this the two liquids would
+   * simply flow through each other, since neither engine knows the other
+   * exists. Ported from singleplayer's World.resolveLiquidInteractionAt; the
+   * Fizz sound it also plays there is client-side and has no equivalent here.
+   */
+  private resolveLiquidInteractionAt(x: number, y: number, z: number): void {
+    const current = this.getBlockAt(x, y, z);
+    if (current !== BlockId.WATER && current !== BlockId.LAVA) return;
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      const nx = x + dx, ny = y + dy, nz = z + dz;
+      const neighbor = this.getBlockAt(nx, ny, nz);
+      const touchesOpposingLiquid = (current === BlockId.WATER && neighbor === BlockId.LAVA)
+        || (current === BlockId.LAVA && neighbor === BlockId.WATER);
+      if (!touchesOpposingLiquid) continue;
+
+      const lavaX = current === BlockId.LAVA ? x : nx;
+      const lavaY = current === BlockId.LAVA ? y : ny;
+      const lavaZ = current === BlockId.LAVA ? z : nz;
+      const replacement = this.lava.isSource(lavaX, lavaY, lavaZ) ? BlockId.OBSIDIAN : BlockId.COBBLESTONE;
+      this.lava.clearAt(lavaX, lavaY, lavaZ);
+      this.setBlock(lavaX, lavaY, lavaZ, replacement);
+    }
+  }
+
+  /** A block a PLAYER placed or broke: same write as setBlock, plus telling the fluid engines a source appeared or disappeared here. */
+  private setBlockFromPlayer(x: number, y: number, z: number, id: BlockId): void {
+    this.setBlock(x, y, z, id);
+    if (id === BlockId.AIR) {
+      this.water.onBlockRemoved(x, y, z);
+      this.lava.onBlockRemoved(x, y, z);
+    } else {
+      this.water.onBlockPlaced(x, y, z, id);
+      this.lava.onBlockPlaced(x, y, z, id);
+    }
   }
 
   private isSolidAt(x: number, y: number, z: number): boolean {
@@ -728,8 +1563,9 @@ export class WorldDO implements DurableObject {
     return [0, 0];
   }
 
-  /** A handful of animals + a couple of hostiles scattered around spawn, once per DO instance lifetime - not persisted (see mobs.ts's class doc comment: no death/drops yet, so nothing would need saving anyway). */
+  /** A handful of animals + a couple of hostiles scattered around spawn, once per WORLD (not per DO instance): the roster is persisted from here on, so an evicted world wakes up with the mobs it actually had rather than a fresh batch. */
   private spawnInitialMobs(): void {
+    this.mobsDirty = true; // write the starting roster out on the next tick, so "never visited" stays distinguishable from "everything got killed"
     const kinds: MobKind[] = ['pig', 'cow', 'sheep', 'pig', 'cow', 'zombie', 'skeleton'];
     for (const kind of kinds) {
       const angle = Math.random() * Math.PI * 2;

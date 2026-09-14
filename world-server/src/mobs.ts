@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { MOB_STATS, isHostileKind, type Mob, type MobKind } from './game/mob-manager';
 import { updateAI, type MobAiDeps } from './game/mob-ai';
 import { tryEscapeStuck, updatePhysics } from './game/mob-physics';
+import { rollDrops, type DropStack } from '../../src/mob-drops';
 import type { EntitySnapshot } from '../../src/net/protocol';
 
 // Mirrors mob-manager.ts's own (private) tuning constants for damage/knockback/
@@ -11,6 +12,10 @@ import type { EntitySnapshot } from '../../src/net/protocol';
 const KNOCKBACK_SPEED = 5;
 const KNOCKBACK_UP = 4;
 const FLEE_DURATION = 3;
+const DEATH_SPIN_DURATION = 0.75; // seconds toppling before vanishing - same as mob-manager.ts's own
+
+/** A mob as persisted to Durable Object storage: only what respawning it needs, never the AI/path/timer scratch state (all of which is fine to start fresh). */
+export type MobRecord = { id: number; kind: MobKind; x: number; y: number; z: number; yaw: number; health: number };
 /** One connected player, as far as a mob deciding what to chase/attack needs to know. */
 export type PlayerTarget = { id: number; pos: THREE.Vector3 };
 export type MobCombatDeps = {
@@ -19,8 +24,12 @@ export type MobCombatDeps = {
   players: PlayerTarget[];
   /** A hostile mob landed a melee hit - which player and how much. */
   onAttackPlayer: (playerId: number, damage: number, fromPos: THREE.Vector3) => void;
-  /** A skeleton "fired" - simplified as a guaranteed hit for this first pass (no real travel-time projectile synced over the network yet, see the class doc comment). */
-  onShootArrow: (playerId: number, damage: number) => void;
+  /** A skeleton fired: `targetPos` is mob-ai.ts's already-gravity-compensated aim point, so the caller only has to turn it into a velocity and spawn a real projectile. */
+  onShootArrow: (fromPos: THREE.Vector3, targetPos: THREE.Vector3) => void;
+  /** A mob finished toppling and is about to be removed: its loot, already rolled, at the height it should spawn from. */
+  onDeath: (drops: DropStack[], pos: THREE.Vector3) => void;
+  /** False for a mob standing in a chunk nobody is near - it's frozen this tick (see game/active-region.ts). */
+  isActiveAt: (x: number, z: number) => boolean;
 };
 
 /**
@@ -45,13 +54,16 @@ export type MobCombatDeps = {
  * had) - update() builds a fresh per-mob MobAiDeps every tick with that
  * mob's own nearest-player closure, so mob-ai.ts's existing single-target
  * chase/attack logic works unmodified even with several players connected.
- * A skeleton's shot is simplified to a guaranteed hit the instant it fires -
- * no real arrow entity with travel time synced over the network yet (that
- * needs new protocol messages + client-side rendering, real follow-up).
+ * A skeleton's shot is a real projectile with travel time (see
+ * game/arrow-projectiles.ts), spawned by whoever provides `onShootArrow` -
+ * it can miss, be dodged, or be stopped by a wall, exactly like in
+ * singleplayer.
  *
- * Still out of scope: drops/death effects (damage() below just removes a
- * mob outright at 0 HP, no death animation/smoke/loot - all purely visual/
- * inventory concerns that don't exist server-side yet either).
+ * Death: a mob at 0 HP topples for DEATH_SPIN_DURATION (still falling, no
+ * longer deciding anything) and then drops its loot via mob-drops.ts's
+ * rollDrops() - the same table singleplayer rolls - before vanishing. The
+ * smoke burst and red tint stay client-side; `dying` already rides along in
+ * EntitySnapshot, so no extra protocol message is needed to trigger them.
  */
 export class ServerMobManager {
   private readonly mobs: Mob[] = [];
@@ -116,7 +128,12 @@ export class ServerMobManager {
   update(delta: number, ctx: MobCombatDeps): void {
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const mob = this.mobs[i];
-      if (mob.dying) { this.mobs.splice(i, 1); continue; } // no death animation - see class doc comment, just gone next tick
+      // Frozen: a mob nobody is near keeps its exact state (position, health,
+      // path, whatever it was mid-decision about) and simply doesn't think
+      // this tick. Pathfinding and AI are the most expensive per-entity work
+      // this server does, and none of it is observable with no one in range.
+      if (!ctx.isActiveAt(mob.pos.x, mob.pos.z)) continue;
+      if (mob.dying) { this.updateDying(mob, i, delta, ctx); continue; }
 
       const nearest = this.nearestPlayer(mob.pos, ctx.players);
       const deps: MobAiDeps = {
@@ -124,13 +141,36 @@ export class ServerMobManager {
         isWater: ctx.isWater,
         getPlayerPos: nearest ? () => nearest.pos : undefined,
         onAttackPlayer: nearest ? (damage) => ctx.onAttackPlayer(nearest.id, damage, mob.pos) : undefined,
-        onShootArrow: nearest ? () => ctx.onShootArrow(nearest.id, SKELETON_ARROW_DAMAGE) : undefined,
+        onShootArrow: nearest ? (fromPos, targetPos) => ctx.onShootArrow(fromPos, targetPos) : undefined,
       };
 
       tryEscapeStuck(mob, ctx.isSolid);
       updateAI(mob, delta, deps);
       updatePhysics(mob, delta, ctx.isSolid, ctx.isWater);
     }
+  }
+
+  /**
+   * A mob that has already run out of health: it keeps falling/landing but
+   * stops deciding anything, and vanishes once its topple finishes - the same
+   * DEATH_SPIN_DURATION window singleplayer's mob-manager.ts gives it. The
+   * delay isn't cosmetic padding: the client needs the mob to still be in the
+   * snapshot (with `dying: true`, which EntitySnapshot already carries) for
+   * long enough to play the topple, otherwise a killed mob just blinks out.
+   *
+   * Loot is rolled HERE rather than at the killing blow, matching
+   * singleplayer, so a mob that dies while on fire drops cooked meat based on
+   * whether it was still burning when it actually finished dying.
+   */
+  private updateDying(mob: Mob, index: number, delta: number, ctx: MobCombatDeps): void {
+    updatePhysics(mob, delta, ctx.isSolid, ctx.isWater); // still falls/lands, just no AI
+    mob.deathTimer -= delta;
+    if (mob.deathTimer > 0) return;
+
+    const pos = mob.pos.clone();
+    pos.y += mob.height / 2; // drops burst from the body's middle, not its feet
+    ctx.onDeath(rollDrops(mob.kind, mob.onFire), pos);
+    this.mobs.splice(index, 1);
   }
 
   private nearestPlayer(pos: THREE.Vector3, players: PlayerTarget[]): PlayerTarget | null {
@@ -155,6 +195,7 @@ export class ServerMobManager {
     mob.health -= amount;
     if (mob.health <= 0) {
       mob.dying = true;
+      mob.deathTimer = DEATH_SPIN_DURATION;
       return true;
     }
 
@@ -179,6 +220,55 @@ export class ServerMobManager {
     return this.mobs.find((m) => m.id === id)?.pos ?? null;
   }
 
+  /** Nearest mob along a ray within `maxDist`, or null - what an in-flight arrow tests against. Same stacked-spheres approximation mob-manager.ts's own raycastMobs() uses (its helpers are private there, so the math is mirrored here, same as the tuning constants at the top of this file). */
+  raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): number | null {
+    let bestId: number | null = null;
+    let bestDist = Infinity;
+    for (const mob of this.mobs) {
+      if (mob.dying) continue;
+      const hit = rayCapsuleDistance(origin, dir, mob.pos, mob.height, mob.radius);
+      if (hit !== null && hit <= maxDist && hit < bestDist) {
+        bestDist = hit;
+        bestId = mob.id;
+      }
+    }
+    return bestId;
+  }
+
+  /**
+   * Compact view for Durable Object storage. Dying mobs are left out on
+   * purpose: their loot hasn't been rolled yet, so persisting one would mean
+   * either dropping it twice (once now, once after a restore) or silently
+   * swallowing it - and a mob mid-topple is under a second from gone anyway.
+   */
+  toRecords(): MobRecord[] {
+    return this.mobs
+      .filter((mob) => !mob.dying)
+      .map((mob) => ({
+        id: mob.id, kind: mob.kind,
+        x: mob.pos.x, y: mob.pos.y, z: mob.pos.z,
+        yaw: mob.facingYaw, health: mob.health,
+      }));
+  }
+
+  /** Rebuild from storage after this Durable Object was evicted and woke up again. Ids are preserved so a client that was mid-attack doesn't suddenly find its target renumbered. */
+  restore(records: MobRecord[]): void {
+    for (const rec of records) {
+      this.spawn(rec.kind, new THREE.Vector3(rec.x, rec.y, rec.z), rec.yaw);
+      const mob = this.mobs[this.mobs.length - 1];
+      mob.id = rec.id;
+      mob.health = rec.health;
+    }
+    // Keep handing out ids below every restored one, so a mob spawned after a
+    // restore can't collide with one that was already saved.
+    const lowest = Math.min(-1, ...records.map((r) => r.id));
+    this.nextId = lowest - 1;
+  }
+
+  get count(): number {
+    return this.mobs.length;
+  }
+
   snapshots(): EntitySnapshot[] {
     return this.mobs.map((mob) => ({
       id: mob.id,
@@ -193,4 +283,28 @@ export class ServerMobManager {
   }
 }
 
-const SKELETON_ARROW_DAMAGE = 4; // matches the client's own fixedDamage for a skeleton's shot (arrow-projectiles.ts)
+/** How many spheres to stack along a mob's vertical axis for rayCapsuleDistance - mirrors mob-manager.ts's own CAPSULE_SAMPLES. */
+const CAPSULE_SAMPLES: number = 5;
+
+function raySphereDistance(origin: THREE.Vector3, dir: THREE.Vector3, center: THREE.Vector3, radius: number): number | null {
+  const oc = origin.clone().sub(center);
+  const b = oc.dot(dir);
+  const c = oc.lengthSq() - radius * radius;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const t = -b - Math.sqrt(disc);
+  return t >= 0 ? t : null;
+}
+
+function rayCapsuleDistance(origin: THREE.Vector3, dir: THREE.Vector3, feet: THREE.Vector3, height: number, radius: number): number | null {
+  const bottomY = feet.y + radius;
+  const topY = feet.y + Math.max(height - radius, radius);
+  let best: number | null = null;
+  for (let i = 0; i < CAPSULE_SAMPLES; i++) {
+    const t = CAPSULE_SAMPLES === 1 ? 0 : i / (CAPSULE_SAMPLES - 1);
+    const center = new THREE.Vector3(feet.x, THREE.MathUtils.lerp(bottomY, topY, t), feet.z);
+    const hit = raySphereDistance(origin, dir, center, radius);
+    if (hit !== null && (best === null || hit < best)) best = hit;
+  }
+  return best;
+}

@@ -14,7 +14,8 @@ export class UnderwaterManager {
 
   constructor(
     private readonly camera: THREE.Camera,
-    private readonly world: World,
+    /** Only these two are used, so the multiplayer client can pass its own block reader instead of a full singleplayer `World`. It has no flowing-water depth to report, so its getWaterDistance is a constant 0 - see multiplayer-game.ts. */
+    private readonly world: Pick<World, 'getBlock' | 'getWaterDistance'>,
     private readonly scene: THREE.Scene,
     private readonly fog: THREE.Fog,
     private readonly underwaterOverlay: HTMLElement | null,

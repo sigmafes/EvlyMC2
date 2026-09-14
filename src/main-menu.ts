@@ -29,7 +29,8 @@ const MUSIC_SILENCE_MS = 15_000;
 
 type MainMenuHandlers = {
   onSingleplayer: () => void;
-  onMultiplayer: (serverUrl: string, worldId: string, playerName: string) => void;
+  /** No player name: multiplayer identity comes from the logged-in account's signed token, not from anything chosen here. */
+  onMultiplayer: (serverUrl: string, worldId: string) => void;
 };
 
 /**
@@ -211,7 +212,12 @@ export class MainMenu {
       const savedUrl = localStorage.getItem('evlymc-mp-server-url');
       if (savedUrl) urlInput.value = savedUrl;
     } catch { /* private mode */ }
+    // Shown, never editable: your name in multiplayer is the account you
+    // logged in with. The server takes it from the signed token anyway
+    // (net/auth-token.ts), so anything typed here would be ignored - better
+    // to not offer the field than to offer one that silently does nothing.
     nameInput.value = loadPlayerName();
+    nameInput.disabled = true;
     message.textContent = 'Connect to a world server';
     message.classList.remove('mp-error');
 
@@ -221,7 +227,6 @@ export class MainMenu {
     const onSubmit = (event: Event) => {
       event.preventDefault();
       const url = urlInput.value.trim();
-      const name = nameInput.value.trim() || 'Player';
       const match = url.match(/\/world\/([A-Za-z0-9_-]+)\/?$/);
       if (!url || !match) {
         message.textContent = 'Enter a URL ending in /world/<id>, e.g. wss://host/world/myworld';
@@ -231,7 +236,7 @@ export class MainMenu {
       try { localStorage.setItem('evlymc-mp-server-url', url); } catch { /* private mode */ }
       enterFullscreen();
       this.dispose();
-      handlers.onMultiplayer(url, match[1], name);
+      handlers.onMultiplayer(url, match[1]);
     };
     const onCancel = () => {
       screen.hidden = true;

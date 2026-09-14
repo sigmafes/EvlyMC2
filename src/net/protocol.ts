@@ -25,9 +25,47 @@ import type { FurnaceState } from '../block-data';
  *   because Fase 1 already built the right one.
  */
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export type Vec3 = { x: number; y: number; z: number };
+
+/** One end of a `craftMove`: which slot array, and the index within it. Spelled out rather than encoded as offset index ranges so a stray index can't silently mean "some inventory slot". */
+export type CraftSlotRef = { zone: 'inventory' | 'grid'; index: number };
+
+/**
+ * An item lying on the ground (Fase 1 del plan de porteo): what a broken block
+ * or a Q-thrown stack leaves behind until someone walks over it. Deliberately
+ * NOT an `EntitySnapshot` - it has no health/yaw/fire/dying, and the client
+ * renders it as a spinning item mesh rather than as a body, so sharing that
+ * shape would mean four meaningless fields on every ground item every tick.
+ *
+ * The server owns position and pickup; the spin and idle bob are cosmetic and
+ * computed client-side from `entityId`/local time, never sent over the wire.
+ */
+/**
+ * An arrow in flight or stuck in a block. Like DroppedItemSnapshot this is
+ * deliberately not an `EntitySnapshot` - an arrow has no health, doesn't burn
+ * and can't die, so it would carry four meaningless fields every tick.
+ *
+ * `yaw`/`pitch` come precomputed rather than as a velocity vector: the client
+ * only needs to point the mesh, and an arrow that has embedded in a wall has
+ * no velocity left to derive a heading from.
+ */
+export type ArrowSnapshot = {
+  entityId: number;
+  pos: Vec3;
+  yaw: number;
+  pitch: number;
+};
+
+export type DroppedItemSnapshot = {
+  /** Server-assigned, stable for this item's whole lifetime - the client keys its meshes by it. */
+  entityId: number;
+  /** BlockId (1..23) or ItemId (100+) - same numbering `InventorySlot.id` uses. */
+  itemId: number;
+  count: number;
+  pos: Vec3;
+};
 
 /** Anything the client renders as a moving body in the world: a mob, or another player. */
 export type EntityKind = MobKind | 'player';
@@ -51,7 +89,15 @@ export type EntitySnapshot = {
 
 export type ClientMessage =
   | {
-      type: 'join'; worldId: string; playerName: string; protocolVersion: number;
+      type: 'join'; worldId: string; protocolVersion: number;
+      /**
+       * Signed proof of which account this is, issued by the access worker at
+       * login (see net/auth-token.ts). The server takes the player's name
+       * from INSIDE this token - there is no client-supplied name any more,
+       * because a name the client picks is a name anyone can pick, and the
+       * player's saved inventory hangs off it.
+       */
+      token: string;
       /** The 64x64 skin PNG this client currently has selected (player-skin.ts),
        * as a data: URL - `null`/absent if using the built-in default. Sent once
        * at join, not kept in sync afterward (see world-do.ts's onJoin doc
@@ -85,19 +131,30 @@ export type ClientMessage =
   | { type: 'placeBlock'; x: number; y: number; z: number; blockId: BlockId; face: number }
   | { type: 'selectSlot'; index: number }
   | { type: 'useItem'; slotIndex: number }
-  /** Q - drops the whole stack currently in the selected hotbar slot. No world item entity yet (see world-do.ts's dropItem handler doc comment) - the stack just leaves the inventory. */
-  | { type: 'dropItem' }
+  /** Q - throws the whole stack in the selected hotbar slot out in front of the player as a real ground entity (DroppedItemSnapshot), same as singleplayer's own Q. `dir` is the player's look direction, used for the throw arc; the server clamps/normalises it itself. */
+  | { type: 'dropItem'; dir: Vec3 }
   /**
    * Craft one of the recipes the server last told this client it can
    * afford (`craftableRecipes`) - `recipeIndex` is RECIPES' own array
    * index (src/crafting.ts), re-validated server-side on arrival rather
-   * than trusted (see world-do.ts's handleCraft doc comment). Simplified
-   * from singleplayer's drag-and-drop 2x2/3x3 grid: the player picks a
-   * recipe from a list of what they can currently make instead of
-   * physically arranging ingredients in a grid over the network - see
-   * multiplayer-game.ts's craft menu doc comment for why.
+   * than trusted (see world-do.ts's handleCraft doc comment). This is the
+   * shortcut list, kept alongside the real grid below: it pulls ingredients
+   * from wherever they're stacked instead of from cells you arranged.
    */
   | { type: 'craft'; recipeIndex: number }
+  /** Open a crafting grid: `table` is the position of a crafting table for the 3x3, or null for the 2x2 you carry with you. */
+  | { type: 'craftOpen'; table: { x: number; y: number; z: number } | null }
+  /** Close it. Anything left in the cells goes back to the inventory rather than being destroyed - see world-do.ts's closeCraftGrid. */
+  | { type: 'craftClose' }
+  /**
+   * Move/merge one stack within the open grid, between the grid and the
+   * inventory, or within the inventory - the same self-contained, cursor-free
+   * move `moveSlot` uses, just with a zone on each end so it can cross
+   * between the two. Same-id stacks merge, otherwise the two cells swap.
+   */
+  | { type: 'craftMove'; from: CraftSlotRef; to: CraftSlotRef }
+  /** Take the result: consumes one item from every occupied input cell, exactly like singleplayer's CraftingGrid.consumeCraft(). */
+  | { type: 'craftTakeOutput' }
   /** Backpack (E) slot click: move/merge whatever is in `from` into `to` - same-id stacks merge (up to maxStack, leftover stays in `from`), otherwise the two slots swap. Both are indices into the same 36-slot inventory (0..8 hotbar, 9..35 backpack) - there's no separate "held item cursor" state to track over the network, each click is a complete, self-contained move. */
   | { type: 'moveSlot'; from: number; to: number }
   /** Right-clicking a placed furnace block opens its GUI - the server starts including this position in the periodic `furnaceState` pushes to this session (see world-do.ts's Session.openFurnace) until furnaceClose. */
@@ -107,7 +164,11 @@ export type ClientMessage =
   | { type: 'furnaceInsert'; x: number; y: number; z: number; target: 'input' | 'fuel' }
   /** Collects the furnace's finished output stack into the player's inventory. */
   | { type: 'furnaceTakeOutput'; x: number; y: number; z: number }
+  /** Melee swing at an entity: negative ids are mobs, positive ones other players (PvP - see world-do.ts's spawn-protection check). */
   | { type: 'attack'; targetId: number }
+  /** Leave the death screen. The server holds a dead player frozen at 0 health until this arrives, rather than respawning them the instant they die. */
+  | { type: 'respawn' }
+  /** Release the bow: `power` is the draw (0..1) and `dir` the look direction. The server checks the player actually has an arrow, spends it, and spawns a real projectile (see world-do.ts's handleShootBow). */
   | { type: 'shootBow'; power: number; dir: Vec3 }
   | { type: 'chat'; text: string }
   | { type: 'ping'; clientTimeMs: number };
@@ -131,8 +192,13 @@ export type ServerMessage =
       tick: number;
       /** Last input `seq` this snapshot already reflects - anything the client sent after this still needs reconciling locally. */
       ackSeq: number;
-      self: { pos: Vec3; velocity: Vec3; yaw: number; pitch: number; grounded: boolean; health: number };
+      /** `air`: breath left as bubble points (0..10, see player-air.ts) - 10 means "not submerged / full", which is when the client hides the bar entirely. */
+      self: { pos: Vec3; velocity: Vec3; yaw: number; pitch: number; grounded: boolean; health: number; air: number; onFire: boolean };
       entities: EntitySnapshot[];
+      /** Items currently lying on the ground (see DroppedItemSnapshot). Sent in full every tick like `entities` - the same interest-management caveat applies. */
+      droppedItems: DroppedItemSnapshot[];
+      /** Arrows in flight or embedded in blocks (see ArrowSnapshot). */
+      arrows: ArrowSnapshot[];
     }
   /** Sparse block edits for one chunk - same [localIndex, blockId] shape chunk-edits.ts already persists, just shipped instead of read from IndexedDB. */
   | { type: 'chunkData'; cx: number; cz: number; edits: [index: number, blockId: BlockId][] }
@@ -147,6 +213,23 @@ export type ServerMessage =
   | { type: 'craftableRecipes'; recipes: { index: number; out: { id: number; count: number } }[] }
   /** Pushed periodically (every tick, while the session has this furnace open via furnaceOpen) so the GUI's cook/fuel gauges animate smoothly - see world-do.ts's Session.openFurnace. */
   | { type: 'furnaceState'; x: number; y: number; z: number; state: FurnaceState }
+  /**
+   * The open crafting grid's contents and what they currently make. Pushed on
+   * every change rather than polled, same as the furnace. `output` is derived
+   * server-side by matchRecipe(), so the client renders the result without
+   * needing its own copy of the recipe list or the shape-matching rules.
+   * `side` is 2 or 3; `inputs` is always side*side long.
+   */
+  | { type: 'craftGridState'; side: 2 | 3; inputs: InventorySlot[]; output: InventorySlot }
+  /** The grid was closed (by the player, or because they walked away from the table). */
+  | { type: 'craftGridClosed' }
+  /**
+   * You died. The server freezes this player at 0 health - no physics, no
+   * input, untargetable - until they send `respawn`, rather than teleporting
+   * them back instantly, so there's actually a death screen to show.
+   * `killedBy` is the other player's name for a PvP kill, absent otherwise.
+   */
+  | { type: 'died'; killedBy?: string }
   | { type: 'chat'; from: string; text: string }
   | { type: 'pong'; clientTimeMs: number; serverTimeMs: number };
 
@@ -155,8 +238,9 @@ export function isClientMessageType(type: string): type is ClientMessage['type']
   return (
     [
       'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft', 'moveSlot',
+      'craftOpen', 'craftClose', 'craftMove', 'craftTakeOutput',
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
-      'attack', 'shootBow', 'chat', 'ping',
+      'attack', 'respawn', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);
 }
@@ -166,7 +250,8 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState', 'chat', 'pong',
+      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState',
+      'craftGridState', 'craftGridClosed', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
 }

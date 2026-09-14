@@ -7,16 +7,32 @@ import { lockPointer, unlockPointerForGui } from './is-touch';
 import { TouchControls } from './touch-controls';
 import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials } from './player-model';
 import { loadPlayerSkinDataUrl } from './player-skin';
+import { loadPlayToken } from './access-gate';
 import { LightEngine, type LightWorld } from './light-engine';
 import { SkyRenderer } from './sky-renderer';
 import { SoundManager } from './sound-manager';
 import { getBlockSound } from './block-sounds';
 import { playMobSound } from './mob-sounds';
-import type { MobKind } from './mob-manager';
+import { MOB_STATS, isBipedKind, type MobKind, type MobSpec, type AnyMobModel } from './mob-manager';
+import { MobModel, BipedMobModel, type QuadrupedSpec, type BipedSpec } from './mob-model';
+import { PIG_SPEC } from './pig-model';
+import { COW_SPEC } from './cow-model';
+import { SHEEP_SPEC } from './sheep-model';
+import { ZOMBIE_SPEC } from './zombie-model';
+import { SKELETON_SPEC } from './skeleton-model';
 import { renderSlot, createEmptySlot, HOTBAR_SIZE, TOTAL_SLOTS, type InventorySlot } from './inventory';
 import { COOK_SECONDS } from './smelting';
+import { foodValue, isBlock, ItemId } from './item';
+import { makeStack } from './item-stack';
+import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight } from './block-preview';
+import { createArrowMesh, orientArrowMesh } from './arrow-projectiles';
+import { AmbientSoundEngine } from './ambient-sound';
+import { WorldMusic } from './world-music';
+import { ParticleSystem } from './particles';
+import { SmokeParticles } from './smoke-particles';
+import { UnderwaterManager } from './underwater-manager';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
-import type { EntitySnapshot } from './net/protocol';
+import type { EntitySnapshot, DroppedItemSnapshot, ArrowSnapshot, CraftSlotRef } from './net/protocol';
 
 /**
  * Fase 6 of the multiplayer migration plan: the client side of the world
@@ -46,13 +62,11 @@ import type { EntitySnapshot } from './net/protocol';
  * player doesn't end up standing on real (solid) ground that a fixed static
  * grid simply never rendered.
  *
- * Still-limited scope (matches world-do.ts's own documented scope): mobs
- * render as plain colour-coded capsules, not their real
- * skinned models (that needs texture loading this client doesn't do per-mob
- * yet); melee combat only (left-click an entity's capsule - see onMouseDown),
+ * Still-limited scope (matches world-do.ts's own documented scope): melee
+ * combat only (left-click an entity's hitbox - see onMouseDown),
  * no bow/ranged attack from the player and no PvP (world-do.ts rejects a
  * non-negative attack target); health is a plain heart-count string, not the
- * real HUD; no inventory/crafting/furnace; no client-side prediction (camera
+ * real HUD; no client-side prediction (camera
  * POSITION always comes from the server's last `state` message - only look
  * direction is local, for responsiveness). Every one of
  * those is a real follow-up, not a corner cut by accident.
@@ -73,11 +87,15 @@ type RemoteEntity = {
   label: HTMLDivElement;
   /** How far above mesh.position the name label floats - differs by kind since a player's origin is eye-height but a mob's is feet-height (see makeEntityAvatar). */
   labelOffsetY: number;
-  /** Only for kind:'player' - the real skinned/animated model (see makeEntityAvatar); mobs still get the placeholder capsule (ENTITY_COLOR) until real per-mob models are wired into the multiplayer client. */
+  /** Only for kind:'player' - the real skinned/animated model (see makeEntityAvatar). */
   playerModel?: PlayerModel;
+  /** Only for a MOB - the same MobModel/BipedMobModel singleplayer renders, driven from the server's snapshots. */
+  mobModel?: AnyMobModel;
+  /** Seconds until this mob's next ambient bark, mirroring mob-manager.ts's own idleSoundTimer - the server has no SoundManager, so idle cues are the client's own business. */
+  idleSoundTimer?: number;
   /** This player's own skin materials (see createSkinMaterials) - kept so onEntityRemoved/disconnect can dispose them; undefined for a mob. */
   skinMaterials?: PlayerSkinMaterials;
-  /** Health as of the last `state` tick - a drop since then triggers the player model's hurt-flash (mobs don't bother, no visual feedback to flash on a capsule anyway). */
+  /** Health as of the last `state` tick - a drop since then triggers the model's hurt flash (and, for a mob, its hurt bark). */
   lastHealth: number;
   /** This entity's yaw as of the last `state` tick - updateRemoteAnimation's setOrientation() reads this every render frame (not just on a tick), since it owns and eases group.rotation.y itself once a player has a playerModel. */
   lastYaw: number;
@@ -96,23 +114,30 @@ type RemoteEntity = {
   moveDeltaZ: number;
   /** EntityKind ('player' or a MobKind) - kept so onEntityRemoved/onState can look up the right sound (playMobSound) without the server having to resend it. */
   kind: string;
+  /** Seconds this entity has been toppling (server `dying`), driving the death spin. The server keeps a dying mob in the snapshot for DEATH_SPIN_DURATION precisely so this animation has time to play before the entity disappears. */
+  dyingFor?: number;
 };
 
-/** Rough colour-coding per MOB kind, until real per-mob models/skins are wired into the multiplayer client (out of scope for this pass - see the module doc comment). Players get a real PlayerModel instead - see makeEntityAvatar. */
-const ENTITY_COLOR: Record<string, number> = {
-  player: 0x3a7bd5,
-  pig: 0xe7a0a0,
-  cow: 0x6b4a2f,
-  sheep: 0xe8e8e0,
-  zombie: 0x3f7d3f,
-  skeleton: 0xcfcfc0,
+/** Matches mobs.ts's DEATH_SPIN_DURATION - how long the server keeps a dying mob around, so the topple finishes exactly as it vanishes. */
+const DEATH_SPIN_DURATION = 0.75;
+
+/** Kind -> model spec, same table singleplayer's mob-spawning.ts builds. Imported per-model rather than from mob-spawning itself so the multiplayer bundle doesn't drag in that file's whole slot-based spawning system, which it never runs. */
+const MOB_SPECS: Record<MobKind, MobSpec> = {
+  pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC, skeleton: SKELETON_SPEC,
 };
 
-export function startMultiplayer(serverUrl: string, worldId: string, playerName: string): void {
+/** Ambient bark cadence, matching mob-manager.ts's own IDLE_SOUND_MIN/MAX and MOB_SOUND_RADIUS. */
+const IDLE_SOUND_MIN = 4;
+const IDLE_SOUND_MAX = 9;
+const MOB_SOUND_RADIUS = 4;
+const nextIdleDelay = () => IDLE_SOUND_MIN + Math.random() * (IDLE_SOUND_MAX - IDLE_SOUND_MIN);
+
+export function startMultiplayer(serverUrl: string, worldId: string): void {
   const canvas = document.querySelector<HTMLCanvasElement>('#mp-canvas')!;
   const crosshair = document.querySelector<HTMLElement>('#mp-crosshair')!;
   const hint = document.querySelector<HTMLElement>('#mp-hint')!;
   const healthEl = document.querySelector<HTMLElement>('#mp-health')!;
+  const airEl = document.querySelector<HTMLElement>('#mp-air')!;
   const menu = document.querySelector<HTMLElement>('#main-menu')!;
   const connectScreen = document.querySelector<HTMLElement>('#multiplayer-connect')!;
   // #game-shell (singleplayer's HUD/hotbar/crosshair/chat/game-canvas) is
@@ -177,7 +202,8 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const soundManager = new SoundManager();
   // Covers touch too (lockPointer above is desktop-only) - any first tap/click
   // anywhere satisfies the browser's autoplay-needs-a-gesture policy.
-  const onFirstGesture = () => { void soundManager.initialize(); document.removeEventListener('pointerdown', onFirstGesture); };
+  // Music starts on the same gesture: browsers refuse autoplay before one.
+  const onFirstGesture = () => { void soundManager.initialize(); worldMusic.start(); document.removeEventListener('pointerdown', onFirstGesture); };
   document.addEventListener('pointerdown', onFirstGesture, { once: true });
 
   // --- Real terrain: generated locally from the seed, not shipped over the
@@ -232,6 +258,43 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   let lastPlayerChunkKey = '';
   let terrainNoise: TerrainNoise | null = null;
   let materials: BlockMaterials | null = null;
+
+  // --- Ambience. All of this is purely local: the server sends no sound,
+  // music or particle events, and none of it affects gameplay - it's the
+  // same modules singleplayer runs, fed from state this client already has.
+  // Own overlay element for the same reason as the fire one: main.ts's loop
+  // keeps running behind this session and drives singleplayer's #underwater-
+  // overlay from its own state, which would fight us for the class.
+  const underwaterOverlayEl = document.createElement('div');
+  underwaterOverlayEl.id = 'mp-underwater-overlay';
+  underwaterOverlayEl.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(underwaterOverlayEl);
+
+  /** The surface sky colour for the current time of day, kept separate from `scene.background` so it survives being replaced by the underwater tint - see applyDayNightState. */
+  const currentSkyColor = new THREE.Color();
+  /** Camera currently under water, as of the last UnderwaterManager update. */
+  let submerged = false;
+
+  let particles: ParticleSystem | null = null;
+  const smokeParticles = new SmokeParticles();
+  smokeParticles.attachToScene(scene);
+  const worldMusic = new WorldMusic(0.35);
+  const ambient = new AmbientSoundEngine(soundManager, { getBlock: (x, y, z) => getBlock(x, y, z) });
+  const underwater = new UnderwaterManager(
+    camera,
+    {
+      getBlock: (x, y, z) => getBlock(x, y, z),
+      // This client has no flowing-water depth: the server owns the water
+      // simulation and only ships the resulting blocks (see Fase 6b), so
+      // every water block reads as a full one. The practical effect is that
+      // the camera goes "underwater" at a flowing block's full height rather
+      // than at its real, lower surface.
+      getWaterDistance: () => 0,
+    },
+    scene,
+    fog,
+    underwaterOverlayEl,
+  );
   let worldSeed = 0;
 
   function chunkCoordOf(x: number, z: number): [number, number] {
@@ -254,6 +317,11 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     worldSeed = seed;
     materials = await createBlockMaterials();
     terrainNoise = new TerrainNoise(seed);
+    // Block-break particles need the block atlas, so this can only be built
+    // once the materials exist - hence here rather than alongside the other
+    // ambient systems below.
+    particles = new ParticleSystem(materials);
+    particles.attachToScene(scene);
   }
 
   function generateChunk(cx: number, cz: number): void {
@@ -359,9 +427,18 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       relightQueue.length = 0;
       for (const key of chunks.keys()) relightQueue.push(key);
     }
-    const skyColor = DAY_SKY_COLOR.clone().lerp(NIGHT_SKY_COLOR, skyDarken / NIGHT_SKY_DARKEN);
-    scene.background = skyColor;
-    fog.color.copy(skyColor);
+    // Always resolve the surface sky, but only paint it while the camera is
+    // above water. UnderwaterManager swaps the background/fog to its blue
+    // ONCE, on the frame you go under; this function runs every frame, so
+    // writing unconditionally would repaint the daylight sky over that blue
+    // the very same frame and the tint would never be visible. Singleplayer
+    // avoids this by only repainting when the cycle's colour actually
+    // changes - here the guard is explicit instead.
+    currentSkyColor.copy(DAY_SKY_COLOR).lerp(NIGHT_SKY_COLOR, skyDarken / NIGHT_SKY_DARKEN);
+    if (!submerged) {
+      scene.background = currentSkyColor;
+      fog.color.copy(currentSkyColor);
+    }
     // Sun/moon/stars/clouds/horizon glow on top of the flat sky colour above -
     // same split singleplayer's main.ts makes (DayNightCycle owns the flat
     // colour, SkyRenderer draws the celestial bodies over it).
@@ -380,6 +457,12 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
         ? getBlockSound(previousId, 'dig')
         : getBlockSound(id, 'place') ?? getBlockSound(id, 'dig');
       if (sound) soundManager.playSound(sound);
+      // Break puff, same as singleplayer's interaction.ts does on its own
+      // digs - here it fires for every player's edits, not just ours, since
+      // that's what this handler already sees.
+      if (id === BlockId.AIR && previousId !== BlockId.AIR) {
+        particles?.burst(new THREE.Vector3(x, y, z), previousId, lightEngine.getRawBrightness(x, y, z) / 15);
+      }
     }
     edits.set(`${x},${y},${z}`, id);
     const [cx, cz] = chunkCoordOf(x, z);
@@ -388,6 +471,87 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   }
 
   const remoteEntities = new Map<number, RemoteEntity>();
+
+  /**
+   * Items lying on the ground, keyed by the server's `entityId`. The server
+   * owns position and pickup (world-do.ts's ServerDroppedItems); this side
+   * only draws them and adds the spin/bob singleplayer's own DroppedItems
+   * does, which never travels over the wire so it stays smooth between the
+   * server's 20Hz snapshots.
+   *
+   * Two nested objects on purpose: the OUTER group is moved to exactly what
+   * the server last said and nothing else ever writes to it, while the inner
+   * mesh carries the cosmetic offset as a LOCAL transform. Keeping a copy of
+   * the authoritative height alongside the animation (the obvious one-object
+   * version) means the two can silently drift apart - which is exactly what
+   * happened first try here: the bob kept re-applying against a stale height
+   * and left every item hovering half a block over the ground.
+   */
+  type GroundItem = { anchor: THREE.Group; mesh: THREE.Group; spawnedAt: number };
+  const groundItems = new Map<number, GroundItem>();
+
+  function addGroundItem(snap: DroppedItemSnapshot): GroundItem {
+    const slot = makeStack(snap.itemId, snap.count);
+    const block = isBlock(snap.itemId);
+    const mesh = block ? buildBlockMesh(slot) : buildItemMesh(slot.sideTexture ?? '');
+    mesh.scale.setScalar(block ? 0.17 : 0.4); // same sizes singleplayer's DroppedItems uses
+    const anchor = new THREE.Group();
+    anchor.position.set(snap.pos.x, snap.pos.y, snap.pos.z);
+    anchor.add(mesh);
+    scene.add(anchor);
+    const item: GroundItem = { anchor, mesh, spawnedAt: performance.now() };
+    groundItems.set(snap.entityId, item);
+    return item;
+  }
+
+  function removeGroundItem(entityId: number): void {
+    const item = groundItems.get(entityId);
+    if (!item) return;
+    scene.remove(item.anchor);
+    disposeBlockMesh(item.mesh);
+    groundItems.delete(entityId);
+  }
+
+  /** Spin + idle bob, as singleplayer's DroppedItems.update() does it - cosmetic only, driven by local time rather than by anything the server sends, and applied as a local offset so it can't move the item off the ground it's resting on. */
+  function animateGroundItems(delta: number): void {
+    for (const item of groundItems.values()) {
+      item.mesh.rotation.y += delta * 1.6;
+      const age = (performance.now() - item.spawnedAt) / 1000;
+      item.mesh.position.y = 0.06 + Math.sin(age * 3) * 0.06;
+      const p = item.anchor.position;
+      tintByLight(item.mesh, lightEngine.getRawBrightness(Math.round(p.x), Math.round(p.y), Math.round(p.z)) / 15);
+    }
+  }
+
+  /**
+   * Arrows in flight or stuck in walls, keyed by the server's `entityId`.
+   * Pure rendering: the server owns flight, impact and recovery, so all this
+   * does is move and point the same mesh singleplayer uses. No per-instance
+   * disposal on removal - createArrowMesh() hands out shared geometry and
+   * material, so disposing one arrow's would break every other one in flight.
+   */
+  const arrowMeshes = new Map<number, THREE.Group>();
+
+  function syncArrows(snaps: ArrowSnapshot[]): void {
+    const seen = new Set<number>();
+    for (const snap of snaps) {
+      seen.add(snap.entityId);
+      let mesh = arrowMeshes.get(snap.entityId);
+      if (!mesh) {
+        mesh = createArrowMesh();
+        scene.add(mesh);
+        arrowMeshes.set(snap.entityId, mesh);
+      }
+      mesh.position.set(snap.pos.x, snap.pos.y, snap.pos.z);
+      orientArrowMesh(mesh, snap.yaw, snap.pitch);
+    }
+    for (const [entityId, mesh] of arrowMeshes) {
+      if (seen.has(entityId)) continue;
+      scene.remove(mesh);
+      arrowMeshes.delete(entityId);
+    }
+  }
+
   const labelLayer = document.createElement('div');
   labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:901;';
   document.body.appendChild(labelLayer);
@@ -474,41 +638,155 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   }
 
   /**
-   * Crafting menu (C toggles it): a list of what the player can currently
-   * afford (server-computed, `craftableRecipes` - see world-do.ts's
-   * sendCraftableRecipes doc comment), click one to craft it. Simplified
-   * from singleplayer's real 2x2/3x3 drag-and-drop grid - arranging
-   * ingredients by hand over the network needs a much bigger protocol
-   * surface (per-cell placement, held-item cursor state) for a first pass;
-   * picking a recipe from "what you can make right now" is a real, honest
-   * subset (same RECIPES table, same server-side validation) rather than a
-   * fake shortcut, and the full grid UI is a real follow-up, not a corner
-   * cut by accident.
+   * Death screen. Built here rather than reusing singleplayer's own
+   * #death-screen section: main.ts already binds its buttons to the
+   * singleplayer respawn path, so sharing the element would run that world's
+   * respawn logic from inside a multiplayer session.
+   *
+   * The server holds the player dead until the button is pressed (see
+   * protocol.ts's `died`/`respawn`), so this isn't just a visual - it's what
+   * actually ends the death.
+   */
+  /**
+   * Flames licking up the screen while burning. Its own element rather than
+   * singleplayer's #fire-screen-overlay for the same reason as the death
+   * screen: main.ts's loop keeps running behind this session and toggles that
+   * one from its OWN (always false here) fire state every frame, which would
+   * fight this one for control of the class.
+   */
+  const fireOverlayEl = document.createElement('div');
+  fireOverlayEl.id = 'mp-fire-overlay';
+  fireOverlayEl.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(fireOverlayEl);
+
+  const deathEl = document.createElement('div');
+  deathEl.id = 'mp-death-screen';
+  deathEl.hidden = true;
+  const deathTitle = document.createElement('h1');
+  deathTitle.textContent = 'Game Over';
+  const deathCause = document.createElement('p');
+  const deathRespawnBtn = document.createElement('button');
+  deathRespawnBtn.className = 'mc-button';
+  deathRespawnBtn.type = 'button';
+  deathRespawnBtn.innerHTML = '<span>Respawn</span>';
+  deathEl.append(deathTitle, deathCause, deathRespawnBtn);
+  document.body.appendChild(deathEl);
+  let isDead = false;
+
+  deathRespawnBtn.addEventListener('click', () => {
+    if (!isDead) return;
+    isDead = false;
+    deathEl.hidden = true;
+    client.send({ type: 'respawn' });
+    lockPointer(canvas);
+  });
+
+  /**
+   * The real crafting grid, replacing the old "pick from a list of what you
+   * can afford" shortcut. C opens the 2x2 you carry; right-clicking a placed
+   * crafting table opens the 3x3 (the server decides which - it checks the
+   * block is really a table rather than trusting the request).
+   *
+   * Items move with the same two-click pick-then-place the backpack uses, not
+   * a dragged cursor: each move is one self-contained message, so there's no
+   * "held item" state to keep in sync across the network. The only extra is
+   * that a pick now remembers WHICH grid it came from, since moves can cross
+   * between the inventory and the cells.
+   *
+   * Everything shown here is server state: the cells live in the session, and
+   * the result comes from the server running matchRecipe(), so this client
+   * never needs the recipe list or the shape-matching rules.
    */
   const craftMenuEl = document.createElement('div');
   craftMenuEl.id = 'mp-craft-menu';
   craftMenuEl.hidden = true;
-  const craftMenuGrid = document.createElement('div');
-  craftMenuGrid.id = 'mp-craft-menu-grid';
-  craftMenuEl.appendChild(craftMenuGrid);
+  const craftGridCells = document.createElement('div');
+  craftGridCells.id = 'mp-craft-cells';
+  const craftOutputSlot = document.createElement('button');
+  craftOutputSlot.className = 'inventory-slot';
+  craftOutputSlot.addEventListener('click', () => client.send({ type: 'craftTakeOutput' }));
+  const craftInvEls: HTMLElement[] = [];
+  const craftInvGrid = document.createElement('div');
+  craftInvGrid.id = 'mp-craft-inventory';
+  for (let i = 0; i < TOTAL_SLOTS; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'inventory-slot';
+    btn.addEventListener('click', () => onCraftSlotClick({ zone: 'inventory', index: i }));
+    craftInvEls.push(btn);
+    craftInvGrid.appendChild(btn);
+  }
+  const craftTopRow = document.createElement('div');
+  craftTopRow.id = 'mp-craft-top';
+  craftTopRow.append(craftGridCells, craftOutputSlot);
+  craftMenuEl.append(craftTopRow, craftInvGrid);
   document.body.appendChild(craftMenuEl);
-  let craftableRecipes: { index: number; out: { id: number; count: number } }[] = [];
+
   let craftMenuOpen = false;
-  function renderCraftMenu(): void {
-    craftMenuGrid.innerHTML = '';
-    for (const recipe of craftableRecipes) {
+  let craftSide: 2 | 3 = 2;
+  let craftInputs: InventorySlot[] = [];
+  let craftOutput: InventorySlot = createEmptySlot();
+  let craftCellEls: HTMLElement[] = [];
+  /** Which slot is "picked up" for the next click, and which grid it lives in - null when nothing is held. */
+  let craftPicked: CraftSlotRef | null = null;
+
+  function rebuildCraftCells(side: 2 | 3): void {
+    craftGridCells.innerHTML = '';
+    craftGridCells.style.gridTemplateColumns = `repeat(${side}, auto)`;
+    craftCellEls = [];
+    for (let i = 0; i < side * side; i++) {
       const btn = document.createElement('button');
       btn.className = 'inventory-slot';
-      renderSlot(btn, { id: recipe.out.id, name: '', count: recipe.out.count });
-      btn.addEventListener('click', () => client.send({ type: 'craft', recipeIndex: recipe.index }));
-      craftMenuGrid.appendChild(btn);
+      btn.addEventListener('click', () => onCraftSlotClick({ zone: 'grid', index: i }));
+      craftCellEls.push(btn);
+      craftGridCells.appendChild(btn);
     }
-    if (craftableRecipes.length === 0) craftMenuGrid.textContent = 'Nada para craftear todavía.';
   }
-  function setCraftMenuOpen(open: boolean): void {
+
+  const sameCraftRef = (a: CraftSlotRef | null, b: CraftSlotRef) => a !== null && a.zone === b.zone && a.index === b.index;
+
+  function slotAt(ref: CraftSlotRef): InventorySlot | undefined {
+    return ref.zone === 'grid' ? craftInputs[ref.index] : inventorySlots[ref.index];
+  }
+
+  function onCraftSlotClick(ref: CraftSlotRef): void {
+    if (craftPicked === null) {
+      if (slotAt(ref)?.id == null) return; // nothing there to pick up
+      craftPicked = ref;
+    } else if (sameCraftRef(craftPicked, ref)) {
+      craftPicked = null; // clicked the same cell again - cancel
+    } else {
+      client.send({ type: 'craftMove', from: craftPicked, to: ref });
+      craftPicked = null;
+    }
+    renderCraftMenu();
+  }
+
+  function renderCraftMenu(): void {
+    if (craftCellEls.length !== craftSide * craftSide) rebuildCraftCells(craftSide);
+    craftCellEls.forEach((el, i) => {
+      renderSlot(el, craftInputs[i] ?? createEmptySlot());
+      el.classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'grid', index: i }));
+    });
+    craftInvEls.forEach((el, i) => {
+      renderSlot(el, inventorySlots[i] ?? createEmptySlot());
+      el.classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index: i }));
+    });
+    renderSlot(craftOutputSlot, craftOutput);
+  }
+
+  function setCraftMenuOpen(open: boolean, table: { x: number; y: number; z: number } | null = null): void {
     craftMenuOpen = open;
     craftMenuEl.hidden = !open;
-    if (open) { renderCraftMenu(); unlockPointerForGui(); } else { lockPointer(canvas); }
+    craftPicked = null;
+    if (open) {
+      client.send({ type: 'craftOpen', table });
+      unlockPointerForGui();
+    } else {
+      // Tell the server too: it hands whatever was staged in the cells back
+      // to the inventory, so closing the panel can't swallow items.
+      client.send({ type: 'craftClose' });
+      lockPointer(canvas);
+    }
   }
 
   /**
@@ -599,7 +877,10 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     if (craftMenuOpen || backpackOpen || furnaceOpenState) return; // don't move/select slots while a menu has the pointer
     const digitIndex = DIGIT_CODES.indexOf(e.code);
     if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
-    if (e.code === 'KeyQ') client.send({ type: 'dropItem' });
+    if (e.code === 'KeyQ') {
+      const dir = camera.getWorldDirection(new THREE.Vector3());
+      client.send({ type: 'dropItem', dir: { x: dir.x, y: dir.y, z: dir.z } });
+    }
   };
   const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
   document.addEventListener('keydown', onKeyDown);
@@ -629,7 +910,43 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   // lands on the block that was actually hit rather than its neighbour.
   const raycaster = new THREE.Raycaster();
   /** Shared by the mouse's click handler and touch's tap/hold/attack handlers - `ndc` is (0,0) for the mouse's fixed centre crosshair, or the finger's freeform aim point for touch. */
+  // Purely local chew feedback while the server runs the real bite. Matches
+  // singleplayer's EAT_DURATION / EAT_TICK so both modes sound the same.
+  const EAT_DURATION = 1.6;
+  const EAT_TICK = 0.175;
+  let chewLeft = 0;
+  let chewTickTimer = 0;
+  function startChewing(): void {
+    chewLeft = EAT_DURATION;
+    chewTickTimer = 0;
+  }
+  function updateChewing(delta: number): void {
+    if (chewLeft <= 0) return;
+    chewLeft -= delta;
+    chewTickTimer += delta;
+    if (chewTickTimer >= EAT_TICK) {
+      chewTickTimer -= EAT_TICK;
+      soundManager.playRandom('player/Eat', 3, 0.7);
+    }
+  }
+
   function performInteraction(ndc: THREE.Vector2, action: 'break' | 'place' | 'attack'): boolean {
+    // Eating doesn't need anything in reach (unlike breaking/placing/
+    // attacking) - checked first, before the raycast even runs, so holding
+    // a food item and right-clicking always eats regardless of what's (or
+    // isn't) in front of the crosshair.
+    if (action === 'place') {
+      const heldSlot = inventorySlots[selectedSlotIndex];
+      if (heldSlot?.id !== null && heldSlot?.id !== undefined && foodValue(heldSlot.id) > 0) {
+        client.send({ type: 'useItem', slotIndex: selectedSlotIndex });
+        // The bite takes 1.6s to land server-side (world-do.ts's
+        // handleUseItem), so without an immediate cue the click would feel
+        // like it did nothing until the hearts suddenly jump. Chew locally on
+        // the same cadence singleplayer does, for as long as the bite lasts.
+        startChewing();
+        return true;
+      }
+    }
     raycaster.setFromCamera(ndc, camera);
     // Entity hitboxes take priority over terrain at the same/closer distance -
     // attacking a mob standing right against a wall shouldn't accidentally
@@ -665,6 +982,12 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
         setFurnaceOpen(true, { x: existing.x, y: existing.y, z: existing.z });
         return true;
       }
+      // A crafting table opens the 3x3 rather than getting a block placed
+      // against it, same as singleplayer's own right-click on one.
+      if (getBlock(existing.x, existing.y, existing.z) === BlockId.CRAFTING_TABLE) {
+        setCraftMenuOpen(true, { x: existing.x, y: existing.y, z: existing.z });
+        return true;
+      }
       // The server ignores this blockId and places whatever is actually in
       // the player's selected inventory slot (world-do.ts's handlePlaceBlock
       // doc comment) - sent here only because the protocol message still
@@ -678,6 +1001,32 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     return true;
   }
 
+  // --- Bow: hold right-click to draw, release to fire. Same timing and power
+  // curve as singleplayer's interaction.ts (LCE BowItem), kept here rather
+  // than reused because that class is built around the singleplayer world/
+  // inventory objects this client doesn't have. The server re-checks the
+  // player actually owns an arrow and spends it (world-do.ts's handleShootBow),
+  // so a client lying about `power` can only affect its own shot's arc.
+  const BOW_MAX_DRAW = 1.0;   // seconds to a full draw
+  const BOW_MIN_POWER = 0.1;  // below this the release is too quick to count
+  let bowDrawStart: number | null = null;
+
+  const holdingBow = () => inventorySlots[selectedSlotIndex]?.id === ItemId.BOW;
+  /** The server is the one that actually spends the arrow; this check only keeps a player with an empty quiver from hearing a phantom shot, the same way singleplayer refuses to even start the draw. */
+  const hasArrows = () => inventorySlots.some((s) => s.id === ItemId.ARROW && (s.count ?? 0) > 0);
+
+  const releaseBow = () => {
+    if (bowDrawStart === null) return;
+    const held = (performance.now() - bowDrawStart) / 1000;
+    bowDrawStart = null;
+    let pow = THREE.MathUtils.clamp(held / BOW_MAX_DRAW, 0, 1);
+    pow = (pow * pow + pow * 2) / 3; // LCE's own smoothing
+    if (pow < BOW_MIN_POWER) return;
+    const dir = camera.getWorldDirection(new THREE.Vector3());
+    client.send({ type: 'shootBow', power: Math.min(pow, 1), dir: { x: dir.x, y: dir.y, z: dir.z } });
+    soundManager.playOne('items/Bow_shoot', 0.9);
+  };
+
   const CENTER_NDC = new THREE.Vector2(0, 0);
   const onMouseDown = (e: MouseEvent) => {
     if (document.pointerLockElement !== canvas) { lockPointer(canvas); return; }
@@ -686,11 +1035,14 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       // misses, it falls back to breaking whatever block is under it instead.
       if (!performInteraction(CENTER_NDC, 'attack')) performInteraction(CENTER_NDC, 'break');
     } else if (e.button === 2) {
-      performInteraction(CENTER_NDC, 'place');
+      if (holdingBow() && hasArrows()) bowDrawStart = performance.now();
+      else if (!holdingBow()) performInteraction(CENTER_NDC, 'place');
     }
   };
+  const onMouseUp = (e: MouseEvent) => { if (e.button === 2) releaseBow(); };
   const onContextMenu = (e: MouseEvent) => e.preventDefault();
   canvas.addEventListener('mousedown', onMouseDown);
+  canvas.addEventListener('mouseup', onMouseUp);
   canvas.addEventListener('contextmenu', onContextMenu);
 
   const touchControls = TouchControls.isTouchDevice()
@@ -754,9 +1106,8 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
    * so other players see this one's actual skin instead of a placeholder -
    * built with its OWN skin materials (createSkinMaterials) rather than the
    * shared singleton the local player's model uses, so several different
-   * skins can render at once without stomping each other. Mobs still get the
-   * placeholder capsule below until real per-mob models are wired in (out of
-   * scope here - see the module doc comment).
+   * skins can render at once without stomping each other. Mobs get their own
+   * real models the same way - see makeMobAvatar below.
    */
   // Invisible box, parented to a player model so it inherits the group's own
   // matrixWorld updates - the actual raycast target (onMouseDown/
@@ -814,29 +1165,45 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     void loadSkinImage(skinDataUrl).then((img) => rebuildPlayerAvatarSkin(id, img));
   }
 
-  /** Placeholder avatar for a MOB - a colour-coded capsule, until real per-mob models/skins are wired into the multiplayer client (out of scope for this pass - see the module doc comment). A mob's `pos` is FEET height (mob-manager.ts convention, unchanged since Fase 1), so the capsule sits centred above it - the opposite of a player's eye-height origin. */
-  function makeMobAvatar(id: number, kind: string, name: string): RemoteEntity {
-    const height = kind === 'zombie' || kind === 'skeleton' ? 1.9 : 1.3;
-    const mesh = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.3, Math.max(height - 0.6, 0.2), 4, 8),
-      new THREE.MeshLambertMaterial({ color: ENTITY_COLOR[kind] ?? 0xffffff }),
+  /**
+   * Avatar for a MOB: the exact MobModel/BipedMobModel singleplayer renders,
+   * fed from the server's snapshots instead of from a local MobManager. A
+   * mob's `pos` is FEET height (mob-manager.ts convention), which is also the
+   * model group's own origin, so the position goes straight on - the opposite
+   * of a player's eye-height origin.
+   */
+  function makeMobAvatar(id: number, kind: MobKind, name: string): RemoteEntity {
+    const stats = MOB_STATS[kind];
+    const spec = MOB_SPECS[kind];
+    const hitboxSize = { radius: stats.radius, height: stats.height };
+    const mobModel: AnyMobModel = isBipedKind(kind)
+      ? new BipedMobModel(spec as BipedSpec, hitboxSize)
+      : new MobModel(spec as QuadrupedSpec, hitboxSize);
+    const mesh = mobModel.getGroup();
+
+    // Invisible single-Mesh raycast target, same trick buildPlayerHitbox uses:
+    // onMouseDown needs one object to hit, not a multi-part model group.
+    const hitbox = new THREE.Mesh(
+      new THREE.BoxGeometry(stats.radius * 2, stats.height, stats.radius * 2),
+      new THREE.MeshBasicMaterial({ visible: false }),
     );
-    body.position.y = height / 2;
-    body.userData.entityId = id; // read by onMouseDown to tell an attack target apart from terrain
-    mesh.add(body);
+    hitbox.position.y = stats.height / 2; // feet-origin group -> box centred on the body
+    hitbox.userData.entityId = id; // read by onMouseDown to tell an attack target apart from terrain
+    mesh.add(hitbox);
+
     scene.add(mesh);
     const label = document.createElement('div');
     label.textContent = name;
     label.style.cssText = 'position:absolute;color:#fff;font:12px Tricraft,sans-serif;text-shadow:1px 1px 0 #000;transform:translate(-50%,-100%);white-space:nowrap;';
     labelLayer.appendChild(label);
     return {
-      mesh, hitbox: body, label, labelOffsetY: height + 0.3,
+      mesh, hitbox, label, labelOffsetY: stats.height + 0.3, mobModel,
       lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0, kind,
+      idleSoundTimer: nextIdleDelay(),
     };
   }
 
-  /** Every Mesh's geometry under `root` - a player model is ~10 boxes (body parts + their overlay shells + the hitbox), each its own BufferGeometry created fresh per PlayerModel instance (never shared, unlike singleplayer's one-off local model), so leaving these behind on every join/leave/skin-rebuild would leak real GPU memory over a long session. Materials are handled separately (disposeSkinMaterials, or a mob capsule's own one-off material) since which material(s) a mesh owns vs. shares varies by avatar kind. */
+  /** Every Mesh's geometry under `root` - a player model is ~10 boxes (body parts + their overlay shells + the hitbox), each its own BufferGeometry created fresh per PlayerModel instance (never shared, unlike singleplayer's one-off local model), so leaving these behind on every join/leave/skin-rebuild would leak real GPU memory over a long session. Materials are handled separately (disposeSkinMaterials for a player, disposeMobMaterials for a mob) since which material(s) a mesh owns vs. shares varies by avatar kind. */
   function disposeGroupGeometries(root: THREE.Object3D): void {
     root.traverse((obj) => { if (obj instanceof THREE.Mesh) obj.geometry.dispose(); });
   }
@@ -846,16 +1213,68 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     entity.label.remove();
     disposeGroupGeometries(entity.mesh);
     if (entity.skinMaterials) disposeSkinMaterials(entity.skinMaterials);
-    else (entity.hitbox.material as THREE.Material).dispose(); // mob capsule - its own one-off MeshLambertMaterial, not shared
+    else disposeMobMaterials(entity.mesh);
   }
 
-  /** Advances one remote player's walk-cycle/orientation animation - see moveDeltaX/Z's doc comment for why this reads a value computed once per tick rather than the entity's raw position each frame. Call every render frame, not just on a `state` message, so the swing stays smooth between the server's 20Hz updates. */
+  /**
+   * Every distinct material under a mob model. MobModel builds a handful
+   * per instance (body, wool/overlay shell, separately-textured extras like
+   * cow horns, the fire overlay) and shares each across several meshes, so
+   * this de-dupes before disposing rather than disposing the same one many
+   * times. Their `map` is deliberately left alone: mob textures come from
+   * mob-model.ts's module-level cache and are shared by every mob of that
+   * kind, so disposing one here would blank out every other cow on screen.
+   */
+  function disposeMobMaterials(root: THREE.Object3D): void {
+    const seen = new Set<THREE.Material>();
+    root.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      for (const mat of Array.isArray(obj.material) ? obj.material : [obj.material]) seen.add(mat);
+    });
+    for (const mat of seen) mat.dispose();
+  }
+
+  /** Advances one remote entity's animation - see moveDeltaX/Z's doc comment for why this reads a value computed once per tick rather than the entity's raw position each frame. Call every render frame, not just on a `state` message, so the swing stays smooth between the server's 20Hz updates. */
   function updateRemoteAnimation(entity: RemoteEntity, delta: number): void {
-    if (!entity.playerModel) return;
     const moving = entity.moveDeltaX * entity.moveDeltaX + entity.moveDeltaZ * entity.moveDeltaZ > 0.0001;
+
+    if (entity.dyingFor !== undefined) {
+      // Topple over the Z axis across the same window the server holds a dying
+      // mob in the snapshot for - singleplayer's mob-manager.ts does this with
+      // its own deathTimer, which isn't on the wire, so the client runs the
+      // clock itself from the first `dying` snapshot it saw.
+      entity.dyingFor += delta;
+      const t = Math.min(1, entity.dyingFor / DEATH_SPIN_DURATION);
+      entity.mesh.rotation.z = (Math.PI / 2) * t;
+      entity.mobModel?.setWalking(false);
+      entity.mobModel?.update(delta); // keeps the death tint resolving; setDying() was set when `dying` first arrived
+      return; // a corpse doesn't walk
+    }
+
+    if (entity.mobModel) {
+      entity.mobModel.setWalking(moving);
+      const p = entity.mesh.position;
+      entity.mobModel.setLightLevel(lightEngine.getRawBrightness(Math.round(p.x), Math.round(p.y), Math.round(p.z)) / 15);
+      entity.mobModel.update(delta);
+      updateMobIdleSound(entity, delta);
+      return;
+    }
+
+    if (!entity.playerModel) return;
     if (moving) entity.playerModel.startWalking(); else entity.playerModel.stopWalking();
     entity.playerModel.setOrientation(entity.lastYaw, 0, entity.moveDeltaX, entity.moveDeltaZ, delta);
     entity.playerModel.updateWalkingAnimation(delta);
+  }
+
+  /** Ambient bark on the same random 4-9s cadence singleplayer uses, and only within earshot - the server has no SoundManager, so idle cues never come over the wire. */
+  function updateMobIdleSound(entity: RemoteEntity, delta: number): void {
+    if (entity.idleSoundTimer === undefined) return;
+    entity.idleSoundTimer -= delta;
+    if (entity.idleSoundTimer > 0) return;
+    entity.idleSoundTimer = nextIdleDelay();
+    if (entity.mesh.position.distanceTo(camera.position) <= MOB_SOUND_RADIUS) {
+      playMobSound(soundManager, entity.kind as MobKind, 'idle', 0.5);
+    }
   }
 
   const messageEl = document.querySelector<HTMLElement>('#multiplayer-connect-message')!;
@@ -867,10 +1286,13 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     document.removeEventListener('keyup', onKeyUp);
     document.removeEventListener('mousemove', onMouseMove);
     canvas.removeEventListener('mousedown', onMouseDown);
+    canvas.removeEventListener('mouseup', onMouseUp);
     canvas.removeEventListener('contextmenu', onContextMenu);
     window.removeEventListener('resize', onResize);
     touchControls?.destroy();
     document.removeEventListener('pointerdown', onFirstGesture);
+    ambient.stopAll();
+    worldMusic.stop();
     soundManager.stopAll();
     document.body.classList.remove('mp-touch');
     document.exitPointerLock();
@@ -878,13 +1300,20 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     crosshair.hidden = true;
     hint.hidden = true;
     healthEl.hidden = true;
+    airEl.hidden = true;
     gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
     hotbarEl.remove();
+    deathEl.remove();
+    fireOverlayEl.remove();
+    underwaterOverlayEl.remove();
     craftMenuEl.remove();
     backpackEl.remove();
     furnaceEl.remove();
     for (const [, p] of remoteEntities) removeEntityAvatar(p);
+    for (const entityId of [...groundItems.keys()]) removeGroundItem(entityId);
+    for (const mesh of arrowMeshes.values()) scene.remove(mesh); // shared geometry/material, nothing to dispose per arrow
+    arrowMeshes.clear();
     // Chunk geometries are real GPU resources (BufferGeometry) - renderer.dispose()
     // below doesn't free those on its own, so a reconnect in the same page
     // session would otherwise leak VRAM for every streamed-in chunk.
@@ -909,7 +1338,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   }
 
   const client = new MpClient();
-  client.connect(serverUrl, worldId, playerName, {
+  client.connect(serverUrl, worldId, loadPlayToken(), {
     onWelcome: (msg) => {
       lastServerPos.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
       camera.position.copy(lastServerPos);
@@ -924,6 +1353,11 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       healthEl.textContent = '❤ '.repeat(Math.ceil(msg.self.health / 2)).trim() || '💀';
       if (msg.self.health < lastSelfHealth) soundManager.playRandom('player/Player_hurt', 3, 0.7);
       lastSelfHealth = msg.self.health;
+      // Bubbles only while actually drowning - a full bar means "on dry land",
+      // where singleplayer's HUD hides the row rather than showing 10 of 10.
+      airEl.hidden = msg.self.air >= 10;
+      if (!airEl.hidden) airEl.textContent = '🫧'.repeat(msg.self.air);
+      fireOverlayEl.classList.toggle('active', msg.self.onFire);
       const seen = new Set<number>();
       for (const e of msg.entities as EntitySnapshot[]) {
         seen.add(e.id);
@@ -934,7 +1368,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
             const knownSkin = playerSkins.get(e.id);
             if (knownSkin !== undefined) applySkinWhenReady(e.id, knownSkin);
           } else {
-            op = makeMobAvatar(e.id, e.kind, e.name ?? e.kind);
+            op = makeMobAvatar(e.id, e.kind as MobKind, e.name ?? e.kind);
           }
           op.lastHealth = e.health;
           remoteEntities.set(e.id, op);
@@ -945,22 +1379,57 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
         op.mesh.position.set(e.pos.x, e.pos.y, e.pos.z);
         if (!op.playerModel) op.mesh.rotation.y = e.yaw; // players: left to updateRemoteAnimation's eased setOrientation() every frame instead
         op.lastYaw = e.yaw;
+        if (e.dying && op.dyingFor === undefined) {
+          op.dyingFor = 0;
+          op.mobModel?.setDying(true); // holds the red tint on for the whole topple instead of letting the hurt flash expire mid-fall
+          playMobSound(soundManager, op.kind as MobKind, 'death', 0.8);
+          smokeParticles.burst(new THREE.Vector3(e.pos.x, e.pos.y + 0.6, e.pos.z));
+        }
+        // Both model kinds carry the orange tint + flame overlay, and the
+        // server now reports a burning PLAYER too (not just mobs), so this
+        // has to reach either one.
+        op.mobModel?.setOnFire(e.onFire);
+        op.playerModel?.setOnFire(e.onFire);
         if (e.health < op.lastHealth) {
-          if (op.playerModel) op.playerModel.hurt();
-          else playMobSound(soundManager, op.kind as MobKind, 'hurt', 0.7);
+          op.playerModel?.hurt();
+          op.mobModel?.hurt();
+          if (!op.playerModel) playMobSound(soundManager, op.kind as MobKind, 'hurt', 0.7);
         }
         op.lastHealth = e.health;
       }
       for (const [id, op] of remoteEntities) {
         if (seen.has(id)) continue;
-        // world-do.ts never sends `entityRemoved` for a mob's death (only for
-        // a player disconnecting) - see attackMob()'s doc comment there - so
-        // a mob silently dropping out of `entities` IS the death signal,
-        // since this server has no despawn/interest-management logic that
-        // would otherwise also drop one out of range.
-        if (!op.playerModel) playMobSound(soundManager, op.kind as MobKind, 'death', 0.8);
+        // Dropping out of `entities` means gone for good. The death CUE isn't
+        // here any more: the server now announces a kill up front by flagging
+        // the mob `dying` and keeping it in the snapshot while it topples, so
+        // the sound fires at the moment of the kill (above) instead of a beat
+        // later when the body is finally removed.
         removeEntityAvatar(op);
         remoteEntities.delete(id);
+      }
+
+      syncArrows(msg.arrows);
+
+      // --- ground items: same add/update/remove-by-absence pass as entities above ---
+      const seenItems = new Set<number>();
+      for (const snap of msg.droppedItems) {
+        seenItems.add(snap.entityId);
+        const existing = groundItems.get(snap.entityId);
+        if (!existing) { addGroundItem(snap); continue; }
+        existing.anchor.position.set(snap.pos.x, snap.pos.y, snap.pos.z);
+      }
+      for (const [entityId, item] of [...groundItems]) {
+        if (seenItems.has(entityId)) continue;
+        // Dropping out of the list means picked up or despawned. There's no
+        // protocol event saying which (adding one just to drive a sound isn't
+        // worth a message type), but the distinction that matters here is
+        // only "was it MY pickup" - and that's answerable locally: an item
+        // that vanished within arm's reach of this player was vacuumed up by
+        // them, one that vanished across the map was someone else's or a
+        // despawn. PICKUP_RANGE is 1.5 server-side; 2 leaves a little slack
+        // for the lag between the snapshot that moved us and this one.
+        if (item.anchor.position.distanceTo(camera.position) < 2) soundManager.playOne('player/Pop', 0.4);
+        removeGroundItem(entityId);
       }
     },
     onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId),
@@ -972,16 +1441,35 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       playerSkins.set(playerId, skin);
       if (remoteEntities.has(playerId)) applySkinWhenReady(playerId, skin);
     },
+    onDied: (killedBy) => {
+      isDead = true;
+      keys.clear();       // whatever was held down shouldn't still be pressed on respawn
+      bowDrawStart = null; // dying mid-draw must not fire the moment they come back
+      deathCause.textContent = killedBy ? `Slain by ${killedBy}` : '';
+      deathEl.hidden = false;
+      document.exitPointerLock();
+    },
     onDayTime: (elapsed) => { clientDayTime = elapsed; },
     onInventoryUpdate: (slots, selectedIndex) => {
       inventorySlots = slots;
       selectedSlotIndex = selectedIndex;
       renderHotbar();
       if (backpackOpen) renderBackpack();
-    },
-    onCraftableRecipes: (recipes) => {
-      craftableRecipes = recipes;
       if (craftMenuOpen) renderCraftMenu();
+    },
+    // The server still offers the older "craft straight from a recipe index"
+    // shortcut, but this client drives the real grid instead, so there's
+    // nothing to do with the affordable-recipe list any more.
+    onCraftableRecipes: () => {},
+    onCraftGridState: (side, inputs, output) => {
+      craftSide = side;
+      craftInputs = inputs;
+      craftOutput = output;
+      if (craftMenuOpen) renderCraftMenu();
+    },
+    onCraftGridClosed: () => {
+      craftInputs = [];
+      craftOutput = createEmptySlot();
     },
     onFurnaceState: (x, y, z, state) => {
       if (furnacePos && furnacePos.x === x && furnacePos.y === y && furnacePos.z === z) renderFurnace(state);
@@ -994,6 +1482,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   function sendInput(now: number): void {
     if (now - lastSend < SEND_INTERVAL_MS) return;
     lastSend = now;
+    if (isDead) return; // the server ignores a dead player's input anyway; not sending it keeps the corpse from "walking" the moment they respawn
     let moveX = touchMoveX, moveZ = touchMoveZ;
     if (keys.has('KeyW')) moveZ -= 1;
     if (keys.has('KeyS')) moveZ += 1;
@@ -1045,8 +1534,17 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     const delta = lastFrameTime === 0 ? 0 : Math.min((now - lastFrameTime) / 1000, 0.1);
     lastFrameTime = now;
     for (const entity of remoteEntities.values()) updateRemoteAnimation(entity, delta);
+    animateGroundItems(delta);
+    particles?.update(delta, camera);
+    smokeParticles.update(delta);
+    updateChewing(delta);
+    ambient.update(camera.position, delta);
     clientDayTime += delta;
     applyDayNightState(clientDayTime, delta);
+    // After the day/night pass, so surfacing restores the sky for the CURRENT
+    // time of day rather than a fixed daytime blue - and so `submerged` is
+    // fresh for the next frame's applyDayNightState guard.
+    submerged = underwater.update(currentSkyColor).isUnderwater;
     for (let i = 0; i < RELIGHT_CHUNKS_PER_FRAME && relightQueue.length > 0; i++) {
       chunks.get(relightQueue.shift()!)?.rebuildDirty();
     }

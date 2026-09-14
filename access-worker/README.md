@@ -75,3 +75,32 @@ Nothing here is access-gate-specific at the infrastructure level - the same
 Cloudflare account/Worker project is where a multiplayer relay would live
 later (Durable Objects support WebSockets directly). Standing this up now
 isn't a detour from multiplayer, it's the first piece of it.
+
+## AUTH_SECRET: el secreto compartido con el world server
+
+El login no solo devuelve el nombre de usuario: también **firma un token**
+(`src/net/auth-token.ts`) que prueba quién es esa persona. El world server lo
+verifica al entrar a un mundo y saca el nombre del jugador de adentro del
+token, en vez de creerle al cliente.
+
+Por qué importa: el guardado de cada jugador (inventario, posición) se keyea
+por su nombre. Sin token, cualquiera que abriera un WebSocket crudo y
+escribiera el nombre de otro heredaba sus cosas. Que el campo no se pueda
+editar en la interfaz no alcanza — el servidor tiene que poder verificarlo.
+
+Los dos workers necesitan **el mismo valor**:
+
+```bash
+# generá uno al azar, por ejemplo:
+openssl rand -base64 32
+
+cd access-worker && npx wrangler secret put AUTH_SECRET
+cd ../world-server && npx wrangler secret put AUTH_SECRET
+```
+
+Si falta, el sistema falla hacia el lado seguro: el access worker no emite
+token y el world server rechaza todos los joins con un mensaje que lo explica.
+Nadie queda con acceso sin identidad verificada.
+
+Para `wrangler dev` local, poné `AUTH_SECRET` en un `.dev.vars` de cada worker
+(el mismo valor en los dos). No lo commitees.

@@ -11,13 +11,13 @@ import { updateAI, type MobAiDeps } from './mob-ai';
 export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie' | 'skeleton';
 export type MobSpec = QuadrupedSpec | BipedSpec;
 
-/** Biped mobs (rendered/animated via BipedMobModel) - zombie and skeleton today. */
-function isBipedKind(kind: MobKind): boolean {
+/** Biped mobs (rendered/animated via BipedMobModel) - zombie and skeleton today. Exported so the multiplayer client picks the same model class per kind instead of keeping its own copy of this list, which would silently go stale the day a third biped is added. */
+export function isBipedKind(kind: MobKind): boolean {
   return kind === 'zombie' || kind === 'skeleton';
 }
 
 /** Common surface both MobModel (quadruped) and BipedMobModel (zombie) expose - all MobManager needs. */
-type AnyMobModel = {
+export type AnyMobModel = {
   getGroup(): THREE.Group;
   setWalking(walking: boolean): void;
   setLightLevel(level01: number): void;

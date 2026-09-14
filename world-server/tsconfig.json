@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "../src/net/protocol.ts"]
+  "include": ["src", "../src/net/protocol.ts", "../src/net/auth-token.ts"]
 }

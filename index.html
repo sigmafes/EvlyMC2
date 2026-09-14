@@ -59,7 +59,7 @@
           </label>
           <label class="access-gate-row" for="mp-player-name">
             <span>Name</span>
-            <input id="mp-player-name" type="text" maxlength="16" autocomplete="off" spellcheck="false" />
+            <input id="mp-player-name" type="text" maxlength="16" autocomplete="off" spellcheck="false" disabled />
           </label>
           <button class="mc-button" type="submit"><span>Connect</span></button>
           <button class="mc-button" type="button" id="multiplayer-connect-cancel"><span>Back</span></button>
@@ -70,6 +70,7 @@
     <div id="mp-crosshair" hidden aria-hidden="true"></div>
     <div id="mp-hint" hidden>Multiplayer (server-authoritative preview) - Esc to disconnect</div>
     <div id="mp-health" hidden></div>
+    <div id="mp-air" hidden></div>
     <section id="intro" hidden>
       <div id="intro-bg"></div>
       <video id="intro-video" playsinline></video>

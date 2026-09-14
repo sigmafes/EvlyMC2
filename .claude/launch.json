@@ -18,6 +18,17 @@
         "preview"
       ],
       "port": 4173
+    },
+    {
+      "name": "evlymc-world-server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "world-server",
+        "run",
+        "dev"
+      ],
+      "port": 8787
     }
   ]
 }

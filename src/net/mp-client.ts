@@ -13,6 +13,9 @@ export type MpClientHandlers = {
   onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number) => void;
   onCraftableRecipes: (recipes: { index: number; out: { id: number; count: number } }[]) => void;
   onFurnaceState: (x: number, y: number, z: number, state: FurnaceState) => void;
+  onCraftGridState: (side: 2 | 3, inputs: InventorySlot[], output: InventorySlot) => void;
+  onCraftGridClosed: () => void;
+  onDied: (killedBy?: string) => void;
   onChat: (from: string, text: string) => void;
   onClose: (reason: string) => void;
 };
@@ -26,13 +29,14 @@ export class MpClient {
   private ws: WebSocket | null = null;
   private closedByUs = false;
 
-  connect(serverUrl: string, worldId: string, playerName: string, handlers: MpClientHandlers, skin?: string | null): void {
+  /** `token` is the signed proof of which account this is (access-gate.ts's loadPlayToken) - the server reads the player's name out of it, so there's no name to pass. */
+  connect(serverUrl: string, worldId: string, token: string, handlers: MpClientHandlers, skin?: string | null): void {
     const ws = new WebSocket(serverUrl);
     this.ws = ws;
     this.closedByUs = false;
 
     ws.addEventListener('open', () => {
-      this.send({ type: 'join', worldId, playerName, protocolVersion: PROTOCOL_VERSION, skin });
+      this.send({ type: 'join', worldId, token, protocolVersion: PROTOCOL_VERSION, skin });
     });
 
     ws.addEventListener('message', (event) => {
@@ -55,6 +59,9 @@ export class MpClient {
         case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex); break;
         case 'craftableRecipes': handlers.onCraftableRecipes(msg.recipes); break;
         case 'furnaceState': handlers.onFurnaceState(msg.x, msg.y, msg.z, msg.state); break;
+        case 'craftGridState': handlers.onCraftGridState(msg.side, msg.inputs, msg.output); break;
+        case 'craftGridClosed': handlers.onCraftGridClosed(); break;
+        case 'died': handlers.onDied(msg.killedBy); break;
         case 'chat': handlers.onChat(msg.from, msg.text); break;
         default: break; // chunkData/pong: not used by this client yet
       }

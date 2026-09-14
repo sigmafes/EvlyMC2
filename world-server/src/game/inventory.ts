@@ -34,7 +34,7 @@ export function createEmptyInventory(): InventorySlot[] {
  * table item.ts already exports (pure data, safe to import - see this
  * file's header comment) rather than inventing one.
  */
-function describeSlot(id: number): { name: string; sideTexture?: string } {
+export function describeSlot(id: number): { name: string; sideTexture?: string } {
   if (isBlock(id)) return { name: `Block ${id}` };
   const def = ITEMS[id];
   return { name: def?.name ?? 'Item', sideTexture: def?.texture };
@@ -106,8 +106,21 @@ export function removeItemsAnywhere(slots: InventorySlot[], id: number, count: n
  */
 export function moveOrMergeSlot(slots: InventorySlot[], from: number, to: number): void {
   if (from === to) return;
-  const src = slots[from];
-  const dst = slots[to];
+  moveOrMergeBetween(slots, from, slots, to);
+}
+
+/**
+ * Same move/merge rule across two DIFFERENT slot arrays - what dragging
+ * between the inventory and a crafting grid needs. `moveOrMergeSlot` is just
+ * this with the same array on both sides, so the merge-vs-swap semantics only
+ * exist in one place.
+ */
+export function moveOrMergeBetween(
+  srcSlots: InventorySlot[], from: number,
+  dstSlots: InventorySlot[], to: number,
+): void {
+  const src = srcSlots[from];
+  const dst = dstSlots[to];
   if (!src || !dst || src.id === null) return;
 
   if (dst.id === src.id) {
@@ -121,8 +134,8 @@ export function moveOrMergeSlot(slots: InventorySlot[], from: number, to: number
   }
 
   // Different items (or destination empty) - swap the two slots outright.
-  slots[from] = dst;
-  slots[to] = src;
+  srcSlots[from] = dst;
+  dstSlots[to] = src;
 }
 
 /** Removes up to `count` from `slot` in place, clearing it back to empty if that empties the stack. Returns how many were actually removed. */

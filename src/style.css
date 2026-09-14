@@ -1314,6 +1314,75 @@ body.touch #crosshair {
 }
 #mp-health[hidden] { display: none; }
 
+/* Breath bubbles, only while submerged (the server sends `air` as 0..10 - see
+   protocol.ts). Sits clear above the hotbar rather than beside the hearts,
+   which share the very bottom strip with it. */
+#mp-air {
+  position: fixed;
+  bottom: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 901;
+  font-size: 18px;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+#mp-air[hidden] { display: none; }
+
+/* Underwater tint. Separate element from singleplayer's #underwater-overlay -
+   see multiplayer-game.ts's underwaterOverlayEl comment. */
+#mp-underwater-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(18, 90, 205, 0.38);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+#mp-underwater-overlay.active { opacity: 1; }
+
+/* Burning: flames up the bottom of the screen, driven by `self.onFire` from
+   the server (protocol.ts). Same look as singleplayer's #fire-screen-overlay,
+   but a separate element - see multiplayer-game.ts's fireOverlayEl comment.
+   Sits under the HUD layers (901) so hearts/hotbar stay readable through it. */
+#mp-fire-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 34vh;
+  z-index: 900;
+  background-image: url('../textures/atlas/fire_atlas.png');
+  background-repeat: no-repeat;
+  background-position: left top;
+  image-rendering: pixelated;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+#mp-fire-overlay.active { opacity: 0.8; }
+
+/* Death screen. Sits above every other multiplayer HUD layer (all z-index
+   901) and, unlike them, DOES take pointer events - the respawn button is the
+   only way out, since the server holds the player dead until it's pressed. */
+#mp-death-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(120, 0, 0, 0.55);
+  color: #fff;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+}
+#mp-death-screen[hidden] { display: none; }
+#mp-death-screen h1 { margin: 0; font-size: 42px; }
+#mp-death-screen p { margin: 0; font-size: 16px; min-height: 1em; }
+
 /* Touch aims freeform from wherever the finger is, same reasoning as
    singleplayer's own #crosshair rule above - a fixed centre crosshair would
    be misleading once TouchControls is driving multiplayer-game.ts. */
@@ -1852,17 +1921,36 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
   background: rgba(0, 0, 0, 0.5);
 }
 #mp-craft-menu[hidden] { display: none; }
-#mp-craft-menu-grid {
+/* Real crafting grid: the cells + result on top, the player's inventory
+   underneath, so a stack can be clicked from one into the other. Column count
+   on #mp-craft-cells is set from JS since it's 2 or 3 depending on whether a
+   crafting table is open. */
+#mp-craft-menu {
+  flex-direction: column;
+  gap: 12px;
+}
+#mp-craft-top {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  max-width: 60vw;
+  align-items: center;
+  gap: 16px;
   padding: 16px;
   background: rgba(20, 20, 20, 0.85);
   border: 2px solid #000;
-  color: #fff;
-  font-size: 14px;
 }
+#mp-craft-cells {
+  display: grid;
+  gap: 4px;
+}
+#mp-craft-inventory {
+  display: grid;
+  grid-template-columns: repeat(9, auto);
+  gap: 4px;
+  padding: 16px;
+  background: rgba(20, 20, 20, 0.85);
+  border: 2px solid #000;
+}
+/* The slot currently "picked up" by the first of the two clicks. */
+#mp-craft-menu .inventory-slot.picked { outline: 2px solid #ffd700; }
 
 /* Backpack (E) - hotbar row mirrored on top, then the 27 extra slots wrap
    onto new lines below it (.backpack-row-start forces the break). */

@@ -22,7 +22,8 @@ export class AmbientSoundEngine {
 
   constructor(
     private readonly sound: SoundManager,
-    private readonly world: World,
+    /** Only getBlock is used, so the multiplayer client (which has no singleplayer `World` at all - it reads blocks straight out of its streamed chunks) can pass its own reader instead. */
+    private readonly world: Pick<World, 'getBlock'>,
   ) {}
 
   update(pos: THREE.Vector3, dt: number): void {
