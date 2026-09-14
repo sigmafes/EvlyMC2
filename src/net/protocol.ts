@@ -84,6 +84,8 @@ export type ClientMessage =
   | { type: 'placeBlock'; x: number; y: number; z: number; blockId: BlockId; face: number }
   | { type: 'selectSlot'; index: number }
   | { type: 'useItem'; slotIndex: number }
+  /** Q - drops the whole stack currently in the selected hotbar slot. No world item entity yet (see world-do.ts's dropItem handler doc comment) - the stack just leaves the inventory. */
+  | { type: 'dropItem' }
   | { type: 'attack'; targetId: number }
   | { type: 'shootBow'; power: number; dir: Vec3 }
   | { type: 'chat'; text: string }
@@ -127,7 +129,7 @@ export type ServerMessage =
 export function isClientMessageType(type: string): type is ClientMessage['type'] {
   return (
     [
-      'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem',
+      'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem',
       'attack', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);

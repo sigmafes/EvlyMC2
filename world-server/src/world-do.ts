@@ -11,6 +11,10 @@ import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
 import type { MobKind } from './game/mob-manager';
 import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from './game/day-night-math';
+import { createEmptyInventory, addToInventory, removeFromSlot } from './game/inventory';
+import { getDrops } from '../../src/drops';
+import { isBlock } from '../../src/item';
+import type { InventorySlot } from '../../src/inventory';
 
 export interface Env {
   WORLD_DO: DurableObjectNamespace;
@@ -44,6 +48,9 @@ type Session = {
   health: number;
   /** The skin PNG (data: URL) this player joined with, or null for the built-in default - see onJoin. */
   skin: string | null;
+  /** Server-authoritative inventory - see game/inventory.ts's doc comment for why it's a hand-rolled minimal helper set instead of importing src/inventory.ts's own (DOM-heavy) Inventory class. */
+  inventory: InventorySlot[];
+  selectedSlot: number;
 };
 
 /**
@@ -191,10 +198,23 @@ export class WorldDO implements DurableObject {
         session.physics.setSneaking(msg.sneaking);
         break;
       case 'breakBlock':
-        this.setBlock(msg.x, msg.y, msg.z, BlockId.AIR);
+        this.handleBreakBlock(session, msg.x, msg.y, msg.z);
         break;
       case 'placeBlock':
-        this.setBlock(msg.x, msg.y, msg.z, msg.blockId);
+        this.handlePlaceBlock(session, msg.x, msg.y, msg.z);
+        break;
+      case 'selectSlot':
+        if (msg.index >= 0 && msg.index < session.inventory.length) {
+          session.selectedSlot = msg.index;
+          this.sendInventory(session);
+        }
+        break;
+      case 'dropItem':
+        // No world item entity yet - the stack just leaves the inventory
+        // (see protocol.ts's dropItem doc comment). A real follow-up would
+        // spawn a pickable dropped-item entity at the player's position.
+        removeFromSlot(session.inventory[session.selectedSlot], Infinity);
+        this.sendInventory(session);
         break;
       case 'chat':
         this.broadcast({ type: 'chat', from: session.name, text: msg.text });
@@ -206,13 +226,43 @@ export class WorldDO implements DurableObject {
         // needing a separate protocol field for it.
         if (msg.targetId < 0) this.attackMob(session, msg.targetId);
         break;
-      // 'selectSlot' / 'useItem' / 'shootBow' / 'ping': inventory and bow
-      // combat are follow-up work (see the class doc comment) - accepted
+      // 'useItem' / 'shootBow' / 'ping': eating (needs a hunger system) and
+      // bow combat are follow-up work (see the class doc comment) - accepted
       // here so a client sending them doesn't error, but intentionally not
       // acted on yet.
       default:
         break;
     }
+  }
+
+  /** Item drop rolled from getDrops() (same table singleplayer's interaction.ts uses) always harvests for now - no tool/harvest-level gating server-side yet, same "plain fixed punch" scope as PLAYER_MELEE_DAMAGE. */
+  private handleBreakBlock(session: Session, x: number, y: number, z: number): void {
+    const brokenId = this.getBlockAt(x, y, z);
+    this.setBlock(x, y, z, BlockId.AIR);
+    if (brokenId === BlockId.AIR) return;
+    for (const drop of getDrops(brokenId, true)) {
+      addToInventory(session.inventory, drop.id, drop.count);
+    }
+    this.sendInventory(session);
+  }
+
+  /**
+   * Places whatever block is in the player's currently SELECTED slot,
+   * ignoring any blockId the client's placeBlock message claims - the
+   * inventory (server-held) is what's actually authoritative on what a
+   * player has to place, not a value a modified client could just lie
+   * about. No-op (silently) if the slot is empty or not a block.
+   */
+  private handlePlaceBlock(session: Session, x: number, y: number, z: number): void {
+    const slot = session.inventory[session.selectedSlot];
+    if (slot.id === null || !isBlock(slot.id)) return;
+    this.setBlock(x, y, z, slot.id);
+    removeFromSlot(slot, 1);
+    this.sendInventory(session);
+  }
+
+  private sendInventory(session: Session): void {
+    this.send(session.ws, { type: 'inventoryUpdate', slots: session.inventory, selectedIndex: session.selectedSlot });
   }
 
   private onJoin(ws: WebSocket, msg: Extract<ClientMessage, { type: 'join' }>): void {
@@ -260,10 +310,13 @@ export class WorldDO implements DurableObject {
       lastSeq: 0,
       health: PLAYER_MAX_HEALTH,
       skin,
+      inventory: createEmptyInventory(),
+      selectedSlot: 0,
     };
     this.sessions.set(ws, session);
 
     this.send(ws, { type: 'welcome', playerId: id, worldSeed: this.worldSeed, spawn, tickRateHz: TICK_HZ, dayTime: this.dayNightElapsed });
+    this.sendInventory(session);
     // Catch this client up on every edit made before it connected - our
     // placeholder world has no chunk system yet (see the class doc comment),
     // so there's no chunkData to send; replaying each edit as its own
@@ -413,6 +466,13 @@ export class WorldDO implements DurableObject {
     const edit = this.edits.get(`${x},${y},${z}`);
     if (edit !== undefined) return edit !== BlockId.AIR;
     return this.terrain!.isSolid(x, y, z);
+  }
+
+  /** The actual BlockId at a position - edits first, generated terrain otherwise. Same priority as isSolidAt/isWaterAt, just returning the id instead of a boolean (handleBreakBlock needs to know exactly what was broken to roll the right drop). */
+  private getBlockAt(x: number, y: number, z: number): BlockId {
+    const edit = this.edits.get(`${x},${y},${z}`);
+    if (edit !== undefined) return edit;
+    return this.terrain!.getBlock(x, y, z);
   }
 
   /** Edits take priority over generated terrain, same as isSolidAt - so a player who fills in a lake (or digs a new pool) gets correct swimming behaviour there too, not just on untouched terrain. */

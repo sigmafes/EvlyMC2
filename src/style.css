@@ -1823,6 +1823,22 @@ body.touch #touch-gameplay[hidden] { display: none; }
 body.mp-touch.touch #touch-look { z-index: 950; }
 body.mp-touch.touch #touch-ui { z-index: 951; }
 
+/* Multiplayer hotbar - same look as #inventory (.inventory-slot etc, already
+   generic) but its own container/position since #inventory itself lives
+   inside #game-shell, which multiplayer-game.ts hides entirely. */
+#mp-hotbar {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  z-index: 901;
+  display: flex;
+  transform: translateX(-50%);
+  filter: drop-shadow(3px 3px 0 rgba(0, 0, 0, .55));
+}
+/* Display-only for now (no drag/drop backpack GUI yet server-side) - a
+   disabled <button> would otherwise render dimmed/desaturated by default. */
+#mp-hotbar .inventory-slot:disabled { opacity: 1; filter: none; }
+
 body.touch .touch-btn {
   pointer-events: auto;
   touch-action: none;

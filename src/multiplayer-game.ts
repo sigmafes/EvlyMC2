@@ -13,6 +13,7 @@ import { SoundManager } from './sound-manager';
 import { getBlockSound } from './block-sounds';
 import { playMobSound } from './mob-sounds';
 import type { MobKind } from './mob-manager';
+import { renderSlot, createEmptySlot, HOTBAR_SIZE, type InventorySlot } from './inventory';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot } from './net/protocol';
 
@@ -59,7 +60,6 @@ import type { EntitySnapshot } from './net/protocol';
 const TICK_HZ = 20;
 const SEND_INTERVAL_MS = 1000 / TICK_HZ;
 const MOUSE_SENSITIVITY = 0.0022;
-const PLACE_BLOCK_ID = BlockId.STONE;
 const REACH = 5;
 const VIEW_RADIUS_CHUNKS = 3; // 7x7 chunks (112x112 blocks) around the player, kept loaded
 const UNLOAD_MARGIN_CHUNKS = 1; // a chunk isn't unloaded until it's this far PAST the view radius, so walking back and forth right at the edge doesn't thrash load/unload every frame
@@ -391,16 +391,48 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:901;';
   document.body.appendChild(labelLayer);
 
+  // --- Hotbar: server is authoritative (world-do.ts's Session.inventory) -
+  // this just renders whatever `inventoryUpdate` last said and lets the
+  // player pick a slot (number keys) or drop it (Q). Reuses inventory.ts's
+  // own renderSlot()/CSS classes (.inventory-slot/.inventory-block/etc,
+  // already generic - not scoped to singleplayer's #game-shell) instead of
+  // reinventing slot rendering, and only the 9 hotbar slots for now - the
+  // full backpack/crafting screen (E) is a separate, bigger follow-up.
+  const hotbarEl = document.createElement('div');
+  hotbarEl.id = 'mp-hotbar';
+  const hotbarSlotEls: HTMLButtonElement[] = [];
+  for (let i = 0; i < HOTBAR_SIZE; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'inventory-slot';
+    btn.disabled = true; // display-only for now - no drag/drop GUI yet, see the comment above
+    hotbarEl.appendChild(btn);
+    hotbarSlotEls.push(btn);
+  }
+  document.body.appendChild(hotbarEl);
+  let inventorySlots: InventorySlot[] = Array.from({ length: HOTBAR_SIZE }, createEmptySlot);
+  let selectedSlotIndex = 0;
+  function renderHotbar(): void {
+    for (let i = 0; i < HOTBAR_SIZE; i++) {
+      renderSlot(hotbarSlotEls[i], inventorySlots[i] ?? createEmptySlot());
+      hotbarSlotEls[i].classList.toggle('selected', i === selectedSlotIndex);
+    }
+  }
+  renderHotbar();
+
   let yaw = 0;
   let pitch = 0;
   let seq = 0;
   let running = true;
   const lastServerPos = new THREE.Vector3(0, 2, 0);
 
+  const DIGIT_CODES = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'];
   const keys = new Set<string>();
   const onKeyDown = (e: KeyboardEvent) => {
     keys.add(e.code);
     if (e.code === 'Escape') disconnect('Disconnected');
+    const digitIndex = DIGIT_CODES.indexOf(e.code);
+    if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
+    if (e.code === 'KeyQ') client.send({ type: 'dropItem' });
   };
   const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
   document.addEventListener('keydown', onKeyDown);
@@ -457,8 +489,15 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       const b = hit.point.clone().addScaledVector(normal, -0.01).round();
       client.send({ type: 'breakBlock', x: b.x, y: b.y, z: b.z });
     } else {
+      // The server ignores this blockId and places whatever is actually in
+      // the player's selected inventory slot (world-do.ts's handlePlaceBlock
+      // doc comment) - sent here only because the protocol message still
+      // needs some number in that field. No-op silently if the slot's empty
+      // or holds a non-block item.
+      const heldId = inventorySlots[selectedSlotIndex]?.id;
+      if (heldId === null || heldId === undefined) return false;
       const p = hit.point.clone().addScaledVector(normal, 0.5).round();
-      client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: PLACE_BLOCK_ID, face: 0 });
+      client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: heldId, face: 0 });
     }
     return true;
   }
@@ -665,6 +704,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     healthEl.hidden = true;
     gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
+    hotbarEl.remove();
     for (const [, p] of remoteEntities) removeEntityAvatar(p);
     // Chunk geometries are real GPU resources (BufferGeometry) - renderer.dispose()
     // below doesn't free those on its own, so a reconnect in the same page
@@ -754,6 +794,11 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       if (remoteEntities.has(playerId)) applySkinWhenReady(playerId, skin);
     },
     onDayTime: (elapsed) => { clientDayTime = elapsed; },
+    onInventoryUpdate: (slots, selectedIndex) => {
+      inventorySlots = slots.slice(0, HOTBAR_SIZE); // backpack slots (9..35) aren't rendered yet - no GUI for them client-side
+      selectedSlotIndex = selectedIndex;
+      renderHotbar();
+    },
     onChat: (from, text) => console.log(`[chat] ${from}: ${text}`),
     onClose: (reason) => disconnect(reason),
   }, loadPlayerSkinDataUrl());

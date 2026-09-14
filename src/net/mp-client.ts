@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION, isServerMessageType, type ClientMessage, type ServerMessage } from './protocol';
+import type { InventorySlot } from '../inventory';
 
 export type MpClientHandlers = {
   onWelcome: (msg: Extract<ServerMessage, { type: 'welcome' }>) => void;
@@ -8,6 +9,7 @@ export type MpClientHandlers = {
   onEntityRemoved: (id: number) => void;
   onPlayerSkin: (playerId: number, skin: string | null) => void;
   onDayTime: (elapsed: number) => void;
+  onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number) => void;
   onChat: (from: string, text: string) => void;
   onClose: (reason: string) => void;
 };
@@ -47,8 +49,9 @@ export class MpClient {
         case 'entityRemoved': handlers.onEntityRemoved(msg.id); break;
         case 'playerSkin': handlers.onPlayerSkin(msg.playerId, msg.skin); break;
         case 'dayTime': handlers.onDayTime(msg.elapsed); break;
+        case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex); break;
         case 'chat': handlers.onChat(msg.from, msg.text); break;
-        default: break; // chunkData/inventoryUpdate/pong: not used by this first client yet
+        default: break; // chunkData/pong: not used by this client yet
       }
     });
 
