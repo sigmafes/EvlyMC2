@@ -584,7 +584,11 @@ function animate() {
   }
 
   // Simulation and world updates
-  const loopState = gameLoop.update(delta, clock.elapsedTime);
+  const loopState = gameLoop.simulate(delta, clock.elapsedTime);
+  // Frustum culling - camera-dependent, must reflect this exact frame's view
+  // (see updateView()'s doc comment), so it's called separately every
+  // rendered frame rather than folded into simulate().
+  gameLoop.updateView();
   skyRenderer.update(loopState.dayNight.timeOfDay, delta);
 
   // --- Damage: fall on landing, plus lava/fire contact over time. ---

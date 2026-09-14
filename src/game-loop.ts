@@ -64,7 +64,17 @@ export class GameLoop {
     private readonly underwaterManager: UnderwaterManager,
   ) {}
 
-  update(delta: number, elapsedTime: number): GameLoopState {
+  /**
+   * World/gameplay simulation - chunk streaming, light, water/fire spread,
+   * day-night, player physics. Everything here is "world state" a future
+   * multiplayer server would want to own and run independent of any
+   * particular client's camera/framerate (see updateView() below for the
+   * one piece that genuinely isn't: frustum culling). Split out of the old
+   * single update() so the two can eventually run at different cadences -
+   * simulate() at a fixed tick rate, updateView() once per rendered frame -
+   * without re-deciding what belongs in which bucket at that point.
+   */
+  simulate(delta: number, elapsedTime: number): GameLoopState {
     // Cap delta to prevent spiral of death
     const cappedDelta = Math.min(delta, 0.05);
     this.frameBudget.update(delta * 1000); // delta is the PREVIOUS frame's duration (main.ts's clock.getDelta())
@@ -116,11 +126,6 @@ export class GameLoop {
     const underwaterState = this.underwaterManager.update(skyColor);
     this.pauseMenu.setUnderwater(underwaterState.isUnderwater);
 
-    // Chunk culling
-    for (const chunk of this.world.chunks.values()) {
-      chunk.updateCulling(this.camera, 96);
-    }
-
     return {
       dayNight: dayNightState,
       underwater: underwaterState,
@@ -134,5 +139,20 @@ export class GameLoop {
         dirtySubchunks: this.world.dirtySubchunks,
       },
     };
+  }
+
+  /**
+   * The one piece of the old update() that's genuinely render-only: which
+   * chunks are inside the CURRENT camera's frustum. Unlike everything in
+   * simulate(), this has no meaning to a server (no camera there) and would
+   * actively hurt correctness if it ran at a slower fixed tick instead of
+   * every rendered frame - turning your view between ticks would show stale
+   * culling for a moment. Call once per rendered frame, independent of
+   * however often simulate() ends up running.
+   */
+  updateView(): void {
+    for (const chunk of this.world.chunks.values()) {
+      chunk.updateCulling(this.camera, 96);
+    }
   }
 }
