@@ -46,6 +46,7 @@ type Arrow = {
   vel: THREE.Vector3;
   fromPlayer: boolean;
   crit: boolean;
+  fixedDamage?: number;
   embedded: boolean;
   embedTimer: number;
 };
@@ -61,6 +62,9 @@ const ARROW_THICKNESS = ARROW_LENGTH * (5 / 16); // preserves the 16:5 texture a
 
 let crossGeometry: THREE.BufferGeometry | null = null;
 let arrowMaterial: THREE.MeshBasicMaterial | null = null;
+let tailBarGeoH: THREE.PlaneGeometry | null = null;
+let tailBarGeoV: THREE.PlaneGeometry | null = null;
+let tailMaterial: THREE.MeshBasicMaterial | null = null;
 let hitboxGeo: THREE.BufferGeometry | null = null;
 let hitboxMat: THREE.LineBasicMaterial | null = null;
 
@@ -85,11 +89,36 @@ function getArrowMesh(): THREE.Group {
     arrowMaterial.userData.baseColor = new THREE.Color(0xffffff);
   }
 
+  // Small white "+" marker right at the fletching end (local +Z - the back,
+  // since rotateY above sent the front/arrowhead to -Z) - flat against the
+  // Z axis (no rotateY, unlike the shaft crosses) so it faces straight back
+  // at whoever just fired it, the same angle you're watching the arrow fly
+  // away from you.
+  if (!tailBarGeoH) {
+    const armLen = ARROW_THICKNESS * 2.2;
+    const armWidth = ARROW_THICKNESS * 0.4;
+    tailBarGeoH = new THREE.PlaneGeometry(armLen, armWidth);
+    tailBarGeoH.userData.shared = true;
+    tailBarGeoV = new THREE.PlaneGeometry(armWidth, armLen);
+    tailBarGeoV.userData.shared = true;
+  }
+  if (!tailMaterial) {
+    tailMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+  }
+
   const group = new THREE.Group();
   group.add(new THREE.Mesh(crossGeometry, arrowMaterial));
   const crossB = new THREE.Mesh(crossGeometry, arrowMaterial);
   crossB.rotation.z = Math.PI / 2; // crossed with the first fin, forming the "+"
   group.add(crossB);
+
+  const tailZ = ARROW_LENGTH / 2 - 0.02; // just shy of the very tip, avoids z-fighting with the fletching texture
+  const tailH = new THREE.Mesh(tailBarGeoH, tailMaterial);
+  tailH.position.z = tailZ;
+  const tailV = new THREE.Mesh(tailBarGeoV!, tailMaterial);
+  tailV.position.z = tailZ;
+  group.add(tailH, tailV);
+
   return group;
 }
 
@@ -105,6 +134,14 @@ export type ArrowSpawnOptions = {
   fromPlayer: boolean;
   /** LCE dmg = ceil(velocityMagnitude * baseDamage); crit adds a random bonus on top. */
   crit?: boolean;
+  /**
+   * Damage this arrow deals, independent of its travel speed - use this for
+   * a mob's shot so buffing its speed/range (SKELETON_SHOT_POWER in
+   * mob-ai.ts) doesn't also buff its damage through the velocity-based
+   * formula below. Omit to use the normal speed-derived damage (the
+   * player's own shots, where more draw = more damage is the point).
+   */
+  fixedDamage?: number;
 };
 
 export type ArrowProjectilesDeps = {
@@ -152,6 +189,7 @@ export class ArrowProjectiles {
       vel: vel.clone(),
       fromPlayer: opts.fromPlayer,
       crit: opts.crit ?? false,
+      fixedDamage: opts.fixedDamage,
       embedded: false,
       embedTimer: 0,
     });
@@ -225,7 +263,7 @@ export class ArrowProjectiles {
     // original blocks/TICK "power" - undo the scale here so damage doesn't
     // come out ~15x too high (a full-power hit was one-shotting the player).
     const speed = a.vel.length() / POWER_TO_SPEED;
-    const dmgBase = Math.ceil(speed * BASE_DAMAGE);
+    const dmgBase = a.fixedDamage ?? Math.ceil(speed * BASE_DAMAGE);
     const dmg = a.crit ? dmgBase + Math.floor(Math.random() * (dmgBase / 2 + 2)) : dmgBase;
 
     if (a.fromPlayer) {

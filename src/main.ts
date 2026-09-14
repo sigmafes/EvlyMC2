@@ -344,7 +344,9 @@ const mobManager = new MobManager(
     const dist = dir.length();
     if (dist < 1e-6) return;
     dir.normalize().multiplyScalar(powerToSpeed(SKELETON_SHOT_POWER));
-    arrowProjectiles.spawn(fromPos, dir, { fromPlayer: false });
+    // Fixed damage, independent of the shot's (buffed) speed - see
+    // ArrowSpawnOptions.fixedDamage's doc comment.
+    arrowProjectiles.spawn(fromPos, dir, { fromPlayer: false, fixedDamage: 4 });
   },
 );
 hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);
@@ -384,7 +386,10 @@ const playerHealth = new PlayerHealth(
   () => {
     deathScreen.hidden = false;
     document.exitPointerLock();
-    ambient.stopAll();
+    // Dying shouldn't silence the game - ambience/music keep playing through
+    // the death screen (previously ambient.stopAll() here cut fire/water/lava
+    // loop sounds, and worldMusic.setPaused() below used to also check
+    // playerHealth.isDead, pausing music too).
     persistPlayer();
     // Same death treatment as mobs (mob-manager.ts): topple + red tint, then
     // a smoke burst - shown in forced third-person while the camera slowly
@@ -551,7 +556,7 @@ function animate() {
   // a single slow frame.
   const delta = Math.min(clock.getDelta(), 0.1);
 
-  worldMusic.setPaused(pauseMenu.isPaused || playerHealth.isDead);
+  worldMusic.setPaused(pauseMenu.isPaused);
 
   if (touchControls) {
     const menuOpen = inventoryOpen || pauseMenu.isPaused || playerHealth.isDead;

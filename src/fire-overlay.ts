@@ -45,10 +45,16 @@ function getFireMaterial(): THREE.MeshBasicMaterial {
     // stacked on top of the body's own 25%-orange fire tint just fused the
     // two into one indistinct orange blob instead of the flame reading as
     // its own distinct thing over the body.
+    // NoBlending (not the default alpha-blend) so the flame draws as flat,
+    // unmixed color wherever it passes alphaTest - normal blending was
+    // optically mixing the flame with whatever's directly behind it (namely
+    // the body's own orange fire tint), reading as "the flame is affected by
+    // the tint" even though nothing was touching its material's color.
     sharedMaterial = new THREE.MeshBasicMaterial({
       map: getFireTexture(),
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.75,
+      blending: THREE.NoBlending,
       alphaTest: 0.05,
       depthWrite: false,
       side: THREE.DoubleSide,
