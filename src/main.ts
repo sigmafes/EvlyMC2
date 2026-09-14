@@ -24,6 +24,7 @@ import { DroppedItems } from './dropped-items';
 import { FurnaceManager } from './furnace';
 import { MobManager } from './mob-manager';
 import { ArrowProjectiles, powerToSpeed } from './arrow-projectiles';
+import { SKELETON_SHOT_POWER } from './mob-ai';
 import { ItemId } from './item';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
@@ -334,14 +335,13 @@ const mobManager = new MobManager(
   hurtPlayerFromMob,
   () => player.state.position,
   (fromPos, targetPos) => {
-    // Skeleton's fixed LCE shot power (ArrowAttackGoal: 1.60) *2, matching the
-    // same range/force buff given to the player's own full-draw shot
-    // (power*4 instead of power*2 in shootBowFn below) - same power->speed
-    // scale either way (arrow-projectiles.ts's powerToSpeed).
+    // SKELETON_SHOT_POWER (mob-ai.ts) is the single source of truth for the
+    // skeleton's shot speed - mob-ai.ts's arc-compensation math assumes this
+    // exact value too, so they can't drift apart.
     const dir = targetPos.clone().sub(fromPos);
     const dist = dir.length();
     if (dist < 1e-6) return;
-    dir.normalize().multiplyScalar(powerToSpeed(3.2));
+    dir.normalize().multiplyScalar(powerToSpeed(SKELETON_SHOT_POWER));
     arrowProjectiles.spawn(fromPos, dir, { fromPlayer: false });
   },
 );
@@ -437,6 +437,14 @@ function respawn() {
   deathScreen.hidden = true;
   player.setMovementLocked(false);
   lockPointer(canvas);
+  // Dying while on fire must not carry the burn into the fresh spawn - clear
+  // the after-burn counter/timer, not just the visual.
+  lavaTimer = 0;
+  fireTimer = 0;
+  playerFireTicksLeft = 0;
+  playerFireTickTimer = 0;
+  playerOnFire = false;
+  playerModel.setOnFire(false);
 }
 
 document.querySelector<HTMLButtonElement>('#death-respawn')!.addEventListener('click', () => {

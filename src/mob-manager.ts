@@ -45,9 +45,9 @@ const ri = (min: number, max: number) => min + Math.floor(Math.random() * (max -
  */
 const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpeedMult: number; radius: number; height: number }> = {
   // Animals: 0.9x0.9 footprint, 1.3 tall (radius is the half-width overlapsSolid uses).
-  pig: { maxHealth: 10, walkSpeed: 2.3, fleeSpeedMult: 1.6, radius: 0.45, height: 1.3 },
-  cow: { maxHealth: 10, walkSpeed: 2.0, fleeSpeedMult: 1.6, radius: 0.45, height: 1.3 },
-  sheep: { maxHealth: 8, walkSpeed: 2.0, fleeSpeedMult: 1.6, radius: 0.45, height: 1.3 },
+  pig: { maxHealth: 10, walkSpeed: 2.3, fleeSpeedMult: 3.2, radius: 0.45, height: 1.3 },
+  cow: { maxHealth: 10, walkSpeed: 2.0, fleeSpeedMult: 3.2, radius: 0.45, height: 1.3 },
+  sheep: { maxHealth: 8, walkSpeed: 2.0, fleeSpeedMult: 3.2, radius: 0.45, height: 1.3 },
   // LCE zombie: 20 HP (10 hearts). No flee behaviour, fleeSpeedMult unused.
   zombie: { maxHealth: 20, walkSpeed: 2.3, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
   // LCE skeleton: 20 HP, runSpeed 0.25 (a bit slower than the zombie's 0.3-ish
@@ -277,14 +277,21 @@ export class MobManager {
     return n;
   }
 
-  /** Nearest mob a ray from `origin` toward `dir` (normalised) hits within `maxDist`, or null. */
+  /**
+   * Nearest mob a ray from `origin` toward `dir` (normalised) hits within
+   * `maxDist`, or null. Tests the mob's full vertical hitbox (feet to head),
+   * not just a single sphere at mid-height - a lone mid-height sphere left
+   * tall mobs (zombie/skeleton, height 1.9) with no hit volume covering their
+   * head or legs, so shots/swings that visually connected there passed
+   * straight through. Used by both arrows (arrow-projectiles.ts) and melee
+   * (interaction.ts's hitTestMob), so this one fix covers both.
+   */
   raycastMobs(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): MobRaycastHit | null {
     let best: MobRaycastHit | null = null;
     for (const mob of this.mobs) {
       if (mob.dying) continue;
-      const center = mob.model.getGroup().position.clone();
-      center.y += mob.height / 2;
-      const hit = raySphereDistance(origin, dir, center, mob.radius);
+      const feet = mob.model.getGroup().position;
+      const hit = rayCapsuleDistance(origin, dir, feet, mob.height, mob.radius);
       if (hit !== null && hit <= maxDist && (!best || hit < best.distance)) {
         best = { mobId: mob.id, kind: mob.kind, distance: hit };
       }
@@ -293,7 +300,11 @@ export class MobManager {
   }
 
   /** Apply damage; on death, starts the death-spin animation (drops/removal happen once it finishes). Returns true if it died.
-   * `knockback` (default true) - sunlight burn ticks call this with `fromPos` equal to the mob's own position (there's no attacker), which used to fall into the degenerate-direction fallback below and shove a burning mob in a random direction; pass false to skip the shove/hop/flee entirely for damage with no real attacker. */
+   * `knockback` (default true) - fire-tick damage passes false since there's
+   * no real attacker to shove away from. This only skips the velocity
+   * shove/hop below, NOT the flee (Panic) trigger further down - a burning
+   * animal still needs to run, it just shouldn't also get flung by a knockback
+   * that doesn't correspond to a real hit. */
   damage(mobId: number, amount: number, fromPos: THREE.Vector3, knockback = true): boolean {
     const index = this.mobs.findIndex((m) => m.id === mobId);
     if (index === -1) return false;
@@ -314,27 +325,29 @@ export class MobManager {
     if (this.soundManager && this.inSoundRange(mob, fromPos)) playMobSound(this.soundManager, mob.kind, 'hurt', 0.7);
     mob.model.hurt(); // 0.2s red flash
 
-    if (!knockback) return false;
-
     const pos = mob.model.getGroup().position;
     const pushDir = new THREE.Vector2(pos.x - fromPos.x, pos.z - fromPos.z);
     if (pushDir.lengthSq() < 1e-6) pushDir.set(Math.random() - 0.5, Math.random() - 0.5);
     pushDir.normalize();
 
-    // Knockback: an instant shove away from the attacker plus a small hop,
-    // decaying over the next few frames (see updatePhysics). Every mob gets
-    // this, hostile or not - a skeleton standing its ground to shoot still
-    // needs to feel a melee hit, not just visually flash.
-    mob.velocity.x = pushDir.x * KNOCKBACK_SPEED;
-    mob.velocity.z = pushDir.y * KNOCKBACK_SPEED;
-    mob.velocity.y = KNOCKBACK_UP;
-    mob.grounded = false;
-    mob.knockbackTimer = KNOCKBACK_LOCK_DURATION;
+    if (knockback) {
+      // An instant shove away from the attacker plus a small hop, decaying
+      // over the next few frames (see updatePhysics). Every mob gets this,
+      // hostile or not - a skeleton standing its ground to shoot still needs
+      // to feel a melee hit, not just visually flash.
+      mob.velocity.x = pushDir.x * KNOCKBACK_SPEED;
+      mob.velocity.z = pushDir.y * KNOCKBACK_SPEED;
+      mob.velocity.y = KNOCKBACK_UP;
+      mob.grounded = false;
+      mob.knockbackTimer = KNOCKBACK_LOCK_DURATION;
+    }
 
     // Hostile mobs (zombie, skeleton) never flee - they keep chasing/aiming
-    // through the hit, just shoved back by the knockback above. Panic (LCE
-    // PanicGoal) only applies to passive mobs: forget whatever it was doing
-    // and start pathing to a random reachable point away from the attacker.
+    // through the hit. Panic (LCE PanicGoal) only applies to passive mobs:
+    // forget whatever it was doing and start pathing to a random reachable
+    // point away from whatever hurt it - runs regardless of `knockback` so a
+    // burning animal (fire-tick damage, knockback=false) still flees instead
+    // of standing still while it takes 8 more ticks of damage.
     if (isHostileKind(mob.kind)) return false;
 
     mob.fleeDir.set(pushDir.x, 0, pushDir.y);
@@ -541,6 +554,31 @@ function raySphereDistance(origin: THREE.Vector3, dir: THREE.Vector3, center: TH
   if (disc < 0) return null;
   const t = -b - Math.sqrt(disc);
   return t >= 0 ? t : null;
+}
+
+// How many spheres to stack along the mob's vertical axis for rayCapsuleDistance.
+// Cheap approximation of a true ray-vs-capsule test: with `radius` around
+// 0.4-0.45 and heights of 1.3-1.9, 5 evenly-spaced spheres overlap enough to
+// cover the whole column with no gaps, without writing exact capsule math.
+const CAPSULE_SAMPLES: number = 5;
+
+/**
+ * Distance along the ray to the nearest intersection with a vertical capsule
+ * spanning the mob's whole hitbox - from `feet.y + radius` up to
+ * `feet.y + height - radius` (so the rounded caps land right at the actual
+ * feet/head), radius `radius`. Returns null if the ray misses every sample.
+ */
+function rayCapsuleDistance(origin: THREE.Vector3, dir: THREE.Vector3, feet: THREE.Vector3, height: number, radius: number): number | null {
+  const bottomY = feet.y + radius;
+  const topY = feet.y + Math.max(height - radius, radius);
+  let best: number | null = null;
+  for (let i = 0; i < CAPSULE_SAMPLES; i++) {
+    const t = CAPSULE_SAMPLES === 1 ? 0 : i / (CAPSULE_SAMPLES - 1);
+    const center = new THREE.Vector3(feet.x, THREE.MathUtils.lerp(bottomY, topY, t), feet.z);
+    const hit = raySphereDistance(origin, dir, center, radius);
+    if (hit !== null && (best === null || hit < best)) best = hit;
+  }
+  return best;
 }
 
 export type { QuadrupedSpec };

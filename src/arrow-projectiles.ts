@@ -16,7 +16,8 @@ import type { SoundManager } from './sound-manager';
  * back up once it's stuck.
  */
 
-const GRAVITY = 20;          // matches dropped-items.ts's world-gravity feel
+export const ARROW_GRAVITY = 20; // matches dropped-items.ts's world-gravity feel - exported for mob-ai.ts's shot-arc compensation
+const GRAVITY = ARROW_GRAVITY;
 const DRAG = 0.99;           // per-frame-ish velocity retention while flying (LCE 0.99/tick)
 const HALF = 0.15;           // collision half-extent while flying
 const PLAYER_HIT_RADIUS = 0.6;

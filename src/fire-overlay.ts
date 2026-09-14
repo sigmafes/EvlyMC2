@@ -35,9 +35,13 @@ function getFireTexture(): THREE.Texture {
 
 function getFireMaterial(): THREE.MeshBasicMaterial {
   if (!sharedMaterial) {
+    // No baked-in color tint here (was 0xff8c33) - the flame texture's own
+    // colors are already fiery, and multiplying them by an extra orange
+    // stacked on top of the body's own 25%-orange fire tint just fused the
+    // two into one indistinct orange blob instead of the flame reading as
+    // its own distinct thing over the body.
     sharedMaterial = new THREE.MeshBasicMaterial({
       map: getFireTexture(),
-      color: 0xff8c33,
       transparent: true,
       opacity: 0.5,
       alphaTest: 0.05,
@@ -59,11 +63,15 @@ function getCrossGeometry(): THREE.PlaneGeometry {
 /**
  * Builds a "+"-cross fire overlay sized to wrap around a `radius`-wide,
  * `height`-tall hitbox, positioned so its vertical centre lines up with the
- * hitbox's centre when added as a child of a group whose own origin sits at
- * the feet (the same convention mob/player groups already use). Starts
- * hidden - toggle with the returned group's `.visible`.
+ * hitbox's centre when added as a child of a group. `feetYOffset` is where
+ * the feet actually sit relative to that group's own local Y=0 - mob groups'
+ * origin IS the feet (offset 0, the default), but the player model's group
+ * origin is at EYE level instead (player-model-geometry.ts), so its feet sit
+ * at local Y=-1.62 - passing that here is what keeps the overlay centred on
+ * the body instead of floating chest-height above the head. Starts hidden -
+ * toggle with the returned group's `.visible`.
  */
-export function createFireOverlay(radius: number, height: number): THREE.Group {
+export function createFireOverlay(radius: number, height: number, feetYOffset = 0): THREE.Group {
   const group = new THREE.Group();
   const geo = getCrossGeometry();
   const mat = getFireMaterial();
@@ -76,7 +84,7 @@ export function createFireOverlay(radius: number, height: number): THREE.Group {
   b.rotation.y = Math.PI / 2;
 
   group.add(a, b);
-  group.position.y = height / 2;
+  group.position.y = feetYOffset + height / 2;
   group.visible = false;
   group.renderOrder = 1; // draw after the body so the 50%-opacity blend reads correctly over it
   return group;

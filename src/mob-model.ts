@@ -136,7 +136,7 @@ export class MobModel {
   private static readonly HURT_FLASH_DURATION = 0.2;
   private static readonly HURT_TINT_STRENGTH = 0.75;
   private static readonly HURT_RED = new THREE.Color(1, 0, 0);
-  private static readonly FIRE_TINT_STRENGTH = 0.5;
+  private static readonly FIRE_TINT_STRENGTH = 0.25;
   private static readonly FIRE_ORANGE = new THREE.Color(1, 0.4, 0);
 
   constructor(private readonly spec: QuadrupedSpec, hitbox: { radius: number; height: number }) {
@@ -328,7 +328,7 @@ export class BipedMobModel {
   private static readonly HURT_FLASH_DURATION = 0.2;
   private static readonly HURT_TINT_STRENGTH = 0.75;
   private static readonly HURT_RED = new THREE.Color(1, 0, 0);
-  private static readonly FIRE_TINT_STRENGTH = 0.5;
+  private static readonly FIRE_TINT_STRENGTH = 0.25;
   private static readonly FIRE_ORANGE = new THREE.Color(1, 0.4, 0);
 
   constructor(private readonly spec: BipedSpec, hitbox: { radius: number; height: number }) {

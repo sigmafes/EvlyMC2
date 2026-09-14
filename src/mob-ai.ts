@@ -3,6 +3,10 @@ import { findPath } from './mob-pathfinding';
 import type { Mob } from './mob-manager';
 import { isHostileKind } from './mob-manager';
 import { followPath, applyGroundFriction, easeYawTo, moveHorizontal, TURN_RATE, type IsSolidFn, type IsWaterFn } from './mob-physics';
+import { powerToSpeed, ARROW_GRAVITY } from './arrow-projectiles';
+
+/** Skeleton's fixed shot power (LCE ArrowAttackGoal: 1.60, *2 to match the player's own full-draw range buff) - single source of truth for both the arc-compensation math below and main.ts's actual shot speed. */
+export const SKELETON_SHOT_POWER = 3.2;
 
 const PLAYER_EYE_HEIGHT = 1.62;  // player-physics.ts's standing eyeHeight - getPlayerPos() reports eyes, not feet
 const CHASE_RADIUS = 16;         // blocks - zombie notices/keeps chasing the player within this range
@@ -28,7 +32,6 @@ const RANGED_SHOT_HEIGHT_FRACTION = 0.55; // fraction of mob.height the arrow le
 const RANGED_ATTACK_RADIUS = 10;      // blocks - LCE ArrowAttackGoal attackRadiusSqr (skeleton)
 const RANGED_ATTACK_INTERVAL = 3;     // seconds between shots (LCE TICKS_PER_SECOND * 3)
 const RANGED_SIGHT_REQUIRED = 1;      // seconds of continuous line-of-sight required before the first shot (LCE seeTime >= 20 ticks)
-const ARROW_ARC_COMPENSATION = 0.18;  // extra upward aim per block of horizontal distance, offsetting the arrow's gravity drop in flight
 const RANGED_STEP_UP = 1;
 const RANGED_STEP_DOWN = 3;
 const LOS_SAMPLE_STEP = 0.5;          // blocks between line-of-sight samples
@@ -290,10 +293,15 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
       // but a straight line there still lands low: the arrow drops under
       // gravity over the flight time and nothing compensated for that, so
       // shots that started aimed at the eyes consistently landed at the legs/
-      // feet at any real distance. Lob the aim point up a bit more the
-      // farther out the shot is, same fix vanilla/LCE apply.
+      // feet at any real distance. Compensate with the actual physics of the
+      // shot instead of a flat per-block guess (the previous linear term
+      // overshot badly at any real range, reading as "shoots upward"): time
+      // of flight = horizontal distance / shot speed, and the vertical drop
+      // over that time is the standard 0.5*g*t^2 - aiming that much higher
+      // exactly cancels the drop regardless of range.
+      const t = dist / powerToSpeed(SKELETON_SHOT_POWER);
       const target = playerPos.clone();
-      target.y += dist * ARROW_ARC_COMPENSATION;
+      target.y += 0.5 * ARROW_GRAVITY * t * t;
       deps.onShootArrow?.(shotPos, target);
     }
     return true;

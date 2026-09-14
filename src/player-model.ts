@@ -81,7 +81,7 @@ export class PlayerModel {
   // flame overlay the mob models use (fire-overlay.ts).
   private onFire = false;
   private readonly fireOverlay: THREE.Group;
-  private static readonly FIRE_TINT_STRENGTH = 0.5;
+  private static readonly FIRE_TINT_STRENGTH = 0.25;
   private static readonly FIRE_ORANGE = new THREE.Color(1, 0.4, 0);
   // Death animation (same treatment as MobModel: topple over Z while
   // permanently red-tinted - see startDeath()/updateDeathAnimation()).
@@ -102,7 +102,10 @@ export class PlayerModel {
     this.parts = buildPlayerModelParts(this.group);
     this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', this.slimArms);
     this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', this.slimArms);
-    this.fireOverlay = createFireOverlay(0.35, 1.8);
+    // The player group's origin is at EYE level (see player-model-geometry.ts),
+    // not the feet like mob groups - feetYOffset=-1.62 (standing eye height)
+    // is what keeps this centred on the body instead of floating above the head.
+    this.fireOverlay = createFireOverlay(0.35, 1.8, -1.62);
     this.group.add(this.fireOverlay);
   }
 
