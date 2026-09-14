@@ -49,7 +49,7 @@ export class PlayerController {
   private lastFootstepTime = 0;
   /** Bow draw progress 0..1, fed in each frame by BlockInteraction - zooms the FOV in while aiming. */
   private aimProgress = 0;
-  private static readonly AIM_MIN_FOV = 20;
+  private static readonly AIM_FOV_REDUCTION = 20;
   /** Eased downward camera offset while sneaking (blocks). */
   private crouchCam = 0;
   private static readonly CROUCH_CAM_DROP = 0.3;
@@ -259,7 +259,7 @@ export class PlayerController {
     }
     if (this.camera instanceof THREE.PerspectiveCamera) {
       const unaimedFov = this.baseFov + (this.sprinting ? 8 : 0);
-      const targetFov = THREE.MathUtils.lerp(unaimedFov, PlayerController.AIM_MIN_FOV, this.aimProgress);
+      const targetFov = unaimedFov - PlayerController.AIM_FOV_REDUCTION * this.aimProgress;
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 8, 0.016);
       this.camera.updateProjectionMatrix();
     }

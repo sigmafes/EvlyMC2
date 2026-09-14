@@ -20,7 +20,9 @@ const GRAVITY = 20;          // matches dropped-items.ts's world-gravity feel
 const DRAG = 0.99;           // per-frame-ish velocity retention while flying (LCE 0.99/tick)
 const HALF = 0.15;           // collision half-extent while flying
 const PLAYER_HIT_RADIUS = 0.6;
-const PICKUP_RANGE = 1.2;
+// Extra reach beyond the player's own hitbox (see tryPickup) - the arrow just
+// has to be near the player's body, not floating exactly at eye level.
+const PICKUP_MARGIN = 0.5;
 const PICKUP_DELAY = 0.3;    // seconds an embedded arrow waits before it can be collected
 const BASE_DAMAGE = 2.0;     // LCE Arrow::ARROW_BASE_DAMAGE
 const EMBEDDED_DESPAWN = 60; // seconds stuck before it vanishes unclaimed (LCE 20*60 ticks)
@@ -110,6 +112,8 @@ export type ArrowProjectilesDeps = {
   mobManager: MobManager;
   /** Player eye position, and a way to damage them (arrow shot by a mob) / collect a recovered arrow into their inventory. */
   getPlayerPos: () => THREE.Vector3;
+  /** The player's current hitbox (in blocks), so pickup can reach an arrow embedded anywhere on the body, not just at eye level. */
+  getPlayerHitbox: () => { radius: number; height: number; collisionEyeHeight: number };
   onHitPlayer?: (damage: number, fromPos: THREE.Vector3) => void;
   collect: (slot: InventorySlot) => number;
   onPickup?: () => void;
@@ -243,10 +247,26 @@ export class ArrowProjectiles {
     return true;
   }
 
+  /**
+   * True if `point` is within PICKUP_MARGIN of the player's whole hitbox
+   * (feet to head, not just a sphere around the eye) - an arrow stuck on the
+   * ground by the player's feet is just as pickable as one at chest height.
+   */
+  private nearPlayerHitbox(point: THREE.Vector3): boolean {
+    const playerPos = this.deps.getPlayerPos();
+    const { radius, height, collisionEyeHeight } = this.deps.getPlayerHitbox();
+    const feet = playerPos.y - collisionEyeHeight;
+    const closest = new THREE.Vector3(
+      THREE.MathUtils.clamp(point.x, playerPos.x - radius, playerPos.x + radius),
+      THREE.MathUtils.clamp(point.y, feet, feet + height),
+      THREE.MathUtils.clamp(point.z, playerPos.z - radius, playerPos.z + radius),
+    );
+    return closest.distanceTo(point) <= PICKUP_MARGIN;
+  }
+
   private tryPickup(a: Arrow, index: number): void {
     if (a.embedTimer < PICKUP_DELAY) return;
-    const playerPos = this.deps.getPlayerPos();
-    if (a.group.position.distanceTo(playerPos) > PICKUP_RANGE) return;
+    if (!this.nearPlayerHitbox(a.group.position)) return;
     const leftover = this.deps.collect(makeStack(ItemId.ARROW, 1));
     if (leftover > 0) return; // inventory full - stays on the ground
     this.deps.onPickup?.();

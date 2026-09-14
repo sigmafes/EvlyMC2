@@ -353,6 +353,7 @@ const arrowProjectiles = new ArrowProjectiles({
   isSolid: (x, y, z) => isSolidBlock(world.getBlock(x, y, z)),
   mobManager,
   getPlayerPos: () => player.state.position,
+  getPlayerHitbox: () => player.getHitbox(),
   onHitPlayer: hurtPlayerFromMob,
   collect: (slot) => inventory.addItem(slot),
   onPickup: () => soundManager.playOne('player/Pop', 0.4),
