@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { MpClient } from './net/mp-client';
-import { BlockId, createBlockMaterials, type BlockMaterials } from './block';
+import { BlockId, blockLightProperties, createBlockMaterials, type BlockMaterials } from './block';
 import { Chunk, CHUNK_SIZE } from './chunk';
 import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui } from './is-touch';
 import { TouchControls } from './touch-controls';
 import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials } from './player-model';
 import { loadPlayerSkinDataUrl } from './player-skin';
+import { LightEngine, type LightWorld } from './light-engine';
+import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot } from './net/protocol';
 
 /**
@@ -130,8 +132,21 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   menu.hidden = true;
   connectScreen.hidden = true;
 
+  // Same day/night colours singleplayer's main.ts uses (daySkyColor/
+  // nightSkyColor passed into its own DayNightCycle) - kept in sync by eye
+  // since main.ts doesn't export them; see updateDayNight() below for how
+  // they're actually applied.
+  const DAY_SKY_COLOR = new THREE.Color(0x8cb9ff);
+  const NIGHT_SKY_COLOR = new THREE.Color(0x020017);
+
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x7fb8ff);
+  scene.background = DAY_SKY_COLOR.clone();
+  // Fog range is shorter than singleplayer's (18-42, tuned to its default
+  // view radius) since multiplayer's own VIEW_RADIUS_CHUNKS (7x7 chunks,
+  // 112 blocks) is smaller - this just needs to hide the chunk-unload edge,
+  // not match singleplayer's exact numbers.
+  const fog = new THREE.Fog(scene.background.clone(), 40, 72);
+  scene.fog = fog;
   scene.add(new THREE.AmbientLight(0xffffff, 0.9));
   const sun = new THREE.DirectionalLight(0xffffff, 0.6);
   sun.position.set(3, 10, 2);
@@ -148,6 +163,37 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   // finish loading, updateStreaming() is a no-op and the scene is just sky.
   const chunks = new Map<string, Chunk>();
   let chunkMeshes: THREE.Mesh[] = [];
+  /**
+   * Real voxel lighting (BFS sky/block-light propagation), reusing
+   * LightEngine exactly as singleplayer's World does - see LightWorld's doc
+   * comment in light-engine.ts for why a thin adapter over this file's own
+   * `chunks` map can drive it without pulling in all of World (ChunkManager,
+   * IndexedDB persistence, water/lava/fire engines - none of which apply
+   * here, since the server is the one authority on both terrain and edits).
+   * Without this, chunk.ts's default light reader (a flat 15/15, "always
+   * full bright") is what every multiplayer chunk had rendered with so far -
+   * fine until day/night needed the ground to actually go dark at night.
+   */
+  const lightWorld: LightWorld = {
+    chunks,
+    getBlock,
+    getLight: (channel, x, y, z) => {
+      const [cx, cz] = chunkCoordOf(x, z);
+      return chunks.get(`${cx},${cz}`)?.getLight(channel, x, y, z) ?? 0;
+    },
+    setLight: (channel, x, y, z, level) => {
+      const [cx, cz] = chunkCoordOf(x, z);
+      const chunk = chunks.get(`${cx},${cz}`);
+      if (!chunk) return false;
+      chunk.setLight(channel, x, y, z, level);
+      return true;
+    },
+    emissionAt: (id) => blockLightProperties[id].emission,
+  };
+  const lightEngine = new LightEngine(lightWorld);
+  /** Every currently-loaded chunk queued for a re-mesh after a skyDarken step - drained a few per frame (relightQueue below), same reasoning as CHUNKS_PER_FRAME: remeshing all ~49 loaded chunks in one frame on every step would be a visible hitch. */
+  const relightQueue: string[] = [];
+  const RELIGHT_CHUNKS_PER_FRAME = 2;
   /** Every block edit this client has ever seen (from blockChanged, including the backlog world-do.ts replays right after `welcome`), kept forever - not just "pending" - so a chunk unloaded and later reloaded still shows every edit made in it, not just ones that arrived while it happened to not exist yet. */
   const edits = new Map<string, BlockId>();
   const loadQueue: string[] = [];
@@ -197,8 +243,14 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
         chunk.setBlockData(ex, ey, ez, id);
       }
     }
+    chunks.set(key, chunk); // must be in the map before initializeChunk() - it (and cross-chunk skylight propagation) reads neighbouring chunks via getBlock()
+    // Real per-chunk lighting (see the lightWorld/lightEngine doc comment
+    // above) instead of the default flat "always full bright" reader -
+    // must happen before rebuildDirty() below so the very first mesh build
+    // already bakes correct brightness, not a throwaway full-bright one.
+    chunk.setLightReader(lightEngine.getRawBrightness.bind(lightEngine));
+    lightEngine.initializeChunk(chunk);
     chunk.rebuildDirty();
-    chunks.set(key, chunk);
     rebuildChunkMeshList();
   }
 
@@ -207,6 +259,8 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     if (!chunk) return;
     chunk.dispose();
     chunks.delete(key);
+    const relightIdx = relightQueue.indexOf(key);
+    if (relightIdx !== -1) relightQueue.splice(relightIdx, 1);
     rebuildChunkMeshList();
   }
 
@@ -248,6 +302,31 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       const [cx, cz] = k.split(',').map(Number);
       generateChunk(cx, cz);
     }
+  }
+
+  /** Client's own free-running copy of the server's authoritative day/night clock (see world-do.ts's dayNightElapsed doc comment) - advanced locally every frame for a smooth transition, hard-resynced whenever a `dayTime` message arrives so it can't drift indefinitely. Seeded from `welcome`. */
+  let clientDayTime = 0;
+
+  /**
+   * Applies the current point in the day/night cycle to the sky/fog colour,
+   * and - on an integer skyDarken step change - re-lights every loaded
+   * chunk (see the relightQueue/lightEngine doc comment above). Block-level
+   * lighting itself (torches, skylight propagation) already reflects the
+   * new skyDarken the instant lightEngine.setSkyDarken() below returns true
+   * - getRawBrightness reads it live - the queue only exists to spread the
+   * many chunk re-MESHES that need to pick that up across several frames
+   * instead of one big hitch.
+   */
+  function applyDayNightState(elapsed: number): void {
+    const cycleTime = resolveCycleTime(elapsed, 0);
+    const { skyDarken } = computeDayNightState(cycleTime);
+    if (lightEngine.setSkyDarken(skyDarken)) {
+      relightQueue.length = 0;
+      for (const key of chunks.keys()) relightQueue.push(key);
+    }
+    const skyColor = DAY_SKY_COLOR.clone().lerp(NIGHT_SKY_COLOR, skyDarken / NIGHT_SKY_DARKEN);
+    scene.background = skyColor;
+    fog.color.copy(skyColor);
   }
 
   function applyBlockChange(x: number, y: number, z: number, id: BlockId): void {
@@ -551,6 +630,8 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     onWelcome: (msg) => {
       lastServerPos.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
       camera.position.copy(lastServerPos);
+      clientDayTime = msg.dayTime;
+      applyDayNightState(clientDayTime);
       void initTerrain(msg.worldSeed);
     },
     onRejected: (reason) => disconnect(`Rejected: ${reason}`),
@@ -596,6 +677,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       playerSkins.set(playerId, skin);
       if (remoteEntities.has(playerId)) applySkinWhenReady(playerId, skin);
     },
+    onDayTime: (elapsed) => { clientDayTime = elapsed; },
     onChat: (from, text) => console.log(`[chat] ${from}: ${text}`),
     onClose: (reason) => disconnect(reason),
   }, loadPlayerSkinDataUrl());
@@ -655,6 +737,11 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     const delta = lastFrameTime === 0 ? 0 : Math.min((now - lastFrameTime) / 1000, 0.1);
     lastFrameTime = now;
     for (const entity of remoteEntities.values()) updateRemoteAnimation(entity, delta);
+    clientDayTime += delta;
+    applyDayNightState(clientDayTime);
+    for (let i = 0; i < RELIGHT_CHUNKS_PER_FRAME && relightQueue.length > 0; i++) {
+      chunks.get(relightQueue.shift()!)?.rebuildDirty();
+    }
     if (materials) materials.updateWaterAnimation(now / 1000);
     renderer.render(scene, camera);
   }

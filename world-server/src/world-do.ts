@@ -10,6 +10,7 @@ import { ServerTerrain } from './terrain';
 import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
 import type { MobKind } from '../../src/mob-manager';
+import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from '../../src/day-night-math';
 
 export interface Env {
   WORLD_DO: DurableObjectNamespace;
@@ -86,6 +87,18 @@ export class WorldDO implements DurableObject {
   private worldSeed = 0;
   private readonly mobs = new ServerMobManager();
   private mobsSpawned = false;
+  /**
+   * Authoritative day/night clock (day-night-math.ts - the same pure cycle
+   * math singleplayer's DayNightCycle wraps with scene/fog/lightEngine side
+   * effects, here run headless). Starts at noon, same default as
+   * singleplayer's own DayNightCycle. Every connected client free-runs an
+   * identical copy locally between corrections (see multiplayer-game.ts) so
+   * the sky doesn't visibly stutter waiting on network round-trips - this
+   * field is the one true version they're periodically resynced to.
+   */
+  private dayNightElapsed = DAY_LENGTH / 2;
+  private lastBroadcastSkyDarken = -1;
+  private lastDayTimeBroadcast = 0;
 
   constructor(private readonly state: DurableObjectState, private readonly env: Env) {}
 
@@ -250,7 +263,7 @@ export class WorldDO implements DurableObject {
     };
     this.sessions.set(ws, session);
 
-    this.send(ws, { type: 'welcome', playerId: id, worldSeed: this.worldSeed, spawn, tickRateHz: TICK_HZ });
+    this.send(ws, { type: 'welcome', playerId: id, worldSeed: this.worldSeed, spawn, tickRateHz: TICK_HZ, dayTime: this.dayNightElapsed });
     // Catch this client up on every edit made before it connected - our
     // placeholder world has no chunk system yet (see the class doc comment),
     // so there's no chunkData to send; replaying each edit as its own
@@ -291,6 +304,24 @@ export class WorldDO implements DurableObject {
   private tick(): void {
     this.tickCount++;
     const dt = Math.min(TICK_MS / 1000, MAX_DT_S);
+
+    this.dayNightElapsed += dt;
+    const cycleTime = resolveCycleTime(this.dayNightElapsed, 0);
+    const { skyDarken } = computeDayNightState(cycleTime);
+    const flooredSkyDarken = Math.floor(skyDarken);
+    // Resync every client's local clock (multiplayer-game.ts free-runs its
+    // own copy between corrections, see day-night-math.ts's doc comment)
+    // the instant the integer skyDarken step changes, so every player's sky
+    // starts darkening/lightening at the same moment instead of drifting
+    // apart client to client - plus a periodic correction regardless, so a
+    // client that's drifted for some other reason (a stalled tab, a late
+    // join) doesn't stay off forever.
+    const dayTimeDue = flooredSkyDarken !== this.lastBroadcastSkyDarken || this.dayNightElapsed - this.lastDayTimeBroadcast >= 10;
+    if (dayTimeDue) {
+      this.lastBroadcastSkyDarken = flooredSkyDarken;
+      this.lastDayTimeBroadcast = this.dayNightElapsed;
+      this.broadcast({ type: 'dayTime', elapsed: this.dayNightElapsed });
+    }
 
     for (const [, session] of this.sessions) {
       const direction = new THREE.Vector3(session.intent.moveX, 0, session.intent.moveZ);

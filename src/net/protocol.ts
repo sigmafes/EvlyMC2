@@ -92,7 +92,8 @@ export type ClientMessage =
 // --- Server -> Client --------------------------------------------------
 
 export type ServerMessage =
-  | { type: 'welcome'; playerId: number; worldSeed: number; spawn: Vec3; tickRateHz: number }
+  /** `dayTime`: the world's current position in the day/night cycle (seconds - see day-night-math.ts), so a joining client can seed its own local clock instead of always starting at noon. */
+  | { type: 'welcome'; playerId: number; worldSeed: number; spawn: Vec3; tickRateHz: number; dayTime: number }
   /** Join refused - protocol mismatch, whitelist, world at capacity, etc. Connection closes after this. */
   | { type: 'rejected'; reason: string }
   /**
@@ -117,6 +118,8 @@ export type ServerMessage =
   | { type: 'entityRemoved'; id: number; reason: 'death' | 'despawn' | 'disconnect' }
   /** Another player's skin - sent once when they join (and replayed for every already-connected player right after `welcome`, so a client catches up on everyone already in the world). `skin: null` means the built-in default. */
   | { type: 'playerSkin'; playerId: number; skin: string | null }
+  /** Resyncs the client's local day/night clock to the server's authoritative one (day-night-math.ts) - sent whenever the integer skyDarken step changes (so a transition starts on every client at the same moment) and periodically besides, to correct any drift in a client that free-runs the clock locally between corrections (see multiplayer-game.ts). */
+  | { type: 'dayTime'; elapsed: number }
   | { type: 'chat'; from: string; text: string }
   | { type: 'pong'; clientTimeMs: number; serverTimeMs: number };
 
@@ -135,7 +138,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'chat', 'pong',
+      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
 }

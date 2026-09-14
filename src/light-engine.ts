@@ -1,10 +1,26 @@
 import { blockLightProperties, BlockId } from './block';
 import { CHUNK_HEIGHT, CHUNK_SIZE, Chunk } from './chunk';
-import type { World } from './world';
 
 const DIRECTIONS = [
   [-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1],
 ] as const;
+
+/**
+ * The slice of World's public API LightEngine actually needs - narrowed out
+ * so a much lighter adapter (multiplayer-game.ts's own chunk map, no
+ * ChunkManager/persistence/water-lava-fire engines) can drive the exact same
+ * BFS propagation code World does, the same "reuse it headless" pattern
+ * already used for PlayerPhysics/mob-ai/Chunk itself. World's own public
+ * getBlock/getLight/setLight/emissionAt/chunks already satisfy this
+ * structurally - nothing about World itself changes.
+ */
+export interface LightWorld {
+  readonly chunks: ReadonlyMap<string, Chunk>;
+  getBlock(x: number, y: number, z: number): BlockId;
+  getLight(channel: 'skyLight' | 'blockLight', x: number, y: number, z: number): number;
+  setLight(channel: 'skyLight' | 'blockLight', x: number, y: number, z: number, level: number): boolean;
+  emissionAt(id: BlockId, x: number, y: number, z: number): number;
+}
 
 export class LightEngine {
   private readonly skyQueue: LightNode[] = [];
@@ -16,7 +32,7 @@ export class LightEngine {
   private skyDarken = 0;
   private lastProcessedUpdates = 0;
 
-  constructor(private readonly world: World) {}
+  constructor(private readonly world: LightWorld) {}
 
   rebuildLoadedChunks() {
     this.clearLoadedLights();

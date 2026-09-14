@@ -7,6 +7,7 @@ export type MpClientHandlers = {
   onBlockChanged: (msg: Extract<ServerMessage, { type: 'blockChanged' }>) => void;
   onEntityRemoved: (id: number) => void;
   onPlayerSkin: (playerId: number, skin: string | null) => void;
+  onDayTime: (elapsed: number) => void;
   onChat: (from: string, text: string) => void;
   onClose: (reason: string) => void;
 };
@@ -45,6 +46,7 @@ export class MpClient {
         case 'blockChanged': handlers.onBlockChanged(msg); break;
         case 'entityRemoved': handlers.onEntityRemoved(msg.id); break;
         case 'playerSkin': handlers.onPlayerSkin(msg.playerId, msg.skin); break;
+        case 'dayTime': handlers.onDayTime(msg.elapsed); break;
         case 'chat': handlers.onChat(msg.from, msg.text); break;
         default: break; // chunkData/inventoryUpdate/pong: not used by this first client yet
       }
