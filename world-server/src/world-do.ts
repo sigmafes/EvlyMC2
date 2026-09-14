@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PlayerPhysics } from '../../src/player-physics';
+import { PlayerPhysics } from './game/player-physics';
 import type { BlockCollider } from '../../src/chunk';
 import type {
   ClientMessage, ServerMessage, EntitySnapshot, Vec3,
@@ -9,8 +9,8 @@ import { BlockId } from '../../src/block';
 import { ServerTerrain } from './terrain';
 import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
-import type { MobKind } from '../../src/mob-manager';
-import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from '../../src/day-night-math';
+import type { MobKind } from './game/mob-manager';
+import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from './game/day-night-math';
 
 export interface Env {
   WORLD_DO: DurableObjectNamespace;

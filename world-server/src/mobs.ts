@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { MOB_STATS, isHostileKind, type Mob, type MobKind } from '../../src/mob-manager';
-import { updateAI, type MobAiDeps } from '../../src/mob-ai';
-import { tryEscapeStuck, updatePhysics } from '../../src/mob-physics';
+import { MOB_STATS, isHostileKind, type Mob, type MobKind } from './game/mob-manager';
+import { updateAI, type MobAiDeps } from './game/mob-ai';
+import { tryEscapeStuck, updatePhysics } from './game/mob-physics';
 import type { EntitySnapshot } from '../../src/net/protocol';
 
 // Mirrors mob-manager.ts's own (private) tuning constants for damage/knockback/
