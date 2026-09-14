@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { MpClient } from './net/mp-client';
 import { BlockId, blockLightProperties, createBlockMaterials, type BlockMaterials } from './block';
-import { Chunk, CHUNK_SIZE } from './chunk';
+import { Chunk, CHUNK_SIZE, CHUNK_HEIGHT } from './chunk';
 import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui } from './is-touch';
 import { TouchControls } from './touch-controls';
@@ -177,11 +177,19 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const lightWorld: LightWorld = {
     chunks,
     getBlock,
+    // Bounds-check y exactly like BlockStore.getLight/setLight (World's own
+    // backing store) does - chunk.light's underlying array is sized to
+    // CHUNK_HEIGHT and throws on an out-of-range y, which the BFS
+    // propagation in light-engine.ts routinely probes (a column's neighbour
+    // one block below y=0, or above the build height) expecting a plain 0
+    // back, not a crash.
     getLight: (channel, x, y, z) => {
+      if (y < 0 || y >= CHUNK_HEIGHT) return 0;
       const [cx, cz] = chunkCoordOf(x, z);
       return chunks.get(`${cx},${cz}`)?.getLight(channel, x, y, z) ?? 0;
     },
     setLight: (channel, x, y, z, level) => {
+      if (y < 0 || y >= CHUNK_HEIGHT) return false;
       const [cx, cz] = chunkCoordOf(x, z);
       const chunk = chunks.get(`${cx},${cz}`);
       if (!chunk) return false;
