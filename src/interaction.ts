@@ -285,6 +285,11 @@ export class BlockInteraction {
     }
   }
 
+  /** True while eating or drawing the bow - the player should walk at crouch speed and can't sprint. */
+  isMovementRestricted(): boolean {
+    return this.eating || this.drawingBow;
+  }
+
   // --- Bow -----------------------------------------------------------------
 
   private startDrawingBow() {

@@ -10,7 +10,15 @@ const CHASE_REPATH_INTERVAL = 1; // seconds between chase path re-plans
 const ATTACK_RANGE = 1.8;        // blocks, centre-to-centre (a bit past melee-adjacent so it doesn't need to be pixel-perfect on top of the player)
 const LEAP_RANGE = 4;            // blocks, horizontal - close enough to attempt a leap up toward a player standing above
 const LEAP_MIN_HEIGHT_DIFF = 1.2; // blocks - player has to be genuinely above, not just on a half-slab-ish bump
+// Upper bound too - without one, a target far higher than a single leap could
+// ever reach still qualified, and back-to-back leaps (each landing still
+// within LEAP_RANGE/above LEAP_MIN_HEIGHT_DIFF) chained into a "super jump"
+// several leaps tall. LEAP_MAX_HEIGHT_DIFF caps it to what one leap can
+// plausibly close, and LEAP_COOLDOWN below stops it from immediately
+// re-leaping the instant it lands.
+const LEAP_MAX_HEIGHT_DIFF = 2.7;
 const LEAP_UP_FORCE = 11;        // higher arc than JUMP_FORCE (8) - clears ~2.5 blocks instead of ~1.3
+const LEAP_COOLDOWN = 1.5;       // seconds before another leap can be attempted after landing
 const ATTACK_INTERVAL = 1;       // seconds between hits while in range
 const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
 const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY), same as animals - widening this would plan climbs it can't execute
@@ -20,6 +28,7 @@ const RANGED_SHOT_HEIGHT_FRACTION = 0.55; // fraction of mob.height the arrow le
 const RANGED_ATTACK_RADIUS = 10;      // blocks - LCE ArrowAttackGoal attackRadiusSqr (skeleton)
 const RANGED_ATTACK_INTERVAL = 3;     // seconds between shots (LCE TICKS_PER_SECOND * 3)
 const RANGED_SIGHT_REQUIRED = 1;      // seconds of continuous line-of-sight required before the first shot (LCE seeTime >= 20 ticks)
+const ARROW_ARC_COMPENSATION = 0.18;  // extra upward aim per block of horizontal distance, offsetting the arrow's gravity drop in flight
 const RANGED_STEP_UP = 1;
 const RANGED_STEP_DOWN = 3;
 const LOS_SAMPLE_STEP = 0.5;          // blocks between line-of-sight samples
@@ -175,12 +184,17 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
   // toward the player instead of just walking into the wall underneath
   // them; updatePhysics's own collision still governs whether it actually
   // clears the gap, this just gives it a much bigger arc to try with.
-  if (mob.grounded && dy >= LEAP_MIN_HEIGHT_DIFF && dist <= LEAP_RANGE) {
+  if (mob.leapCooldown > 0) mob.leapCooldown -= delta;
+  if (
+    mob.grounded && mob.leapCooldown <= 0 &&
+    dy >= LEAP_MIN_HEIGHT_DIFF && dy <= LEAP_MAX_HEIGHT_DIFF && dist <= LEAP_RANGE
+  ) {
     mob.path = null;
     const dirLen = Math.max(dist, 0.001);
     moveHorizontal(mob, dx / dirLen, dz / dirLen, mob.walkSpeed, delta);
     mob.velocity.y = LEAP_UP_FORCE;
     mob.grounded = false;
+    mob.leapCooldown = LEAP_COOLDOWN;
     return true;
   }
 
@@ -272,7 +286,15 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
       mob.attackTimer = RANGED_ATTACK_INTERVAL;
       const shotPos = pos.clone();
       shotPos.y += mob.height * RANGED_SHOT_HEIGHT_FRACTION;
-      deps.onShootArrow?.(shotPos, playerPos.clone());
+      // playerPos is already eye height (see the getPlayerPos comment above),
+      // but a straight line there still lands low: the arrow drops under
+      // gravity over the flight time and nothing compensated for that, so
+      // shots that started aimed at the eyes consistently landed at the legs/
+      // feet at any real distance. Lob the aim point up a bit more the
+      // farther out the shot is, same fix vanilla/LCE apply.
+      const target = playerPos.clone();
+      target.y += dist * ARROW_ARC_COMPENSATION;
+      deps.onShootArrow?.(shotPos, target);
     }
     return true;
   }

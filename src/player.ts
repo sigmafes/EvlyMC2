@@ -50,6 +50,8 @@ export class PlayerController {
   /** Bow draw progress 0..1, fed in each frame by BlockInteraction - zooms the FOV in while aiming. */
   private aimProgress = 0;
   private static readonly AIM_FOV_REDUCTION = 20;
+  /** Eating or drawing the bow - fed in each frame by BlockInteraction.isMovementRestricted(). */
+  private speedRestricted = false;
   /** Eased downward camera offset while sneaking (blocks). */
   private crouchCam = 0;
   private static readonly CROUCH_CAM_DROP = 0.3;
@@ -106,6 +108,11 @@ export class PlayerController {
   /** Bow draw progress 0..1 (0 = not drawing) - eases the FOV down toward AIM_MIN_FOV as it rises. */
   setAimProgress(progress: number) {
     this.aimProgress = THREE.MathUtils.clamp(progress, 0, 1);
+  }
+
+  /** While eating or drawing the bow, walking is capped at crouch speed and sprinting is disabled. */
+  setSpeedRestricted(restricted: boolean) {
+    this.speedRestricted = restricted;
   }
 
   // --- Touch / on-screen controls -----------------------------------------
@@ -194,7 +201,7 @@ export class PlayerController {
     direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.state.yaw);
 
     const wantJump = !this.movementLocked && (this.keys.has('Space') || this.touchJump);
-    this.physics.updatePhysics(direction, wantJump, this.sprinting, delta);
+    this.physics.updatePhysics(direction, wantJump, this.sprinting, delta, this.speedRestricted);
 
     this.state.position.copy(this.physics.state.position);
     this.state.velocity.copy(this.physics.state.velocity);

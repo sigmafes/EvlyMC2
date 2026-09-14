@@ -334,12 +334,14 @@ const mobManager = new MobManager(
   hurtPlayerFromMob,
   () => player.state.position,
   (fromPos, targetPos) => {
-    // Skeleton's fixed LCE shot power (ArrowAttackGoal: 1.60), same
-    // power->speed scale as the player's own bow (arrow-projectiles.ts).
+    // Skeleton's fixed LCE shot power (ArrowAttackGoal: 1.60) *2, matching the
+    // same range/force buff given to the player's own full-draw shot
+    // (power*4 instead of power*2 in shootBowFn below) - same power->speed
+    // scale either way (arrow-projectiles.ts's powerToSpeed).
     const dir = targetPos.clone().sub(fromPos);
     const dist = dir.length();
     if (dist < 1e-6) return;
-    dir.normalize().multiplyScalar(powerToSpeed(1.6));
+    dir.normalize().multiplyScalar(powerToSpeed(3.2));
     arrowProjectiles.spawn(fromPos, dir, { fromPlayer: false });
   },
 );
@@ -395,8 +397,12 @@ const playerHealth = new PlayerHealth(
     player.hurtImpulse();
     playerModel.hurt();
     // Throttle the damage-over-time causes so the sound doesn't machine-gun.
+    // Fire's own tick cadence is 500ms (lavaTimer/fireTimer below) - a 900ms
+    // gap here was longer than that, so it silently ate exactly every other
+    // tick's sound (900 > 500 means only every 2nd tick clears the gap).
+    // 400ms sits under the tick interval so every tick's sound plays.
     const now = performance.now();
-    const gap = cause === 'fire' || cause === 'drown' ? 900 : 0;
+    const gap = cause === 'fire' ? 400 : cause === 'drown' ? 900 : 0;
     if (now - (lastHurtSoundAt[cause] ?? 0) < gap) return;
     lastHurtSoundAt[cause] = now;
     if (cause === 'fall') soundManager.playOne('player/Fall_damage', 0.7);
@@ -594,12 +600,18 @@ function animate() {
         world.getBlock(bx, Math.round(pp.y - 0.6), bz) === BlockId.FIRE);
 
     if (inLava) {
+      // lavaTimer is exactly 0 only on the very first frame of contact (the
+      // "else" branch below resets it the instant contact is lost) - jump it
+      // straight to the tick threshold so that first frame damages
+      // immediately instead of waiting out a full 0.5s tick before the first hit.
+      if (lavaTimer === 0) lavaTimer = 0.5;
       lavaTimer += delta;
       if (lavaTimer >= 0.5) { lavaTimer -= 0.5; playerHealth.damage(2, { ignoreInvuln: true, cause: 'fire' }); hud.setHealth(playerHealth.current); }
     } else {
       lavaTimer = 0;
     }
     if (inFire) {
+      if (fireTimer === 0) fireTimer = 0.5;
       fireTimer += delta;
       if (fireTimer >= 0.5) { fireTimer -= 0.5; playerHealth.damage(1, { ignoreInvuln: true, cause: 'fire' }); hud.setHealth(playerHealth.current); }
     } else {
@@ -666,6 +678,7 @@ function animate() {
   const bowDraw = interaction.getBowDrawProgress();
   player.setAimProgress(bowDraw);
   hand.setBowDraw(bowDraw);
+  player.setSpeedRestricted(interaction.isMovementRestricted());
   particles.update(delta, camera);
   smokeParticles.update(delta);
   blockInspector.update();

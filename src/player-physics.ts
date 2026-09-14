@@ -152,7 +152,7 @@ export class PlayerPhysics {
    * Update physics given input direction and whether player wants to jump.
    * Movement already rotated by player yaw.
    */
-  updatePhysics(direction: THREE.Vector3, wantJump: boolean, sprinting: boolean, delta: number) {
+  updatePhysics(direction: THREE.Vector3, wantJump: boolean, sprinting: boolean, delta: number, speedRestricted = false) {
     // If the player is embedded in solid terrain (e.g. new terrain generated
     // around/under them, or they were teleported into a wall), don't let the
     // normal per-axis collision resolver fight it out block by block: several
@@ -214,9 +214,13 @@ export class PlayerPhysics {
       }
       this.state.grounded = false;
     } else {
-      // Movement speeds
+      // Movement speeds. Eating/drawing the bow (speedRestricted) caps you at
+      // crouch speed and overrides sprint - same treatment as sneaking,
+      // regardless of whether you're actually crouched.
       let speed = this.WALK_SPEED;
-      if (sprinting) {
+      if (speedRestricted) {
+        speed = this.CROUCH_SPEED;
+      } else if (sprinting) {
         speed = this.SPRINT_SPEED;
       } else if (this.state.sneaking) {
         speed = this.CROUCH_SPEED;

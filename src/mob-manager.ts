@@ -102,6 +102,9 @@ export type Mob = {
   chasing: boolean;
   chaseRepathTimer: number;
   attackTimer: number;
+  // Seconds left before a zombie can attempt another leap toward a player
+  // standing above it - see LEAP_COOLDOWN in mob-ai.ts.
+  leapCooldown: number;
   // Seconds left where a fresh knockback shove should be allowed to decay
   // naturally (friction) instead of being zeroed by the melee AI's anti-hop
   // snap - see updateHostileAI() in mob-ai.ts.
@@ -197,6 +200,7 @@ export class MobManager {
       chasing: false,
       chaseRepathTimer: 0,
       attackTimer: 0,
+      leapCooldown: 0,
       knockbackTimer: 0,
       rangedSeeTimer: 0,
       burning: false,
