@@ -169,7 +169,9 @@ export class ArrowProjectiles {
       if (a.embedded) {
         a.embedTimer += delta;
         if (a.embedTimer >= EMBEDDED_DESPAWN) { this.removeAt(i); continue; }
-        this.tryPickup(a, i);
+        // Only the player's own missed shots can be recovered - a skeleton's
+        // arrow just sticks around (and eventually despawns) uncollectible.
+        if (a.fromPlayer) this.tryPickup(a, i);
         continue;
       }
 

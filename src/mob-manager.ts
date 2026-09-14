@@ -62,6 +62,10 @@ const IDLE_SOUND_MAX = 9;
 const MOB_SOUND_RADIUS = 4; // mob sounds (idle/step/hurt/death) only carry this far
 const KNOCKBACK_SPEED = 5;
 const KNOCKBACK_UP = 4;
+// How long a melee hostile mob's AI holds off re-zeroing horizontal velocity
+// after a hit, so the shove above is actually visible before the anti-hop
+// snap in updateHostileAI() clamps it back down.
+const KNOCKBACK_LOCK_DURATION = 0.3;
 const FLEE_DURATION = 3; // seconds, LCE PanicGoal-style - starts here (damage()), ticked down and re-picked by mob-ai.ts's updateAI
 const DEATH_SPIN_DURATION = 0.75; // seconds toppling over its Z axis before vanishing
 
@@ -98,6 +102,10 @@ export type Mob = {
   chasing: boolean;
   chaseRepathTimer: number;
   attackTimer: number;
+  // Seconds left where a fresh knockback shove should be allowed to decay
+  // naturally (friction) instead of being zeroed by the melee AI's anti-hop
+  // snap - see updateHostileAI() in mob-ai.ts.
+  knockbackTimer: number;
   // Ranged hostile AI (skeleton): seconds of continuous line-of-sight on the
   // target, accumulated toward RANGED_SIGHT_REQUIRED before the first shot.
   rangedSeeTimer: number;
@@ -189,6 +197,7 @@ export class MobManager {
       chasing: false,
       chaseRepathTimer: 0,
       attackTimer: 0,
+      knockbackTimer: 0,
       rangedSeeTimer: 0,
       burning: false,
       burnTimer: 0,
@@ -307,6 +316,7 @@ export class MobManager {
     mob.velocity.z = pushDir.y * KNOCKBACK_SPEED;
     mob.velocity.y = KNOCKBACK_UP;
     mob.grounded = false;
+    mob.knockbackTimer = KNOCKBACK_LOCK_DURATION;
 
     // Hostile mobs (zombie, skeleton) never flee - they keep chasing/aiming
     // through the hit, just shoved back by the knockback above. Panic (LCE

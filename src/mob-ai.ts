@@ -141,6 +141,8 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
   }
   mob.chasing = true;
 
+  if (mob.knockbackTimer > 0) mob.knockbackTimer -= delta;
+
   if (dist <= ATTACK_RANGE && Math.abs(dy) <= mob.height + 1) {
     mob.path = null;
     // Zero instantly, not applyGroundFriction's gradual decay: at melee range
@@ -149,9 +151,15 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
     // per frame), and any leftover horizontal velocity bumping a step/ledge
     // triggers updatePhysics's auto-step jump - reads as the zombie
     // continuously hopping in place while it's supposed to just stand and
-    // swing.
-    mob.velocity.x = 0;
-    mob.velocity.z = 0;
+    // swing. Skipped for a moment right after being hit (knockbackTimer) so
+    // the shove from damage() actually pushes the zombie back instead of
+    // being clamped to zero on the very next frame.
+    if (mob.knockbackTimer > 0) {
+      applyGroundFriction(mob, delta);
+    } else {
+      mob.velocity.x = 0;
+      mob.velocity.z = 0;
+    }
     easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
     mob.attackTimer -= delta;
     if (mob.attackTimer <= 0) {
@@ -221,11 +229,19 @@ function hasLineOfSight(isSolid: IsSolidFn, from: THREE.Vector3, to: THREE.Vecto
  * decides when to shoot. Same true/false contract as updateHostileAI().
  */
 function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
+  // Fixed shot cooldown - ticks down (and only down) regardless of whether the
+  // skeleton currently has sight/range on the player. It used to get reset to
+  // 0 the instant either dropped, so a player standing at the edge of
+  // RANGED_ATTACK_RADIUS (where line-of-sight flickers in and out from a hair
+  // of terrain) made the skeleton refire the moment sight came back instead of
+  // waiting out RANGED_ATTACK_INTERVAL - read as a machine-gun burst of
+  // arrows. The cooldown now persists across losing/regaining the target.
+  if (mob.attackTimer > 0) mob.attackTimer -= delta;
+
   const playerPos = deps.getPlayerPos?.();
   const pos = mob.model.getGroup().position;
   if (!playerPos) {
     mob.chasing = false;
-    mob.attackTimer = 0;
     mob.rangedSeeTimer = 0;
     mob.model.setAttacking?.(false);
     return false;
@@ -237,7 +253,6 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
   const dist = Math.hypot(dx, dz);
   if (dist > CHASE_RADIUS || Math.abs(dy) > CHASE_RADIUS) {
     mob.chasing = false;
-    mob.attackTimer = 0;
     mob.rangedSeeTimer = 0;
     mob.model.setAttacking?.(false);
     return false;
@@ -253,7 +268,6 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
     mob.model.setAttacking?.(true);
     applyGroundFriction(mob, delta);
     easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
-    mob.attackTimer -= delta;
     if (mob.attackTimer <= 0) {
       mob.attackTimer = RANGED_ATTACK_INTERVAL;
       const shotPos = pos.clone();
@@ -263,9 +277,11 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
     return true;
   }
 
-  // Still out of range, out of sight, or building up the sight timer - close in.
+  // Still out of range, out of sight, or building up the sight timer - close
+  // in. attackTimer is deliberately left alone (see the top of this
+  // function) so the cooldown keeps counting down / persists instead of
+  // snapping back to a free shot the instant sight is regained.
   mob.model.setAttacking?.(false);
-  mob.attackTimer = 0;
   mob.chaseRepathTimer -= delta;
   if (!mob.path || mob.pathIndex >= mob.path.length || mob.chaseRepathTimer <= 0) {
     mob.chaseRepathTimer = CHASE_REPATH_INTERVAL;

@@ -366,7 +366,9 @@ shootBowFn = (power) => {
   if (inventory.damageSelected(1)) soundManager.playOne('player/break', 0.8);
   const dir = camera.getWorldDirection(new THREE.Vector3());
   const from = player.state.position.clone().addScaledVector(dir, 0.5);
-  dir.multiplyScalar(powerToSpeed(power * 2));
+  // *4, not *2 - a fully-drawn shot was falling noticeably short of vanilla's
+  // reach; doubling the resulting speed (and thus range/impact) fixes that.
+  dir.multiplyScalar(powerToSpeed(power * 4));
   arrowProjectiles.spawn(from, dir, { fromPlayer: true, crit: power >= 1 });
   soundManager.playOne('items/Bow_shoot', 0.9);
 };
