@@ -100,6 +100,11 @@ export class PlayerController {
     this.movementLocked = locked;
   }
 
+  /** True in first person (F5 cycle mode 0) - false in either third-person mode (1/2). */
+  isFirstPerson(): boolean {
+    return this.cameraMode === 0;
+  }
+
   /** When disabled, the player stops driving the camera (used by free camera mode). */
   setCameraControlEnabled(enabled: boolean) {
     this.cameraControlEnabled = enabled;

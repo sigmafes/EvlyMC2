@@ -657,9 +657,19 @@ function animate() {
       playerFireTickTimer = 0;
     }
     playerModel.setOnFire(playerOnFire);
-    fireScreenOverlay.classList.toggle('active', playerOnFire);
-    if (playerOnFire) {
-      fireScreenOverlay.style.backgroundPositionY = `-${getFireFrameIndex(clock.elapsedTime) * 96}px`;
+    // The 3D flame overlay (on playerModel's group) is already first-person-only
+    // for free - the whole group is hidden there (see playerModel.setVisible()
+    // below) and only shows in third person. The screen overlay is its first-
+    // person equivalent, so it's gated the other way: first person only.
+    const showFireScreen = playerOnFire && player.isFirstPerson();
+    fireScreenOverlay.classList.toggle('active', showFireScreen);
+    if (showFireScreen) {
+      // Stretch a single frame to fill the element (no tiling) - background-size
+      // is computed from the element's own rendered height so one 16x16 frame
+      // maps to exactly one screen-height's worth of the 32-frame strip.
+      const h = fireScreenOverlay.clientHeight;
+      fireScreenOverlay.style.backgroundSize = `100% ${h * 32}px`;
+      fireScreenOverlay.style.backgroundPositionY = `-${getFireFrameIndex(clock.elapsedTime) * h}px`;
     }
 
     ambient.update(player.state.position, delta);

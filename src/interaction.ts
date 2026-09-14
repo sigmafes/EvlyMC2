@@ -267,13 +267,20 @@ export class BlockInteraction {
     if (this.eatTickTimer >= EAT_TICK) {
       this.eatTickTimer -= EAT_TICK;
       this.soundManager?.playRandom('player/Eat', 3, 0.7);
-      const mouth = this.camera.getWorldPosition(new THREE.Vector3());
-      const down = new THREE.Vector3(0, -1, 0);
-      this.camera.getWorldDirection(down);
-      down.y -= 0.6;
-      down.normalize();
-      mouth.addScaledVector(down, 0.35);
-      this.particles?.eat(mouth, down, this.selectedItemId ?? 0, this.lightAt(mouth));
+      // Crumb particles are placed from the camera's own position/facing -
+      // that's the player's actual mouth only in first person. In third
+      // person the camera sits behind/above the character, so the burst was
+      // spawning floating out in space instead of at the model's mouth -
+      // just skip it there instead of showing it in the wrong place.
+      if (this.player.isFirstPerson()) {
+        const mouth = this.camera.getWorldPosition(new THREE.Vector3());
+        const down = new THREE.Vector3(0, -1, 0);
+        this.camera.getWorldDirection(down);
+        down.y -= 0.6;
+        down.normalize();
+        mouth.addScaledVector(down, 0.35);
+        this.particles?.eat(mouth, down, this.selectedItemId ?? 0, this.lightAt(mouth));
+      }
     }
 
     if (this.eatTime >= EAT_DURATION) {
