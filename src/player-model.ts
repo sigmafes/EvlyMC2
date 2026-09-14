@@ -6,8 +6,11 @@ import { ITEMS, isBlock } from './item';
 import {
   getAtlasMaterial, getOverlayMaterial, getSkinAtlasMaterial, applySkinTexture, resetSkinTexture,
   buildArmGeometry, buildArmMesh, buildPlayerModelParts, type PlayerModelParts,
+  createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials,
 } from './player-model-geometry';
 import { createFireOverlay } from './fire-overlay';
+
+export { createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials };
 
 export type ModelAdjustments = {
   head: { x: number; y: number; z: number };
@@ -97,11 +100,18 @@ export class PlayerModel {
   /** Extra arm pitch from the current sneak amount; folded in by the arm setters. */
   private armSneakOffset = 0;
 
-  constructor() {
+  /**
+   * `materials` gives this instance its OWN skin textures instead of the
+   * shared singleton every other PlayerModel (the local player, the
+   * inventory doll) reuses - needed for a remote multiplayer player, whose
+   * skin must never bleed into (or get overwritten by) anyone else's. Pass
+   * nothing for the local-player/doll use case, unchanged from before.
+   */
+  constructor(private readonly materials?: PlayerSkinMaterials) {
     this.group = new THREE.Group();
-    this.parts = buildPlayerModelParts(this.group);
-    this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', this.slimArms);
-    this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', this.slimArms);
+    this.parts = buildPlayerModelParts(this.group, materials);
+    this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', this.slimArms, undefined, materials);
+    this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', this.slimArms, undefined, materials);
     // The player group's origin is at EYE level (see player-model-geometry.ts),
     // not the feet like mob groups - feetYOffset=-1.62 (standing eye height)
     // is what keeps this centred on the body instead of floating above the head.
@@ -113,8 +123,8 @@ export class PlayerModel {
   setSlimArms(slim: boolean) {
     if (this.slimArms === slim) return;
     this.slimArms = slim;
-    this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', slim, this.armLeft);
-    this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', slim, this.armRight);
+    this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', slim, this.armLeft, this.materials);
+    this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', slim, this.armRight, this.materials);
   }
 
   /**
@@ -536,8 +546,8 @@ export class PlayerModel {
     if (this.hurtFlashTimer > 0) this.hurtFlashTimer = Math.max(0, this.hurtFlashTimer - delta);
 
     const b = Math.pow(THREE.MathUtils.clamp(level01, 0, 1), 1.25);
-    const atlas = getAtlasMaterial();
-    const overlay = getOverlayMaterial();
+    const atlas = this.materials?.atlas ?? getAtlasMaterial();
+    const overlay = this.materials?.overlay ?? getOverlayMaterial();
     if (this.hurtFlashTimer > 0 || this.forcedTint) {
       // Non-emissive: tint the lit base colour toward red instead of
       // overriding it outright, so the flash still darkens in shade.

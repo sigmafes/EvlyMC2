@@ -69,6 +69,37 @@ function setSharedSkinTexture(texture: THREE.Texture): void {
   if (oldTexture && oldTexture !== texture) oldTexture.dispose();
 }
 
+export type PlayerSkinMaterials = { atlas: THREE.MeshBasicMaterial; overlay: THREE.MeshBasicMaterial };
+
+/**
+ * Builds a fresh, INDEPENDENT pair of atlas/overlay materials from a skin
+ * image - unlike applySkinTexture() below, which mutates the shared
+ * singleton every part of the LOCAL player's own model reuses. Multiplayer
+ * needs one player's skin to never bleed into another's, so each remote
+ * PlayerModel gets its own pair from this instead of touching the shared one
+ * (see multiplayer-game.ts). `image` null builds the built-in default skin.
+ */
+export function createSkinMaterials(image?: HTMLImageElement | null): PlayerSkinMaterials {
+  const texture = image ? new THREE.Texture(image) : new THREE.TextureLoader().load(ATLAS_PATH);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  if (image) texture.needsUpdate = true;
+  const atlas = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true });
+  const overlay = new THREE.MeshBasicMaterial({
+    map: texture, vertexColors: true, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
+  });
+  return { atlas, overlay };
+}
+
+/** Frees a createSkinMaterials() pair's texture + both materials - call when a remote player's PlayerModel is torn down (see multiplayer-game.ts's onEntityRemoved/disconnect). */
+export function disposeSkinMaterials(materials: PlayerSkinMaterials): void {
+  materials.atlas.map?.dispose();
+  materials.atlas.dispose();
+  materials.overlay.dispose();
+}
+
 /**
  * Swap the skin atlas for a custom one (Player Options -> Import Skin).
  * Replaces the shared materials' map in place, so every existing mesh built
@@ -246,11 +277,11 @@ export function createLegGeometry(side: 'left' | 'right'): THREE.BoxGeometry {
  * base part, so it inherits every transform (joint rotation, adjustments).
  * Uses the transparent overlay material.
  */
-export function addOverlay(base: THREE.Mesh, w: number, h: number, d: number, rects: FaceRects, flips?: FaceFlips) {
+export function addOverlay(base: THREE.Mesh, w: number, h: number, d: number, rects: FaceRects, flips?: FaceFlips, overlayMaterial?: THREE.MeshBasicMaterial) {
   const geo = new THREE.BoxGeometry(w + INFLATE_WD, h + INFLATE_H, d + INFLATE_WD);
   applyAtlasUVs(geo, rects, flips ?? {});
   applyFaceShading(geo);
-  const shell = new THREE.Mesh(geo, getOverlayMaterial());
+  const shell = new THREE.Mesh(geo, overlayMaterial ?? getOverlayMaterial());
   shell.castShadow = true;
   base.add(shell);
 }
@@ -260,13 +291,13 @@ export function addOverlay(base: THREE.Mesh, w: number, h: number, d: number, re
  * setting, disposing `previous` first if given (slim-arm toggle rebuild).
  * Adds the new mesh to `group` and returns it.
  */
-export function buildArmMesh(group: THREE.Group, side: 'left' | 'right', slim: boolean, previous?: THREE.Mesh): THREE.Mesh {
+export function buildArmMesh(group: THREE.Group, side: 'left' | 'right', slim: boolean, previous?: THREE.Mesh, materials?: PlayerSkinMaterials): THREE.Mesh {
   if (previous) {
     group.remove(previous);
     previous.traverse((c) => { if (c instanceof THREE.Mesh) c.geometry.dispose(); });
   }
 
-  const mesh = new THREE.Mesh(buildArmGeometry(side, slim), getAtlasMaterial());
+  const mesh = new THREE.Mesh(buildArmGeometry(side, slim), materials?.atlas ?? getAtlasMaterial());
   // Keep the inner edge (toward the torso) attached when slim.
   const inset = slim ? (side === 'left' ? ARM_SLIM_INSET : -ARM_SLIM_INSET) : 0;
   mesh.position.set(inset, -0.38, 0);
@@ -278,7 +309,7 @@ export function buildArmMesh(group: THREE.Group, side: 'left' | 'right', slim: b
   const overlayRects = side === 'left'
     ? (slim ? SKIN_UV_OVERLAY_SLIM.sleeveLeft : SKIN_UV_OVERLAY.sleeveLeft)
     : (slim ? SKIN_UV_OVERLAY_SLIM.sleeveRight : SKIN_UV_OVERLAY.sleeveRight);
-  addOverlay(mesh, width, 0.76, 0.275, overlayRects, side === 'left' ? MIRROR_U : undefined);
+  addOverlay(mesh, width, 0.76, 0.275, overlayRects, side === 'left' ? MIRROR_U : undefined, materials?.overlay);
 
   return mesh;
 }
@@ -304,15 +335,17 @@ export type PlayerModelParts = {
  * buildArmMesh() (it needs to be re-run on a slim-arm toggle), everything
  * else here is built once and never rebuilt.
  */
-export function buildPlayerModelParts(group: THREE.Group): PlayerModelParts {
+export function buildPlayerModelParts(group: THREE.Group, materials?: PlayerSkinMaterials): PlayerModelParts {
+  const atlas = materials?.atlas ?? getAtlasMaterial();
+  const overlay = materials?.overlay;
   // Eyes are at y=0 (player.state.position), feet are at y=-1.62 (eye height)
   // Head (0.55 x 0.55 x 0.55) - 10% larger - eyes approximately in upper middle of head
-  const head = new THREE.Mesh(createHeadGeometry(), getAtlasMaterial());
+  const head = new THREE.Mesh(createHeadGeometry(), atlas);
   head.position.y = 0.02; // Positioned so eyes are near center
   head.castShadow = true;
   head.receiveShadow = true;
   group.add(head);
-  addOverlay(head, 0.55, 0.55, 0.55, SKIN_UV_OVERLAY.hat);
+  addOverlay(head, 0.55, 0.55, 0.55, SKIN_UV_OVERLAY.hat, undefined, overlay);
 
   // Torso/Body (0.55 x 0.76 x 0.275) - 10% larger + elongated
   // Torso lives in a pivot group at the neck (y=-0.24) so it can lean forward when sneaking.
@@ -320,12 +353,12 @@ export function buildPlayerModelParts(group: THREE.Group): PlayerModelParts {
   torsoGroup.position.y = -0.24;
   group.add(torsoGroup);
 
-  const torso = new THREE.Mesh(createTorsoGeometry(), getAtlasMaterial());
+  const torso = new THREE.Mesh(createTorsoGeometry(), atlas);
   torso.position.y = -0.38; // torso centre relative to the neck pivot
   torso.castShadow = true;
   torso.receiveShadow = true;
   torsoGroup.add(torso);
-  addOverlay(torso, 0.55, 0.76, 0.275, SKIN_UV_OVERLAY.jacket);
+  addOverlay(torso, 0.55, 0.76, 0.275, SKIN_UV_OVERLAY.jacket, undefined, overlay);
 
   // Left arm - with shoulder joint for rotation
   const armLeftGroup = new THREE.Group();
@@ -348,24 +381,24 @@ export function buildPlayerModelParts(group: THREE.Group): PlayerModelParts {
   legLeftGroup.position.set(-0.13875, -0.99, 0); // Hip position (top center of leg)
   group.add(legLeftGroup);
 
-  const legLeft = new THREE.Mesh(createLegGeometry('left'), getAtlasMaterial());
+  const legLeft = new THREE.Mesh(createLegGeometry('left'), atlas);
   legLeft.position.set(0, -0.38, 0); // Relative to hip (half height down)
   legLeft.castShadow = true;
   legLeft.receiveShadow = true;
   legLeftGroup.add(legLeft);
-  addOverlay(legLeft, 0.275, 0.76, 0.275, SKIN_UV_OVERLAY.pantLeft, MIRROR_U);
+  addOverlay(legLeft, 0.275, 0.76, 0.275, SKIN_UV_OVERLAY.pantLeft, MIRROR_U, overlay);
 
   // Right leg - with hip joint for rotation
   const legRightGroup = new THREE.Group();
   legRightGroup.position.set(0.13875, -0.99, 0); // Hip position (top center of leg)
   group.add(legRightGroup);
 
-  const legRight = new THREE.Mesh(createLegGeometry('right'), getAtlasMaterial());
+  const legRight = new THREE.Mesh(createLegGeometry('right'), atlas);
   legRight.position.set(0, -0.38, 0); // Relative to hip (half height down)
   legRight.castShadow = true;
   legRight.receiveShadow = true;
   legRightGroup.add(legRight);
-  addOverlay(legRight, 0.275, 0.76, 0.275, SKIN_UV_OVERLAY.pantRight);
+  addOverlay(legRight, 0.275, 0.76, 0.275, SKIN_UV_OVERLAY.pantRight, undefined, overlay);
 
   // Enable flat shading for blocky Minecraft look
   group.traverse((child) => {

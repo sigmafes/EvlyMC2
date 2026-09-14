@@ -5,6 +5,8 @@ import { Chunk, CHUNK_SIZE } from './chunk';
 import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui } from './is-touch';
 import { TouchControls } from './touch-controls';
+import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials } from './player-model';
+import { loadPlayerSkinDataUrl } from './player-skin';
 import type { EntitySnapshot } from './net/protocol';
 
 /**
@@ -63,9 +65,30 @@ type RemoteEntity = {
   label: HTMLDivElement;
   /** How far above mesh.position the name label floats - differs by kind since a player's origin is eye-height but a mob's is feet-height (see makeEntityAvatar). */
   labelOffsetY: number;
+  /** Only for kind:'player' - the real skinned/animated model (see makeEntityAvatar); mobs still get the placeholder capsule (ENTITY_COLOR) until real per-mob models are wired into the multiplayer client. */
+  playerModel?: PlayerModel;
+  /** This player's own skin materials (see createSkinMaterials) - kept so onEntityRemoved/disconnect can dispose them; undefined for a mob. */
+  skinMaterials?: PlayerSkinMaterials;
+  /** Health as of the last `state` tick - a drop since then triggers the player model's hurt-flash (mobs don't bother, no visual feedback to flash on a capsule anyway). */
+  lastHealth: number;
+  /** This entity's yaw as of the last `state` tick - updateRemoteAnimation's setOrientation() reads this every render frame (not just on a tick), since it owns and eases group.rotation.y itself once a player has a playerModel. */
+  lastYaw: number;
+  /**
+   * Movement since the previous `state` tick (raw position delta, not
+   * divided by tick duration - only its direction and whether it clears a
+   * small threshold matter to PlayerModel.setOrientation()/the walk-cycle
+   * check, not its exact magnitude). Computed ONCE per tick in onState and
+   * held constant across every render frame until the next tick, rather
+   * than recomputed per frame from the mesh's own position - the position
+   * itself only changes at the server's 20Hz, so recomputing every ~60Hz
+   * render frame would see zero movement between ticks and flicker the walk
+   * animation on and off in time with the tick rate instead of running smoothly.
+   */
+  moveDeltaX: number;
+  moveDeltaZ: number;
 };
 
-/** Rough colour-coding per entity kind, until real per-mob models/skins are wired into the multiplayer client (out of scope for this pass - see the module doc comment). */
+/** Rough colour-coding per MOB kind, until real per-mob models/skins are wired into the multiplayer client (out of scope for this pass - see the module doc comment). Players get a real PlayerModel instead - see makeEntityAvatar. */
 const ENTITY_COLOR: Record<string, number> = {
   player: 0x3a7bd5,
   pig: 0xe7a0a0,
@@ -362,26 +385,100 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   };
   window.addEventListener('resize', onResize);
 
+  /** Every player's currently-known skin ("data: URL, or null for default), keyed by their entity id - populated from the server's playerSkin messages (see client.connect below), which can arrive before OR after that player's first state snapshot creates their avatar. */
+  const playerSkins = new Map<number, string | null>();
+  /** Decoded once per skin string and cached, since the same data: URL is re-sent to every client and shouldn't be re-decoded per remote avatar. `null` (the default skin) and a load failure both resolve to `null` - createSkinMaterials(null) already falls back to the built-in skin. */
+  const skinImageCache = new Map<string, Promise<HTMLImageElement | null>>();
+  function loadSkinImage(dataUrl: string | null): Promise<HTMLImageElement | null> {
+    if (!dataUrl) return Promise.resolve(null);
+    let p = skinImageCache.get(dataUrl);
+    if (!p) {
+      p = new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+      });
+      skinImageCache.set(dataUrl, p);
+    }
+    return p;
+  }
+
   /**
-   * Rough placeholder avatar for any remote entity (another player or a
-   * mob) - a colour-coded capsule, not the real skinned player/mob models
-   * (those need texture loading this lightweight client doesn't do yet, see
-   * the module doc comment). `kind` decides both colour and where the mesh
-   * origin sits: a player's `pos` is EYE height (protocol.ts/player-physics.ts
-   * convention) so the capsule hangs below it, while a mob's `pos` is FEET
-   * height (mob-manager.ts convention, unchanged since Fase 1) so the
-   * capsule sits centred above it instead - getting this backwards would
-   * plant one of the two either floating or waist-deep in the ground.
+   * Real avatar for another player: the exact same PlayerModel (skinned,
+   * animated head/torso/arms/legs) singleplayer renders for its own player,
+   * so other players see this one's actual skin instead of a placeholder -
+   * built with its OWN skin materials (createSkinMaterials) rather than the
+   * shared singleton the local player's model uses, so several different
+   * skins can render at once without stomping each other. Mobs still get the
+   * placeholder capsule below until real per-mob models are wired in (out of
+   * scope here - see the module doc comment).
    */
-  function makeEntityAvatar(id: number, kind: string, name: string): RemoteEntity {
-    const isPlayer = kind === 'player';
-    const height = isPlayer ? 1.8 : kind === 'zombie' || kind === 'skeleton' ? 1.9 : 1.3;
+  // Invisible box, parented to a player model so it inherits the group's own
+  // matrixWorld updates - the actual raycast target (onMouseDown/
+  // performInteraction need a single Mesh, not a multi-part model group).
+  // Centered between the top of the head (~0.18 above eye level) and the
+  // feet (-1.62 below), matching PlayerModel's own eye-origin convention.
+  function buildPlayerHitbox(id: number): THREE.Mesh {
+    const hitbox = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 1.8, 0.6),
+      new THREE.MeshBasicMaterial({ visible: false }),
+    );
+    hitbox.position.y = -0.72;
+    hitbox.userData.entityId = id;
+    return hitbox;
+  }
+
+  function makePlayerAvatar(id: number, name: string, skinImage: HTMLImageElement | null): RemoteEntity {
+    const materials = createSkinMaterials(skinImage);
+    const model = new PlayerModel(materials);
+    scene.add(model.group);
+    const hitbox = buildPlayerHitbox(id);
+    model.group.add(hitbox);
+    const label = document.createElement('div');
+    label.textContent = name;
+    label.style.cssText = 'position:absolute;color:#fff;font:12px Tricraft,sans-serif;text-shadow:1px 1px 0 #000;transform:translate(-50%,-100%);white-space:nowrap;';
+    labelLayer.appendChild(label);
+    return {
+      mesh: model.group, hitbox, label, labelOffsetY: 1.1, playerModel: model, skinMaterials: materials,
+      lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0,
+    };
+  }
+
+  /** A player's skin arrived (or finished decoding) after their avatar already exists - rebuilds the model in place with the new skin materials, since PlayerModel bakes its materials in at construction with no way to swap them after the fact. */
+  function rebuildPlayerAvatarSkin(id: number, image: HTMLImageElement | null): void {
+    const entity = remoteEntities.get(id);
+    if (!entity || !entity.playerModel) return;
+    const oldGroup = entity.mesh;
+    const materials = createSkinMaterials(image);
+    const model = new PlayerModel(materials);
+    model.group.position.copy(oldGroup.position);
+    model.group.rotation.copy(oldGroup.rotation);
+    const hitbox = buildPlayerHitbox(id);
+    model.group.add(hitbox);
+    scene.add(model.group);
+    scene.remove(oldGroup);
+    disposeGroupGeometries(oldGroup);
+    if (entity.skinMaterials) disposeSkinMaterials(entity.skinMaterials);
+    entity.mesh = model.group;
+    entity.playerModel = model;
+    entity.hitbox = hitbox;
+    entity.skinMaterials = materials;
+  }
+
+  function applySkinWhenReady(id: number, skinDataUrl: string | null): void {
+    void loadSkinImage(skinDataUrl).then((img) => rebuildPlayerAvatarSkin(id, img));
+  }
+
+  /** Placeholder avatar for a MOB - a colour-coded capsule, until real per-mob models/skins are wired into the multiplayer client (out of scope for this pass - see the module doc comment). A mob's `pos` is FEET height (mob-manager.ts convention, unchanged since Fase 1), so the capsule sits centred above it - the opposite of a player's eye-height origin. */
+  function makeMobAvatar(id: number, kind: string, name: string): RemoteEntity {
+    const height = kind === 'zombie' || kind === 'skeleton' ? 1.9 : 1.3;
     const mesh = new THREE.Group();
     const body = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.3, Math.max(height - 0.6, 0.2), 4, 8),
       new THREE.MeshLambertMaterial({ color: ENTITY_COLOR[kind] ?? 0xffffff }),
     );
-    body.position.y = isPlayer ? -0.9 : height / 2;
+    body.position.y = height / 2;
     body.userData.entityId = id; // read by onMouseDown to tell an attack target apart from terrain
     mesh.add(body);
     scene.add(mesh);
@@ -389,7 +486,32 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     label.textContent = name;
     label.style.cssText = 'position:absolute;color:#fff;font:12px Tricraft,sans-serif;text-shadow:1px 1px 0 #000;transform:translate(-50%,-100%);white-space:nowrap;';
     labelLayer.appendChild(label);
-    return { mesh, hitbox: body, label, labelOffsetY: isPlayer ? 1.1 : height + 0.3 };
+    return {
+      mesh, hitbox: body, label, labelOffsetY: height + 0.3,
+      lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0,
+    };
+  }
+
+  /** Every Mesh's geometry under `root` - a player model is ~10 boxes (body parts + their overlay shells + the hitbox), each its own BufferGeometry created fresh per PlayerModel instance (never shared, unlike singleplayer's one-off local model), so leaving these behind on every join/leave/skin-rebuild would leak real GPU memory over a long session. Materials are handled separately (disposeSkinMaterials, or a mob capsule's own one-off material) since which material(s) a mesh owns vs. shares varies by avatar kind. */
+  function disposeGroupGeometries(root: THREE.Object3D): void {
+    root.traverse((obj) => { if (obj instanceof THREE.Mesh) obj.geometry.dispose(); });
+  }
+
+  function removeEntityAvatar(entity: RemoteEntity): void {
+    scene.remove(entity.mesh);
+    entity.label.remove();
+    disposeGroupGeometries(entity.mesh);
+    if (entity.skinMaterials) disposeSkinMaterials(entity.skinMaterials);
+    else (entity.hitbox.material as THREE.Material).dispose(); // mob capsule - its own one-off MeshLambertMaterial, not shared
+  }
+
+  /** Advances one remote player's walk-cycle/orientation animation - see moveDeltaX/Z's doc comment for why this reads a value computed once per tick rather than the entity's raw position each frame. Call every render frame, not just on a `state` message, so the swing stays smooth between the server's 20Hz updates. */
+  function updateRemoteAnimation(entity: RemoteEntity, delta: number): void {
+    if (!entity.playerModel) return;
+    const moving = entity.moveDeltaX * entity.moveDeltaX + entity.moveDeltaZ * entity.moveDeltaZ > 0.0001;
+    if (moving) entity.playerModel.startWalking(); else entity.playerModel.stopWalking();
+    entity.playerModel.setOrientation(entity.lastYaw, 0, entity.moveDeltaX, entity.moveDeltaZ, delta);
+    entity.playerModel.updateWalkingAnimation(delta);
   }
 
   const messageEl = document.querySelector<HTMLElement>('#multiplayer-connect-message')!;
@@ -412,7 +534,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     healthEl.hidden = true;
     gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
-    for (const [, p] of remoteEntities) { scene.remove(p.mesh); p.label.remove(); }
+    for (const [, p] of remoteEntities) removeEntityAvatar(p);
     // Chunk geometries are real GPU resources (BufferGeometry) - renderer.dispose()
     // below doesn't free those on its own, so a reconnect in the same page
     // session would otherwise leak VRAM for every streamed-in chunk.
@@ -439,23 +561,44 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       for (const e of msg.entities as EntitySnapshot[]) {
         seen.add(e.id);
         let op = remoteEntities.get(e.id);
-        if (!op) { op = makeEntityAvatar(e.id, e.kind, e.name ?? e.kind); remoteEntities.set(e.id, op); }
+        if (!op) {
+          if (e.kind === 'player') {
+            op = makePlayerAvatar(e.id, e.name ?? e.kind, null); // default look immediately, upgraded to the real skin below/onPlayerSkin as soon as it's known
+            const knownSkin = playerSkins.get(e.id);
+            if (knownSkin !== undefined) applySkinWhenReady(e.id, knownSkin);
+          } else {
+            op = makeMobAvatar(e.id, e.kind, e.name ?? e.kind);
+          }
+          op.lastHealth = e.health;
+          remoteEntities.set(e.id, op);
+        } else {
+          op.moveDeltaX = e.pos.x - op.mesh.position.x;
+          op.moveDeltaZ = e.pos.z - op.mesh.position.z;
+        }
         op.mesh.position.set(e.pos.x, e.pos.y, e.pos.z);
-        op.mesh.rotation.y = e.yaw;
+        if (!op.playerModel) op.mesh.rotation.y = e.yaw; // players: left to updateRemoteAnimation's eased setOrientation() every frame instead
+        op.lastYaw = e.yaw;
+        if (op.playerModel && e.health < op.lastHealth) op.playerModel.hurt();
+        op.lastHealth = e.health;
       }
       for (const [id, op] of remoteEntities) {
         if (seen.has(id)) continue;
-        scene.remove(op.mesh); op.label.remove(); remoteEntities.delete(id);
+        removeEntityAvatar(op);
+        remoteEntities.delete(id);
       }
     },
     onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId),
     onEntityRemoved: (id) => {
       const op = remoteEntities.get(id);
-      if (op) { scene.remove(op.mesh); op.label.remove(); remoteEntities.delete(id); }
+      if (op) { removeEntityAvatar(op); remoteEntities.delete(id); }
+    },
+    onPlayerSkin: (playerId, skin) => {
+      playerSkins.set(playerId, skin);
+      if (remoteEntities.has(playerId)) applySkinWhenReady(playerId, skin);
     },
     onChat: (from, text) => console.log(`[chat] ${from}: ${text}`),
     onClose: (reason) => disconnect(reason),
-  });
+  }, loadPlayerSkinDataUrl());
 
   let lastSend = 0;
   function sendInput(now: number): void {
@@ -493,6 +636,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     }
   }
 
+  let lastFrameTime = 0;
   function frame(now: number): void {
     if (!running) return;
     requestAnimationFrame(frame);
@@ -504,6 +648,13 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     sendInput(now);
     updateStreaming();
     updateLabels();
+    // Same 0.1s spiral-of-death clamp main.ts's own animate() uses - a
+    // backgrounded/minimized tab's first frame back can report a
+    // multi-second gap, which would otherwise fling a remote player's
+    // walk-cycle/orientation easing wildly off in one step.
+    const delta = lastFrameTime === 0 ? 0 : Math.min((now - lastFrameTime) / 1000, 0.1);
+    lastFrameTime = now;
+    for (const entity of remoteEntities.values()) updateRemoteAnimation(entity, delta);
     if (materials) materials.updateWaterAnimation(now / 1000);
     renderer.render(scene, camera);
   }

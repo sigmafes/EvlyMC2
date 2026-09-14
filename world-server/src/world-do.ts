@@ -41,6 +41,8 @@ type Session = {
   intent: { moveX: number; moveZ: number; wantJump: boolean; sprinting: boolean; sneaking: boolean };
   lastSeq: number;
   health: number;
+  /** The skin PNG (data: URL) this player joined with, or null for the built-in default - see onJoin. */
+  skin: string | null;
 };
 
 /**
@@ -208,13 +210,15 @@ export class WorldDO implements DurableObject {
     }
 
     const id = this.nextId++;
-    // Real terrain now (ServerTerrain, seeded from the worldId) - spawn eye
-    // height is found by scanning down for the actual ground surface at
-    // (0,0), not a hardcoded constant. (+2.25 = +0.5 block-top + 1.75
-    // player-physics.ts eyeHeight - a fixed flat-world y=2 here previously
-    // put the player's feet 0.25 blocks INSIDE the ground, which cascaded
-    // into the "1.8 in one tick" bug from the first smoke test.)
-    const spawn: Vec3 = { x: 0, y: this.findSpawnEyeY(0, 0), z: 0 };
+    // Real terrain now (ServerTerrain, seeded from the worldId) - spawn point
+    // is a real dry-land column found by findLandSpawn() (see its doc
+    // comment), not a hardcoded (0,0) that might land in the middle of an
+    // ocean. (+2.25 = +0.5 block-top + 1.75 player-physics.ts eyeHeight - a
+    // fixed flat-world y=2 here previously put the player's feet 0.25 blocks
+    // INSIDE the ground, which cascaded into the "1.8 in one tick" bug from
+    // the first smoke test.)
+    const [spawnX, spawnZ] = this.findLandSpawn();
+    const spawn: Vec3 = { x: spawnX, y: this.findSpawnEyeY(spawnX, spawnZ), z: spawnZ };
     let physics!: PlayerPhysics;
     const getBlocks = () => this.getBlocksNear(physics.state.position);
     // isWater wires up swimming (buoyancy/stroke-up, see player-physics.ts) -
@@ -230,12 +234,19 @@ export class WorldDO implements DurableObject {
     );
     physics.setSpawn(spawn.x, spawn.y, spawn.z);
 
+    // Cap absurdly large payloads (a well-behaved client only ever sends a
+    // 64x64 PNG data URL, a few KB) - a malformed/hostile one shouldn't be
+    // able to bloat every other client's memory via the playerSkin broadcast
+    // below or the storage kept here for late joiners.
+    const skin = typeof msg.skin === 'string' && msg.skin.length <= 200_000 ? msg.skin : null;
+
     const session: Session = {
       ws, id, name: msg.playerName || `Player${id}`, physics,
       yaw: 0, pitch: 0,
       intent: { moveX: 0, moveZ: 0, wantJump: false, sprinting: false, sneaking: false },
       lastSeq: 0,
       health: PLAYER_MAX_HEALTH,
+      skin,
     };
     this.sessions.set(ws, session);
 
@@ -248,6 +259,14 @@ export class WorldDO implements DurableObject {
       const [x, y, z] = key.split(',').map(Number);
       this.send(ws, { type: 'blockChanged', x, y, z, blockId: id2 });
     }
+    // Catch this client up on every already-connected player's skin, then
+    // tell everyone else about this new player's - same backlog-replay
+    // pattern as the edits loop just above.
+    for (const [otherWs, other] of this.sessions) {
+      if (otherWs === ws) continue;
+      this.send(ws, { type: 'playerSkin', playerId: other.id, skin: other.skin });
+    }
+    this.broadcast({ type: 'playerSkin', playerId: id, skin }, ws);
     this.broadcast({ type: 'chat', from: 'server', text: `${session.name} joined` }, ws);
     this.ensureTicking();
   }
@@ -344,8 +363,8 @@ export class WorldDO implements DurableObject {
       session.health = Math.max(0, session.health - damage);
       if (session.health <= 0) {
         session.health = PLAYER_MAX_HEALTH;
-        const spawn = this.findSpawnEyeY(0, 0);
-        session.physics.setSpawn(0, spawn, 0);
+        const [sx, sz] = this.findLandSpawn();
+        session.physics.setSpawn(sx, this.findSpawnEyeY(sx, sz), sz);
         this.broadcast({ type: 'chat', from: 'server', text: `${session.name} died` });
       }
       return;
@@ -403,6 +422,42 @@ export class WorldDO implements DurableObject {
       }
     }
     return 2.25; // no solid ground found in range (shouldn't happen) - fall back to the old flat-world constant
+  }
+
+  /**
+   * Finds a dry-land (x,z) column near the origin for a fresh/respawning
+   * player, instead of always trying (0,0) - which, depending on the seed,
+   * can be the middle of an ocean (findSpawnEyeY alone only kept a spawn
+   * like that from being stuck underwater by surfacing it at the water
+   * line, not by finding actual ground). Walks an outward square spiral,
+   * testing terrain.surfaceHeight() - a cheap raw noise sample, no chunk
+   * generation - at each column, and returns the first one above sea level.
+   * Falls back to (0,0) if nothing within range qualifies (e.g. a seed that
+   * is entirely ocean for a very long stretch - vanishingly unlikely with
+   * this noise, but a spawn has to return something).
+   */
+  private findLandSpawn(): [x: number, z: number] {
+    const STEP = 8;
+    const MAX_RING = 20; // 20*8 = 160 blocks out, plenty for any real coastline
+    // isLand mirrors chunk.ts's OWN isWaterBody predicate exactly
+    // (surfaceY = Math.floor(getTerrainHeight(x,z)); isWaterBody = surfaceY
+    // <= WATER_LEVEL) - comparing the raw float straight to WATER_LEVEL
+    // without the floor let a column like 63.4 pass this check (63.4 > 63)
+    // while the actual generated chunk still floored it to 63 and rendered
+    // it as water, which is exactly the "spawned in the ocean" bug this
+    // function exists to prevent in the first place.
+    const isLand = (x: number, z: number) => Math.floor(this.terrain!.surfaceHeight(x, z)) > WATER_LEVEL;
+    if (isLand(0, 0)) return [0, 0];
+    for (let ring = 1; ring <= MAX_RING; ring++) {
+      const r = ring * STEP;
+      for (let x = -r; x <= r; x += STEP) {
+        for (let z = -r; z <= r; z += STEP) {
+          if (Math.abs(x) !== r && Math.abs(z) !== r) continue; // perimeter of this ring only
+          if (isLand(x, z)) return [x, z];
+        }
+      }
+    }
+    return [0, 0];
   }
 
   /** A handful of animals + a couple of hostiles scattered around spawn, once per DO instance lifetime - not persisted (see mobs.ts's class doc comment: no death/drops yet, so nothing would need saving anyway). */

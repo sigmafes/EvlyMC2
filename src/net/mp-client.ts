@@ -6,6 +6,7 @@ export type MpClientHandlers = {
   onState: (msg: Extract<ServerMessage, { type: 'state' }>) => void;
   onBlockChanged: (msg: Extract<ServerMessage, { type: 'blockChanged' }>) => void;
   onEntityRemoved: (id: number) => void;
+  onPlayerSkin: (playerId: number, skin: string | null) => void;
   onChat: (from: string, text: string) => void;
   onClose: (reason: string) => void;
 };
@@ -19,13 +20,13 @@ export class MpClient {
   private ws: WebSocket | null = null;
   private closedByUs = false;
 
-  connect(serverUrl: string, worldId: string, playerName: string, handlers: MpClientHandlers): void {
+  connect(serverUrl: string, worldId: string, playerName: string, handlers: MpClientHandlers, skin?: string | null): void {
     const ws = new WebSocket(serverUrl);
     this.ws = ws;
     this.closedByUs = false;
 
     ws.addEventListener('open', () => {
-      this.send({ type: 'join', worldId, playerName, protocolVersion: PROTOCOL_VERSION });
+      this.send({ type: 'join', worldId, playerName, protocolVersion: PROTOCOL_VERSION, skin });
     });
 
     ws.addEventListener('message', (event) => {
@@ -43,6 +44,7 @@ export class MpClient {
         case 'state': handlers.onState(msg); break;
         case 'blockChanged': handlers.onBlockChanged(msg); break;
         case 'entityRemoved': handlers.onEntityRemoved(msg.id); break;
+        case 'playerSkin': handlers.onPlayerSkin(msg.playerId, msg.skin); break;
         case 'chat': handlers.onChat(msg.from, msg.text); break;
         default: break; // chunkData/inventoryUpdate/pong: not used by this first client yet
       }

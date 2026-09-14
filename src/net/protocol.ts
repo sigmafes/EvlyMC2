@@ -49,7 +49,15 @@ export type EntitySnapshot = {
 // --- Client -> Server --------------------------------------------------
 
 export type ClientMessage =
-  | { type: 'join'; worldId: string; playerName: string; protocolVersion: number }
+  | {
+      type: 'join'; worldId: string; playerName: string; protocolVersion: number;
+      /** The 64x64 skin PNG this client currently has selected (player-skin.ts),
+       * as a data: URL - `null`/absent if using the built-in default. Sent once
+       * at join, not kept in sync afterward (see world-do.ts's onJoin doc
+       * comment): changing skin mid-session in another player's view is a
+       * real follow-up, not something this first pass covers. */
+      skin?: string | null;
+    }
   /**
    * Movement/look intent for one client-side simulation step, not a
    * position - the server re-simulates this itself (same PlayerPhysics
@@ -107,6 +115,8 @@ export type ServerMessage =
   | { type: 'blockChanged'; x: number; y: number; z: number; blockId: BlockId }
   | { type: 'inventoryUpdate'; slots: InventorySlot[]; selectedIndex: number }
   | { type: 'entityRemoved'; id: number; reason: 'death' | 'despawn' | 'disconnect' }
+  /** Another player's skin - sent once when they join (and replayed for every already-connected player right after `welcome`, so a client catches up on everyone already in the world). `skin: null` means the built-in default. */
+  | { type: 'playerSkin'; playerId: number; skin: string | null }
   | { type: 'chat'; from: string; text: string }
   | { type: 'pong'; clientTimeMs: number; serverTimeMs: number };
 
@@ -125,7 +135,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'chat', 'pong',
+      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
 }
