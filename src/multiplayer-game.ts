@@ -37,6 +37,17 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const hint = document.querySelector<HTMLElement>('#mp-hint')!;
   const menu = document.querySelector<HTMLElement>('#main-menu')!;
   const connectScreen = document.querySelector<HTMLElement>('#multiplayer-connect')!;
+  // #game-shell (singleplayer's HUD/hotbar/crosshair/chat/game-canvas) is
+  // never marked `hidden` in the HTML or toggled by main.ts - it just sits
+  // behind #main-menu's own opaque panorama the whole time. Hiding
+  // #main-menu alone left it exposed: its HUD painted over this scene (z-
+  // index 2 vs this canvas's implicit 0) AND its own <canvas>, though
+  // visually transparent, still captured every click before it could reach
+  // #mp-canvas - the exact "click doesn't do anything" symptom. Must hide it
+  // explicitly and restore it on disconnect.
+  const gameShell = document.querySelector<HTMLElement>('#game-shell')!;
+  const previousGameShellDisplay = gameShell.style.display;
+  gameShell.style.display = 'none';
 
   canvas.hidden = false;
   crosshair.hidden = false;
@@ -72,7 +83,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
 
   const otherPlayers = new Map<number, OtherPlayer>();
   const labelLayer = document.createElement('div');
-  labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:5;';
+  labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:901;';
   document.body.appendChild(labelLayer);
 
   let selfId = -1;
@@ -176,6 +187,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     canvas.hidden = true;
     crosshair.hidden = true;
     hint.hidden = true;
+    gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
     for (const [, p] of otherPlayers) { scene.remove(p.mesh); p.label.remove(); }
     renderer.dispose();

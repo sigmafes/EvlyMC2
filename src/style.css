@@ -1264,6 +1264,10 @@ body.touch #crosshair {
   width: 100%;
   height: 100%;
   display: block;
+  /* Defensively above any other overlay (game-shell is explicitly hidden by
+     multiplayer-game.ts too, but this keeps a stray z-index:2+ element from
+     ever silently capturing clicks meant for this canvas again). */
+  z-index: 900;
 }
 #mp-canvas[hidden] { display: none; }
 #mp-crosshair {
@@ -1273,7 +1277,7 @@ body.touch #crosshair {
   width: 16px;
   height: 16px;
   margin: -8px 0 0 -8px;
-  z-index: 5;
+  z-index: 901;
   pointer-events: none;
 }
 #mp-crosshair[hidden] { display: none; }
@@ -1290,7 +1294,7 @@ body.touch #crosshair {
   top: 10px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 5;
+  z-index: 901;
   color: #fff;
   font-size: 12px;
   text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
