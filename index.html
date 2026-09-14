@@ -91,10 +91,10 @@
       <div id="player-options-body">
         <canvas id="player-options-doll"></canvas>
         <div id="player-options-form">
-          <div class="player-name-row">
+          <label class="player-name-row" for="player-name-input">
             <span>Name</span>
-            <span id="player-name-display"></span>
-          </div>
+            <input id="player-name-input" type="text" maxlength="16" autocomplete="off" spellcheck="false" disabled />
+          </label>
           <button id="import-skin-btn" class="mc-button" type="button"><span>Import Skin</span></button>
           <button id="reset-skin-btn" class="mc-button" type="button"><span>Reset Skin</span></button>
           <input id="skin-file-input" type="file" accept="image/png,.png" hidden />

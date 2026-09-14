@@ -269,10 +269,10 @@ export class MainMenu {
   private bindPlayerOptions() {
     applyPersistedSkin((image) => applySkinTexture(image));
 
-    // Name is fixed to the account used to log in (see access-gate.ts) - no
-    // player-facing way to change it, so it stays in sync with the account.
-    const nameDisplay = document.querySelector<HTMLElement>('#player-name-display')!;
-    nameDisplay.textContent = loadPlayerName();
+    // Name is fixed to the account used to log in (see access-gate.ts) - the
+    // input stays disabled so it's still visible/readable but not editable.
+    const nameInput = document.querySelector<HTMLInputElement>('#player-name-input')!;
+    nameInput.value = loadPlayerName();
 
     const fileInput = document.querySelector<HTMLInputElement>('#skin-file-input')!;
     const errorEl = document.querySelector<HTMLElement>('#skin-import-error')!;
