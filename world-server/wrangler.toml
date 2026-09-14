@@ -1,0 +1,16 @@
+name = "evlymc-world-server"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "WORLD_DO"
+class_name = "WorldDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["WorldDO"]
+
+[vars]
+# Comma-separated list of origins allowed to open a WebSocket to a world.
+ALLOWED_ORIGINS = "https://evlymc.pages.dev,http://localhost:5173"

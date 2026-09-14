@@ -2,6 +2,9 @@
 node_modules/
 access-worker/node_modules/
 access-worker/.wrangler/
+world-server/node_modules/
+world-server/.wrangler/
+world-server/dist/
 
 # Build output
 dist/
