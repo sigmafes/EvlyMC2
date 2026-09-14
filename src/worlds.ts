@@ -3,7 +3,16 @@ import { BlockDataStore } from './block-data';
 import { DroppedItemsStore } from './dropped-items-store';
 import { deletePlayerSave } from './player-store';
 
-export const EVLYMC_VERSION = 'A0.b';
+export const EVLYMC_VERSION = 'A0.c';
+
+/**
+ * Worlds are only playable/editable on the version that created them - there
+ * is no migration path between versions, so a version bump intentionally
+ * strands older worlds rather than risk silently loading them wrong.
+ */
+export function isWorldCompatible(world: WorldMeta): boolean {
+  return world.version === EVLYMC_VERSION;
+}
 
 export type GameMode = 'Survival' | 'Creative';
 

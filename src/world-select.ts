@@ -9,6 +9,7 @@ import {
   deleteWorld,
   activateWorld,
   formatStamp,
+  isWorldCompatible,
 } from './worlds';
 
 type WorldSelectHandlers = {
@@ -65,13 +66,13 @@ export class WorldSelect {
     const current = this.selected();
     switch (action) {
       case 'play':
-        if (current) this.play(current);
+        if (current && isWorldCompatible(current)) this.play(current);
         break;
       case 'create':
         this.openCreator();
         break;
       case 'edit': {
-        if (!current) break;
+        if (!current || !isWorldCompatible(current)) break;
         const name = window.prompt('World name:', current.name)?.trim();
         if (name) {
           updateWorld(current.id, { name });
@@ -175,18 +176,25 @@ export class WorldSelect {
       sub1.className = 'world-row-sub';
       sub1.textContent = `${world.name}${this.dupSuffix(world)} (${formatStamp(world.createdAt)})`;
 
+      const compatible = isWorldCompatible(world);
+
       const sub2 = document.createElement('div');
       sub2.className = 'world-row-sub';
-      sub2.textContent = `${world.mode} Mode, ${world.cheats ? 'Cheats, ' : ''}Version: ${world.version}`;
+      sub2.textContent = `${world.mode} Mode, ${world.cheats ? 'Cheats, ' : ''}Version: ${world.version}`
+        + (compatible ? '' : ' (incompatible with A0.c)');
+      if (!compatible) sub2.classList.add('world-row-incompatible');
 
       text.append(title, sub1, sub2);
       row.append(thumb, text);
+      if (!compatible) row.classList.add('incompatible');
 
       row.addEventListener('click', () => {
         this.selectedId = world.id;
         this.renderList();
       });
-      row.addEventListener('dblclick', () => this.play(world));
+      row.addEventListener('dblclick', () => {
+        if (isWorldCompatible(world)) this.play(world);
+      });
 
       this.listEl.append(row);
     }
@@ -195,10 +203,14 @@ export class WorldSelect {
   }
 
   private updateButtons(): void {
-    const hasSelection = !!this.selected();
+    const current = this.selected();
+    const hasSelection = !!current;
+    const compatible = !current || isWorldCompatible(current);
     for (const action of ['play', 'edit', 'delete', 'recreate']) {
       const button = this.root.querySelector<HTMLButtonElement>(`.mc-button[data-action="${action}"]`);
-      if (button) button.disabled = !hasSelection;
+      if (!button) continue;
+      const needsCompatible = action === 'play' || action === 'edit';
+      button.disabled = !hasSelection || (needsCompatible && !compatible);
     }
   }
 }

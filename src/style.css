@@ -1401,6 +1401,8 @@ body.touch #crosshair {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.world-row-sub.world-row-incompatible { color: #ff6b6b; }
+.world-row.incompatible .world-row-title { color: #c9c9c9; }
 #world-select-actions {
   width: min(900px, 92vw);
   display: flex;
