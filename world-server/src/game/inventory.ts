@@ -77,6 +77,24 @@ export function addToInventory(slots: InventorySlot[], id: number, count: number
   return count - remaining;
 }
 
+/** Total count of item/block `id` across every slot - used to check a recipe's ingredients are actually affordable before crafting. */
+export function countInInventory(slots: InventorySlot[], id: number): number {
+  let total = 0;
+  for (const slot of slots) if (slot.id === id) total += slot.count ?? 0;
+  return total;
+}
+
+/** Removes up to `count` of item/block `id` from wherever it's stacked across the inventory (not a single known slot - crafting can pull the same ingredient from several stacks). Returns how many were actually removed. */
+export function removeItemsAnywhere(slots: InventorySlot[], id: number, count: number): number {
+  let remaining = count;
+  for (const slot of slots) {
+    if (remaining <= 0) break;
+    if (slot.id !== id) continue;
+    remaining -= removeFromSlot(slot, remaining);
+  }
+  return count - remaining;
+}
+
 /** Removes up to `count` from `slot` in place, clearing it back to empty if that empties the stack. Returns how many were actually removed. */
 export function removeFromSlot(slot: InventorySlot, count: number): number {
   if (slot.id === null) return 0;

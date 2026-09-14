@@ -419,6 +419,44 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   }
   renderHotbar();
 
+  /**
+   * Crafting menu (C toggles it): a list of what the player can currently
+   * afford (server-computed, `craftableRecipes` - see world-do.ts's
+   * sendCraftableRecipes doc comment), click one to craft it. Simplified
+   * from singleplayer's real 2x2/3x3 drag-and-drop grid - arranging
+   * ingredients by hand over the network needs a much bigger protocol
+   * surface (per-cell placement, held-item cursor state) for a first pass;
+   * picking a recipe from "what you can make right now" is a real, honest
+   * subset (same RECIPES table, same server-side validation) rather than a
+   * fake shortcut, and the full grid UI is a real follow-up, not a corner
+   * cut by accident.
+   */
+  const craftMenuEl = document.createElement('div');
+  craftMenuEl.id = 'mp-craft-menu';
+  craftMenuEl.hidden = true;
+  const craftMenuGrid = document.createElement('div');
+  craftMenuGrid.id = 'mp-craft-menu-grid';
+  craftMenuEl.appendChild(craftMenuGrid);
+  document.body.appendChild(craftMenuEl);
+  let craftableRecipes: { index: number; out: { id: number; count: number } }[] = [];
+  let craftMenuOpen = false;
+  function renderCraftMenu(): void {
+    craftMenuGrid.innerHTML = '';
+    for (const recipe of craftableRecipes) {
+      const btn = document.createElement('button');
+      btn.className = 'inventory-slot';
+      renderSlot(btn, { id: recipe.out.id, name: '', count: recipe.out.count });
+      btn.addEventListener('click', () => client.send({ type: 'craft', recipeIndex: recipe.index }));
+      craftMenuGrid.appendChild(btn);
+    }
+    if (craftableRecipes.length === 0) craftMenuGrid.textContent = 'Nada para craftear todavía.';
+  }
+  function setCraftMenuOpen(open: boolean): void {
+    craftMenuOpen = open;
+    craftMenuEl.hidden = !open;
+    if (open) { renderCraftMenu(); unlockPointerForGui(); } else { lockPointer(canvas); }
+  }
+
   let yaw = 0;
   let pitch = 0;
   let seq = 0;
@@ -430,6 +468,8 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const onKeyDown = (e: KeyboardEvent) => {
     keys.add(e.code);
     if (e.code === 'Escape') disconnect('Disconnected');
+    if (e.code === 'KeyC') { setCraftMenuOpen(!craftMenuOpen); return; }
+    if (craftMenuOpen) return; // don't move/select slots while the menu has the pointer
     const digitIndex = DIGIT_CODES.indexOf(e.code);
     if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
     if (e.code === 'KeyQ') client.send({ type: 'dropItem' });
@@ -705,6 +745,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
     hotbarEl.remove();
+    craftMenuEl.remove();
     for (const [, p] of remoteEntities) removeEntityAvatar(p);
     // Chunk geometries are real GPU resources (BufferGeometry) - renderer.dispose()
     // below doesn't free those on its own, so a reconnect in the same page
@@ -798,6 +839,10 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       inventorySlots = slots.slice(0, HOTBAR_SIZE); // backpack slots (9..35) aren't rendered yet - no GUI for them client-side
       selectedSlotIndex = selectedIndex;
       renderHotbar();
+    },
+    onCraftableRecipes: (recipes) => {
+      craftableRecipes = recipes;
+      if (craftMenuOpen) renderCraftMenu();
     },
     onChat: (from, text) => console.log(`[chat] ${from}: ${text}`),
     onClose: (reason) => disconnect(reason),

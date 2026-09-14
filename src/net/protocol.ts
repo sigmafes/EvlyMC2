@@ -86,6 +86,17 @@ export type ClientMessage =
   | { type: 'useItem'; slotIndex: number }
   /** Q - drops the whole stack currently in the selected hotbar slot. No world item entity yet (see world-do.ts's dropItem handler doc comment) - the stack just leaves the inventory. */
   | { type: 'dropItem' }
+  /**
+   * Craft one of the recipes the server last told this client it can
+   * afford (`craftableRecipes`) - `recipeIndex` is RECIPES' own array
+   * index (src/crafting.ts), re-validated server-side on arrival rather
+   * than trusted (see world-do.ts's handleCraft doc comment). Simplified
+   * from singleplayer's drag-and-drop 2x2/3x3 grid: the player picks a
+   * recipe from a list of what they can currently make instead of
+   * physically arranging ingredients in a grid over the network - see
+   * multiplayer-game.ts's craft menu doc comment for why.
+   */
+  | { type: 'craft'; recipeIndex: number }
   | { type: 'attack'; targetId: number }
   | { type: 'shootBow'; power: number; dir: Vec3 }
   | { type: 'chat'; text: string }
@@ -122,6 +133,8 @@ export type ServerMessage =
   | { type: 'playerSkin'; playerId: number; skin: string | null }
   /** Resyncs the client's local day/night clock to the server's authoritative one (day-night-math.ts) - sent whenever the integer skyDarken step changes (so a transition starts on every client at the same moment) and periodically besides, to correct any drift in a client that free-runs the clock locally between corrections (see multiplayer-game.ts). */
   | { type: 'dayTime'; elapsed: number }
+  /** Every RECIPES (src/crafting.ts) index this player currently has ingredients for, sent whenever the inventory changes - drives the craft menu's list (see multiplayer-game.ts). `out` is included so the client can render the result icon without needing its own copy of RECIPES. */
+  | { type: 'craftableRecipes'; recipes: { index: number; out: { id: number; count: number } }[] }
   | { type: 'chat'; from: string; text: string }
   | { type: 'pong'; clientTimeMs: number; serverTimeMs: number };
 
@@ -129,7 +142,7 @@ export type ServerMessage =
 export function isClientMessageType(type: string): type is ClientMessage['type'] {
   return (
     [
-      'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem',
+      'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft',
       'attack', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);
@@ -140,7 +153,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'chat', 'pong',
+      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'craftableRecipes', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
 }

@@ -11,10 +11,11 @@ import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
 import type { MobKind } from './game/mob-manager';
 import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from './game/day-night-math';
-import { createEmptyInventory, addToInventory, removeFromSlot } from './game/inventory';
+import { createEmptyInventory, addToInventory, removeFromSlot, removeItemsAnywhere, countInInventory } from './game/inventory';
 import { getDrops } from '../../src/drops';
 import { isBlock } from '../../src/item';
 import type { InventorySlot } from '../../src/inventory';
+import { RECIPES, type Recipe } from '../../src/crafting';
 
 export interface Env {
   WORLD_DO: DurableObjectNamespace;
@@ -216,6 +217,9 @@ export class WorldDO implements DurableObject {
         removeFromSlot(session.inventory[session.selectedSlot], Infinity);
         this.sendInventory(session);
         break;
+      case 'craft':
+        this.handleCraft(session, msg.recipeIndex);
+        break;
       case 'chat':
         this.broadcast({ type: 'chat', from: session.name, text: msg.text });
         break;
@@ -263,6 +267,54 @@ export class WorldDO implements DurableObject {
 
   private sendInventory(session: Session): void {
     this.send(session.ws, { type: 'inventoryUpdate', slots: session.inventory, selectedIndex: session.selectedSlot });
+    this.sendCraftableRecipes(session);
+  }
+
+  /** Every RECIPES index this player can currently afford - recomputed and resent alongside every inventoryUpdate (sendInventory), since crafting affordability can only change when the inventory does. */
+  private sendCraftableRecipes(session: Session): void {
+    const recipes: { index: number; out: { id: number; count: number } }[] = [];
+    for (let i = 0; i < RECIPES.length; i++) {
+      const recipe = RECIPES[i];
+      if (this.canAfford(session.inventory, recipe)) recipes.push({ index: i, out: recipe.out });
+    }
+    this.send(session.ws, { type: 'craftableRecipes', recipes });
+  }
+
+  /** Ingredient id -> how many the pattern/shapeless list needs, collapsing duplicates (e.g. a pickaxe's 3 planks count as needing 3 of that id, not 3 separate 1-of checks). */
+  private recipeIngredientCounts(recipe: Recipe): Map<number, number> {
+    const counts = new Map<number, number>();
+    const add = (id: number | null) => { if (id !== null) counts.set(id, (counts.get(id) ?? 0) + 1); };
+    if (recipe.kind === 'shapeless') recipe.input.forEach(add);
+    else recipe.pattern.forEach((row) => row.forEach(add));
+    return counts;
+  }
+
+  private canAfford(inventory: InventorySlot[], recipe: Recipe): boolean {
+    for (const [id, count] of this.recipeIngredientCounts(recipe)) {
+      if (countInInventory(inventory, id) < count) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Crafts RECIPES[recipeIndex] (src/crafting.ts - the exact same recipe
+   * list and shape-matching singleplayer's crafting-grid.ts uses) if the
+   * player can actually afford it - re-checked here rather than trusted
+   * from the `craftableRecipes` list the client picked from, since that
+   * list is just a UI convenience and a modified client could send any
+   * index. Simplified from singleplayer's real 2x2/3x3 grid (see
+   * protocol.ts's `craft` message doc comment for why): ingredients are
+   * pulled from wherever they're stacked in the inventory rather than from
+   * specific grid cells the player arranged by hand.
+   */
+  private handleCraft(session: Session, recipeIndex: number): void {
+    const recipe = RECIPES[recipeIndex];
+    if (!recipe || !this.canAfford(session.inventory, recipe)) return;
+    for (const [id, count] of this.recipeIngredientCounts(recipe)) {
+      removeItemsAnywhere(session.inventory, id, count);
+    }
+    addToInventory(session.inventory, recipe.out.id, recipe.out.count);
+    this.sendInventory(session);
   }
 
   private onJoin(ws: WebSocket, msg: Extract<ClientMessage, { type: 'join' }>): void {

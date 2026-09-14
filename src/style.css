@@ -1839,6 +1839,31 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
    disabled <button> would otherwise render dimmed/desaturated by default. */
 #mp-hotbar .inventory-slot:disabled { opacity: 1; filter: none; }
 
+/* Crafting menu (C) - a simple "what can I make right now" list, not the
+   real drag-and-drop grid (see multiplayer-game.ts's craftMenuEl doc
+   comment). Reuses .inventory-slot for each recipe button. */
+#mp-craft-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+#mp-craft-menu[hidden] { display: none; }
+#mp-craft-menu-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 60vw;
+  padding: 16px;
+  background: rgba(20, 20, 20, 0.85);
+  border: 2px solid #000;
+  color: #fff;
+  font-size: 14px;
+}
+
 body.touch .touch-btn {
   pointer-events: auto;
   touch-action: none;

@@ -10,6 +10,7 @@ export type MpClientHandlers = {
   onPlayerSkin: (playerId: number, skin: string | null) => void;
   onDayTime: (elapsed: number) => void;
   onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number) => void;
+  onCraftableRecipes: (recipes: { index: number; out: { id: number; count: number } }[]) => void;
   onChat: (from: string, text: string) => void;
   onClose: (reason: string) => void;
 };
@@ -50,6 +51,7 @@ export class MpClient {
         case 'playerSkin': handlers.onPlayerSkin(msg.playerId, msg.skin); break;
         case 'dayTime': handlers.onDayTime(msg.elapsed); break;
         case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex); break;
+        case 'craftableRecipes': handlers.onCraftableRecipes(msg.recipes); break;
         case 'chat': handlers.onChat(msg.from, msg.text); break;
         default: break; // chunkData/pong: not used by this client yet
       }
