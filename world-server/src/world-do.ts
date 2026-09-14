@@ -6,6 +6,7 @@ import type {
 } from '../../src/net/protocol';
 import { PROTOCOL_VERSION, isClientMessageType } from '../../src/net/protocol';
 import { BlockId } from '../../src/block';
+import { ServerTerrain } from './terrain';
 
 export interface Env {
   WORLD_DO: DurableObjectNamespace;
@@ -69,6 +70,9 @@ export class WorldDO implements DurableObject {
   /** Sparse block edits, "x,y,z" -> BlockId (BlockId.AIR for a broken block). Persisted to DO storage under the same key. */
   private readonly edits = new Map<string, BlockId>();
   private editsLoaded = false;
+  /** Real terrain (same deterministic Chunk/TerrainNoise generator the client uses) - see terrain.ts. Seeded once, from the first request's worldId. */
+  private terrain: ServerTerrain | null = null;
+  private worldSeed = 0;
 
   constructor(private readonly state: DurableObjectState, private readonly env: Env) {}
 
@@ -77,6 +81,15 @@ export class WorldDO implements DurableObject {
       const stored = await this.state.storage.list<BlockId>({ prefix: 'edit:' });
       for (const [key, value] of stored) this.edits.set(key.slice('edit:'.length), value);
       this.editsLoaded = true;
+    }
+    if (!this.terrain) {
+      // index.ts forwards the original request unchanged (see its comment) -
+      // re-parse the same /world/:id path here to derive a stable per-world
+      // seed, so re-visiting the same worldId always regenerates the same
+      // terrain (nothing about the terrain itself is persisted - only edits are).
+      const match = new URL(request.url).pathname.match(/^\/world\/([A-Za-z0-9_-]{1,64})$/);
+      this.worldSeed = hashSeed(match?.[1] ?? 'default');
+      this.terrain = new ServerTerrain(this.worldSeed);
     }
 
     const origin = request.headers.get('Origin') ?? '';
@@ -173,15 +186,13 @@ export class WorldDO implements DurableObject {
     }
 
     const id = this.nextId++;
-    // y=2.25: state.position is EYE height (playerEyeHeight=1.75 in
-    // player-physics.ts), and the flat ground plane's top surface sits at
-    // y=0.5 (blocks span n-0.5..n+0.5) - so feet = eyeY - 1.75 must clear
-    // 0.5. The previous y=2 put feet at 0.25, INSIDE the ground block,
-    // which made resolveHorizontalCollisions() cascade the embedded player
-    // sideways through every adjacent ground column in a single tick (the
-    // "1.8 in one tick" bug from the first smoke test - not a physics bug,
-    // just a bad spawn constant).
-    const spawn: Vec3 = { x: 0, y: 2.25, z: 0 };
+    // Real terrain now (ServerTerrain, seeded from the worldId) - spawn eye
+    // height is found by scanning down for the actual ground surface at
+    // (0,0), not a hardcoded constant. (+2.25 = +0.5 block-top + 1.75
+    // player-physics.ts eyeHeight - a fixed flat-world y=2 here previously
+    // put the player's feet 0.25 blocks INSIDE the ground, which cascaded
+    // into the "1.8 in one tick" bug from the first smoke test.)
+    const spawn: Vec3 = { x: 0, y: this.findSpawnEyeY(0, 0), z: 0 };
     let physics!: PlayerPhysics;
     const getBlocks = () => this.getBlocksNear(physics.state.position);
     physics = new PlayerPhysics(getBlocks);
@@ -196,7 +207,7 @@ export class WorldDO implements DurableObject {
     };
     this.sessions.set(ws, session);
 
-    this.send(ws, { type: 'welcome', playerId: id, worldSeed: 0, spawn, tickRateHz: TICK_HZ });
+    this.send(ws, { type: 'welcome', playerId: id, worldSeed: this.worldSeed, spawn, tickRateHz: TICK_HZ });
     // Catch this client up on every edit made before it connected - our
     // placeholder world has no chunk system yet (see the class doc comment),
     // so there's no chunkData to send; replaying each edit as its own
@@ -279,10 +290,7 @@ export class WorldDO implements DurableObject {
   private isSolidAt(x: number, y: number, z: number): boolean {
     const edit = this.edits.get(`${x},${y},${z}`);
     if (edit !== undefined) return edit !== BlockId.AIR;
-    // Placeholder world: a single flat ground plane. Real terrain (deterministic
-    // from a seed, same as the client's terrain-noise.ts) is follow-up work -
-    // see the class doc comment.
-    return y <= 0;
+    return this.terrain!.isSolid(x, y, z);
   }
 
   /** Solid-block AABBs near `pos`, in the exact {id,x,y,z,collider:Box3} shape PlayerPhysics expects (chunk.ts's BlockCollider). */
@@ -306,4 +314,19 @@ export class WorldDO implements DurableObject {
     }
     return colliders;
   }
+
+  /** Scans down from a safe height for the first solid block at (x,z), so a fresh player's spawn actually sits on the real terrain surface instead of a hardcoded height. */
+  private findSpawnEyeY(x: number, z: number): number {
+    for (let y = 140; y >= 0; y--) {
+      if (this.isSolidAt(x, y, z)) return y + 2.25; // +0.5 (block top) + 1.75 (player-physics.ts's eyeHeight)
+    }
+    return 2.25; // no solid ground found in range (shouldn't happen) - fall back to the old flat-world constant
+  }
+}
+
+/** Small deterministic string hash - same worldId always derives the same terrain seed. */
+function hashSeed(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return h;
 }

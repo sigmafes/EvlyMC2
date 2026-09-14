@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { MpClient } from './net/mp-client';
-import { BlockId } from './block';
+import { BlockId, createBlockMaterials, type BlockMaterials } from './block';
+import { Chunk, CHUNK_SIZE } from './chunk';
+import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui } from './is-touch';
 import type { EntitySnapshot } from './net/protocol';
 
@@ -12,12 +14,21 @@ import type { EntitySnapshot } from './net/protocol';
  * regression to the existing (much larger, much more capable) singleplayer
  * game while the multiplayer path is still this early/limited.
  *
- * What this does NOT do yet (matches world-do.ts's own documented scope):
- * no real terrain (a flat ground plane only), no mobs, no inventory/crafting/
- * furnace, no client-side prediction (camera POSITION always comes from the
- * server's last `state` message - only look direction is local, for
- * responsiveness). Every one of those is a real follow-up, not a corner cut
- * by accident.
+ * Terrain: real, not a placeholder. The server only ever sends a `worldSeed`
+ * (see world-do.ts) - it never ships block data over the wire at all. Since
+ * generation is fully deterministic (same Chunk/TerrainNoise/worldgen/*
+ * classes the singleplayer client and the server's world-server/src/terrain.ts
+ * both use), this client just regenerates the identical terrain locally from
+ * that seed, the same way world-server/src/terrain.ts does server-side for
+ * collision. Both sides agree on the world's shape without a byte of terrain
+ * ever crossing the network - only edits (breakBlock/placeBlock) do.
+ *
+ * Still-limited scope (matches world-do.ts's own documented scope): a fixed
+ * static grid of chunks around spawn, no streaming as the player wanders
+ * further out; no mobs; no inventory/crafting/furnace; no client-side
+ * prediction (camera POSITION always comes from the server's last `state`
+ * message - only look direction is local, for responsiveness). Every one of
+ * those is a real follow-up, not a corner cut by accident.
  */
 
 const TICK_HZ = 20;
@@ -25,6 +36,8 @@ const SEND_INTERVAL_MS = 1000 / TICK_HZ;
 const MOUSE_SENSITIVITY = 0.0022;
 const PLACE_BLOCK_ID = BlockId.STONE;
 const REACH = 5;
+/** 5x5 chunks (80x80 blocks) centred on the origin - static for this first version, see the module doc comment. */
+const WORLD_RADIUS_CHUNKS = 2;
 
 type OtherPlayer = {
   mesh: THREE.Group;
@@ -67,31 +80,61 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
 
-  // Placeholder flat world, matching world-do.ts's collision exactly: solid
-  // for y<=0, so the ground's visible top surface sits at y=0.5.
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(400, 400),
-    new THREE.MeshLambertMaterial({ color: 0x4a8f3c }),
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = 0.5;
-  scene.add(ground);
+  // --- Real terrain: generated locally from the seed, not shipped over the
+  // network - see the module doc comment. Populated once `welcome` arrives
+  // with the seed (generateWorld() below); until then the scene is just sky.
+  const chunks = new Map<string, Chunk>();
+  const chunkMeshes: THREE.Mesh[] = [];
+  let terrainNoise: TerrainNoise | null = null;
+  let materials: BlockMaterials | null = null;
+  let worldSeed = 0;
 
-  const blockGeo = new THREE.BoxGeometry(1, 1, 1);
-  const blockMat = new THREE.MeshLambertMaterial({ color: 0x8a8a8a });
-  const placedBlocks = new Map<string, THREE.Mesh>();
+  function chunkCoordOf(x: number, z: number): [number, number] {
+    return [Math.floor((x + 8) / CHUNK_SIZE), Math.floor((z + 8) / CHUNK_SIZE)];
+  }
+  function getBlock(x: number, y: number, z: number): BlockId {
+    const [cx, cz] = chunkCoordOf(x, z);
+    const chunk = chunks.get(`${cx},${cz}`);
+    return chunk ? chunk.getBlock(x, y, z) : BlockId.AIR;
+  }
+
+  async function generateWorld(seed: number): Promise<void> {
+    worldSeed = seed;
+    materials = await createBlockMaterials();
+    terrainNoise = new TerrainNoise(seed);
+    for (let cx = -WORLD_RADIUS_CHUNKS; cx <= WORLD_RADIUS_CHUNKS; cx++) {
+      for (let cz = -WORLD_RADIUS_CHUNKS; cz <= WORLD_RADIUS_CHUNKS; cz++) {
+        const chunk = new Chunk(
+          scene, materials, cx, cz,
+          getBlock, // cross-chunk reads during generation - AIR for a neighbour not generated yet in this loop, same tolerance singleplayer's own incremental streaming already has
+          terrainNoise.sample.bind(terrainNoise), terrainNoise, seed,
+        );
+        chunks.set(`${cx},${cz}`, chunk);
+      }
+    }
+    for (const chunk of chunks.values()) {
+      chunk.rebuildDirty();
+      for (const sc of chunk.subchunks) chunkMeshes.push(sc.mesh);
+    }
+  }
+
+  function applyBlockChange(x: number, y: number, z: number, id: BlockId): void {
+    const [cx, cz] = chunkCoordOf(x, z);
+    const chunk = chunks.get(`${cx},${cz}`);
+    if (!chunk) return; // outside the static grid this first version generates - see WORLD_RADIUS_CHUNKS
+    if (chunk.setBlock(x, y, z, id)) chunk.rebuildDirty(Infinity, y);
+  }
 
   const otherPlayers = new Map<number, OtherPlayer>();
   const labelLayer = document.createElement('div');
   labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:901;';
   document.body.appendChild(labelLayer);
 
-  let selfId = -1;
   let yaw = 0;
   let pitch = 0;
   let seq = 0;
   let running = true;
-  let lastServerPos = new THREE.Vector3(0, 2, 0);
+  const lastServerPos = new THREE.Vector3(0, 2, 0);
 
   const keys = new Set<string>();
   const onKeyDown = (e: KeyboardEvent) => {
@@ -110,24 +153,24 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   };
   document.addEventListener('mousemove', onMouseMove);
 
+  // Same block-position-from-hit formula as raycast.ts's resolveBlockPosition
+  // (minus its fire-plane special case, not relevant here): nudge the hit
+  // point slightly INTO the face along its normal before rounding, so it
+  // lands on the block that was actually hit rather than its neighbour.
   const raycaster = new THREE.Raycaster();
   const onMouseDown = (e: MouseEvent) => {
     if (document.pointerLockElement !== canvas) { lockPointer(canvas); return; }
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    const targets = [ground, ...placedBlocks.values()];
-    const hits = raycaster.intersectObjects(targets, false);
+    const hits = raycaster.intersectObjects(chunkMeshes, false);
     const hit = hits.find((h) => h.distance <= REACH);
     if (!hit || !hit.face) return;
-    const worldNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+    const normal = hit.face.normal;
     if (e.button === 0) {
-      // Left click: break - only meaningful on an actual placed block, not the infinite ground plane.
-      const userData = hit.object.userData as { bx?: number; by?: number; bz?: number };
-      if (userData.bx === undefined) return;
-      client.send({ type: 'breakBlock', x: userData.bx, y: userData.by!, z: userData.bz! });
+      const b = hit.point.clone().addScaledVector(normal, -0.01).round();
+      client.send({ type: 'breakBlock', x: b.x, y: b.y, z: b.z });
     } else if (e.button === 2) {
-      const p = hit.point.clone().addScaledVector(worldNormal, 0.5);
-      const bx = Math.round(p.x), by = Math.round(p.y), bz = Math.round(p.z);
-      client.send({ type: 'placeBlock', x: bx, y: by, z: bz, blockId: PLACE_BLOCK_ID, face: 0 });
+      const p = hit.point.clone().addScaledVector(normal, 0.5).round();
+      client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: PLACE_BLOCK_ID, face: 0 });
     }
   };
   const onContextMenu = (e: MouseEvent) => e.preventDefault();
@@ -155,21 +198,6 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     label.style.cssText = 'position:absolute;color:#fff;font:12px Tricraft,sans-serif;text-shadow:1px 1px 0 #000;transform:translate(-50%,-100%);white-space:nowrap;';
     labelLayer.appendChild(label);
     return { mesh, label };
-  }
-
-  function applyBlockChange(x: number, y: number, z: number, id: BlockId): void {
-    const key = `${x},${y},${z}`;
-    const existing = placedBlocks.get(key);
-    if (id === BlockId.AIR) {
-      if (existing) { scene.remove(existing); placedBlocks.delete(key); }
-      return;
-    }
-    if (existing) return;
-    const mesh = new THREE.Mesh(blockGeo, blockMat);
-    mesh.position.set(x, y, z);
-    mesh.userData = { bx: x, by: y, bz: z };
-    scene.add(mesh);
-    placedBlocks.set(key, mesh);
   }
 
   const messageEl = document.querySelector<HTMLElement>('#multiplayer-connect-message')!;
@@ -200,16 +228,16 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const client = new MpClient();
   client.connect(serverUrl, worldId, playerName, {
     onWelcome: (msg) => {
-      selfId = msg.playerId;
       lastServerPos.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
       camera.position.copy(lastServerPos);
+      void generateWorld(msg.worldSeed);
     },
     onRejected: (reason) => disconnect(`Rejected: ${reason}`),
     onState: (msg) => {
       lastServerPos.set(msg.self.pos.x, msg.self.pos.y, msg.self.pos.z);
       const seen = new Set<number>();
       for (const e of msg.entities as EntitySnapshot[]) {
-        if (e.kind !== 'player') continue; // no mobs from the server yet (see class doc comment)
+        if (e.kind !== 'player') continue; // no mobs from the server yet (see module doc comment)
         seen.add(e.id);
         let op = otherPlayers.get(e.id);
         if (!op) { op = makePlayerAvatar(e.name ?? `Player${e.id}`); otherPlayers.set(e.id, op); }
@@ -268,12 +296,13 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     if (!running) return;
     requestAnimationFrame(frame);
     // Position is always the server's last confirmed value (no local
-    // prediction yet - see the class doc comment); look direction is local
+    // prediction yet - see the module doc comment); look direction is local
     // for a responsive camera despite network latency on movement itself.
     camera.position.copy(lastServerPos);
     camera.rotation.set(pitch, yaw, 0, 'YXZ');
     sendInput(now);
     updateLabels();
+    if (materials) materials.updateWaterAnimation(now / 1000);
     renderer.render(scene, camera);
   }
   requestAnimationFrame(frame);

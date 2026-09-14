@@ -39,8 +39,16 @@ export class Chunk implements ChunkWriter {
   private readBlockData: BlockDataReader = () => undefined;
 
   constructor(
-    private readonly scene: THREE.Scene,
-    private readonly materials: BlockMaterials,
+    // Only ever read here, to build Subchunks (the mesh) - see below. Nothing
+    // else in this class touches them (confirmed: no other `this.scene`/
+    // `this.materials` reference exists). Passing null skips mesh
+    // construction entirely, leaving `subchunks` empty - block generation
+    // itself (this.generate(), the worldgen/* passes) never needed a THREE
+    // scene at all, only this constructor's very last step did. That's what
+    // lets a server (no WebGL) construct a Chunk purely for its block data -
+    // see world-server/src/terrain.ts.
+    private readonly scene: THREE.Scene | null,
+    private readonly materials: BlockMaterials | null,
     readonly chunkX: number,
     readonly chunkZ: number,
     private readonly readWorldBlock: WorldBlockReader,
@@ -57,10 +65,12 @@ export class Chunk implements ChunkWriter {
       // Player edits win over generated terrain.
       for (const [idx, id] of edits) this.blocks[idx] = id;
     }
-    for (let minY = 0; minY < CHUNK_HEIGHT; minY += SUBCHUNK_HEIGHT) {
-      const maxY = Math.min(minY + SUBCHUNK_HEIGHT - 1, this.maxY);
-      this.subchunks.push(new Subchunk(scene, materials, this.getBlock.bind(this), minY, maxY, this.minX, this.minZ, false));
-      this.dirtySubchunks.add(this.subchunks.length - 1);
+    if (scene && materials) {
+      for (let minY = 0; minY < CHUNK_HEIGHT; minY += SUBCHUNK_HEIGHT) {
+        const maxY = Math.min(minY + SUBCHUNK_HEIGHT - 1, this.maxY);
+        this.subchunks.push(new Subchunk(scene, materials, this.getBlock.bind(this), minY, maxY, this.minX, this.minZ, false));
+        this.dirtySubchunks.add(this.subchunks.length - 1);
+      }
     }
   }
 

@@ -16,6 +16,10 @@ export default {
     }
     const id = env.WORLD_DO.idFromName(match[1]);
     const stub = env.WORLD_DO.get(id);
+    // Forward the original request unchanged - reconstructing a new Request
+    // for a WebSocket upgrade is risky (the Upgrade header is handled
+    // specially by the runtime). The DO derives its own terrain seed by
+    // re-parsing this same /world/:id path from request.url itself.
     return stub.fetch(request);
   },
 };
