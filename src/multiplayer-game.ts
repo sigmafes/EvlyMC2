@@ -25,7 +25,10 @@ import type { EntitySnapshot } from './net/protocol';
  *
  * Still-limited scope (matches world-do.ts's own documented scope): a fixed
  * static grid of chunks around spawn, no streaming as the player wanders
- * further out; no mobs; no inventory/crafting/furnace; no client-side
+ * further out; mobs render as plain colour-coded capsules, not their real
+ * skinned models (that needs texture loading this client doesn't do per-mob
+ * yet); no combat/drops (mobs.ts's server-side class doc comment); no
+ * inventory/crafting/furnace; no client-side
  * prediction (camera POSITION always comes from the server's last `state`
  * message - only look direction is local, for responsiveness). Every one of
  * those is a real follow-up, not a corner cut by accident.
@@ -39,9 +42,21 @@ const REACH = 5;
 /** 5x5 chunks (80x80 blocks) centred on the origin - static for this first version, see the module doc comment. */
 const WORLD_RADIUS_CHUNKS = 2;
 
-type OtherPlayer = {
+type RemoteEntity = {
   mesh: THREE.Group;
   label: HTMLDivElement;
+  /** How far above mesh.position the name label floats - differs by kind since a player's origin is eye-height but a mob's is feet-height (see makeEntityAvatar). */
+  labelOffsetY: number;
+};
+
+/** Rough colour-coding per entity kind, until real per-mob models/skins are wired into the multiplayer client (out of scope for this pass - see the module doc comment). */
+const ENTITY_COLOR: Record<string, number> = {
+  player: 0x3a7bd5,
+  pig: 0xe7a0a0,
+  cow: 0x6b4a2f,
+  sheep: 0xe8e8e0,
+  zombie: 0x3f7d3f,
+  skeleton: 0xcfcfc0,
 };
 
 export function startMultiplayer(serverUrl: string, worldId: string, playerName: string): void {
@@ -125,7 +140,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     if (chunk.setBlock(x, y, z, id)) chunk.rebuildDirty(Infinity, y);
   }
 
-  const otherPlayers = new Map<number, OtherPlayer>();
+  const remoteEntities = new Map<number, RemoteEntity>();
   const labelLayer = document.createElement('div');
   labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:901;';
   document.body.appendChild(labelLayer);
@@ -184,20 +199,33 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   };
   window.addEventListener('resize', onResize);
 
-  function makePlayerAvatar(name: string): OtherPlayer {
+  /**
+   * Rough placeholder avatar for any remote entity (another player or a
+   * mob) - a colour-coded capsule, not the real skinned player/mob models
+   * (those need texture loading this lightweight client doesn't do yet, see
+   * the module doc comment). `kind` decides both colour and where the mesh
+   * origin sits: a player's `pos` is EYE height (protocol.ts/player-physics.ts
+   * convention) so the capsule hangs below it, while a mob's `pos` is FEET
+   * height (mob-manager.ts convention, unchanged since Fase 1) so the
+   * capsule sits centred above it instead - getting this backwards would
+   * plant one of the two either floating or waist-deep in the ground.
+   */
+  function makeEntityAvatar(kind: string, name: string): RemoteEntity {
+    const isPlayer = kind === 'player';
+    const height = isPlayer ? 1.8 : kind === 'zombie' || kind === 'skeleton' ? 1.9 : 1.3;
     const mesh = new THREE.Group();
     const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.3, 1.2, 4, 8),
-      new THREE.MeshLambertMaterial({ color: 0x3a7bd5 }),
+      new THREE.CapsuleGeometry(0.3, Math.max(height - 0.6, 0.2), 4, 8),
+      new THREE.MeshLambertMaterial({ color: ENTITY_COLOR[kind] ?? 0xffffff }),
     );
-    body.position.y = -0.9; // camera-height origin -> feet roughly at ground
+    body.position.y = isPlayer ? -0.9 : height / 2;
     mesh.add(body);
     scene.add(mesh);
     const label = document.createElement('div');
     label.textContent = name;
     label.style.cssText = 'position:absolute;color:#fff;font:12px Tricraft,sans-serif;text-shadow:1px 1px 0 #000;transform:translate(-50%,-100%);white-space:nowrap;';
     labelLayer.appendChild(label);
-    return { mesh, label };
+    return { mesh, label, labelOffsetY: isPlayer ? 1.1 : height + 0.3 };
   }
 
   const messageEl = document.querySelector<HTMLElement>('#multiplayer-connect-message')!;
@@ -217,7 +245,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     hint.hidden = true;
     gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
-    for (const [, p] of otherPlayers) { scene.remove(p.mesh); p.label.remove(); }
+    for (const [, p] of remoteEntities) { scene.remove(p.mesh); p.label.remove(); }
     renderer.dispose();
     unlockPointerForGui();
     connectScreen.hidden = false;
@@ -237,22 +265,21 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
       lastServerPos.set(msg.self.pos.x, msg.self.pos.y, msg.self.pos.z);
       const seen = new Set<number>();
       for (const e of msg.entities as EntitySnapshot[]) {
-        if (e.kind !== 'player') continue; // no mobs from the server yet (see module doc comment)
         seen.add(e.id);
-        let op = otherPlayers.get(e.id);
-        if (!op) { op = makePlayerAvatar(e.name ?? `Player${e.id}`); otherPlayers.set(e.id, op); }
+        let op = remoteEntities.get(e.id);
+        if (!op) { op = makeEntityAvatar(e.kind, e.name ?? e.kind); remoteEntities.set(e.id, op); }
         op.mesh.position.set(e.pos.x, e.pos.y, e.pos.z);
         op.mesh.rotation.y = e.yaw;
       }
-      for (const [id, op] of otherPlayers) {
+      for (const [id, op] of remoteEntities) {
         if (seen.has(id)) continue;
-        scene.remove(op.mesh); op.label.remove(); otherPlayers.delete(id);
+        scene.remove(op.mesh); op.label.remove(); remoteEntities.delete(id);
       }
     },
     onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId),
     onEntityRemoved: (id) => {
-      const op = otherPlayers.get(id);
-      if (op) { scene.remove(op.mesh); op.label.remove(); otherPlayers.delete(id); }
+      const op = remoteEntities.get(id);
+      if (op) { scene.remove(op.mesh); op.label.remove(); remoteEntities.delete(id); }
     },
     onChat: (from, text) => console.log(`[chat] ${from}: ${text}`),
     onClose: (reason) => disconnect(reason),
@@ -281,9 +308,9 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
 
   function updateLabels(): void {
     const v = new THREE.Vector3();
-    for (const [, p] of otherPlayers) {
+    for (const [, p] of remoteEntities) {
       p.mesh.getWorldPosition(v);
-      v.y += 1.1;
+      v.y += p.labelOffsetY;
       v.project(camera);
       if (v.z > 1) { p.label.style.display = 'none'; continue; }
       p.label.style.display = 'block';

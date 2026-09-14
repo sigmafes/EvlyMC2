@@ -40,4 +40,18 @@ export class CustomCursor {
   }
 }
 
-export const customCursor = new CustomCursor();
+// Lazy, not an eager module-scope instance: the old `export const customCursor
+// = new CustomCursor()` ran document.createElement() the instant this module
+// was ever imported, anywhere - including transitively through mob-ai.ts ->
+// arrow-projectiles.ts -> item-stack.ts -> inventory.ts -> is-touch.ts, none
+// of which need a cursor element, in world-server's reuse of the mob AI
+// (Fase 5+ of the multiplayer migration) where `document` doesn't exist at
+// all. Deferring construction to first actual use means importing this file
+// is now free of side effects; lockPointer()/unlockPointerForGui() (the only
+// callers) are never invoked from any server-reachable code path, so the
+// real CustomCursor is simply never constructed there.
+let instance: CustomCursor | null = null;
+export function getCustomCursor(): CustomCursor {
+  if (!instance) instance = new CustomCursor();
+  return instance;
+}

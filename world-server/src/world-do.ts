@@ -7,6 +7,8 @@ import type {
 import { PROTOCOL_VERSION, isClientMessageType } from '../../src/net/protocol';
 import { BlockId } from '../../src/block';
 import { ServerTerrain } from './terrain';
+import { ServerMobManager } from './mobs';
+import type { MobKind } from '../../src/mob-manager';
 
 export interface Env {
   WORLD_DO: DurableObjectNamespace;
@@ -73,6 +75,8 @@ export class WorldDO implements DurableObject {
   /** Real terrain (same deterministic Chunk/TerrainNoise generator the client uses) - see terrain.ts. Seeded once, from the first request's worldId. */
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
+  private readonly mobs = new ServerMobManager();
+  private mobsSpawned = false;
 
   constructor(private readonly state: DurableObjectState, private readonly env: Env) {}
 
@@ -90,6 +94,10 @@ export class WorldDO implements DurableObject {
       const match = new URL(request.url).pathname.match(/^\/world\/([A-Za-z0-9_-]{1,64})$/);
       this.worldSeed = hashSeed(match?.[1] ?? 'default');
       this.terrain = new ServerTerrain(this.worldSeed);
+    }
+    if (!this.mobsSpawned) {
+      this.spawnInitialMobs();
+      this.mobsSpawned = true;
     }
 
     const origin = request.headers.get('Origin') ?? '';
@@ -248,17 +256,25 @@ export class WorldDO implements DurableObject {
       session.physics.updatePhysics(direction, session.intent.wantJump, session.intent.sprinting, dt);
     }
 
-    const entities: EntitySnapshot[] = [...this.sessions.values()].map((s) => ({
-      id: s.id,
-      kind: 'player' as const,
-      pos: { x: s.physics.state.position.x, y: s.physics.state.position.y, z: s.physics.state.position.z },
-      yaw: s.yaw,
-      health: s.health,
-      maxHealth: 20,
-      onFire: false,
-      dying: false,
-      name: s.name,
-    }));
+    // No player-position/combat wiring yet (see mobs.ts's class doc comment) -
+    // mobs just wander like passive animals for this first pass, isSolid is
+    // the only dependency they actually need.
+    this.mobs.update(dt, { isSolid: (x, y, z) => this.isSolidAt(x, y, z) });
+
+    const entities: EntitySnapshot[] = [
+      ...[...this.sessions.values()].map((s) => ({
+        id: s.id,
+        kind: 'player' as const,
+        pos: { x: s.physics.state.position.x, y: s.physics.state.position.y, z: s.physics.state.position.z },
+        yaw: s.yaw,
+        health: s.health,
+        maxHealth: 20,
+        onFire: false,
+        dying: false,
+        name: s.name,
+      })),
+      ...this.mobs.snapshots(),
+    ];
 
     for (const [ws, session] of this.sessions) {
       const p = session.physics.state;
@@ -321,6 +337,19 @@ export class WorldDO implements DurableObject {
       if (this.isSolidAt(x, y, z)) return y + 2.25; // +0.5 (block top) + 1.75 (player-physics.ts's eyeHeight)
     }
     return 2.25; // no solid ground found in range (shouldn't happen) - fall back to the old flat-world constant
+  }
+
+  /** A handful of animals + a couple of hostiles scattered around spawn, once per DO instance lifetime - not persisted (see mobs.ts's class doc comment: no death/drops yet, so nothing would need saving anyway). */
+  private spawnInitialMobs(): void {
+    const kinds: MobKind[] = ['pig', 'cow', 'sheep', 'pig', 'cow', 'zombie', 'skeleton'];
+    for (const kind of kinds) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 6 + Math.random() * 14;
+      const x = Math.round(Math.cos(angle) * radius);
+      const z = Math.round(Math.sin(angle) * radius);
+      const y = this.findSpawnEyeY(x, z) - 2.25 + 0.5; // feet-level: same ground-surface scan as the player spawn, converted from eye-height back to feet
+      this.mobs.spawn(kind, new THREE.Vector3(x, y, z), Math.random() * Math.PI * 2);
+    }
   }
 }
 

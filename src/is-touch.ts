@@ -1,4 +1,4 @@
-import { customCursor } from './custom-cursor';
+import { getCustomCursor } from './custom-cursor';
 
 /**
  * Touch-device detection, shared so the pointer-lock calls scattered across the
@@ -21,7 +21,7 @@ export function isTouchDevice(): boolean {
 
 /** requestPointerLock() that is a no-op on touch devices. */
 export function lockPointer(el: Element | null | undefined): void {
-  customCursor.hide();
+  getCustomCursor().hide();
   if (!el || isTouchDevice()) return;
   (el as HTMLElement).requestPointerLock?.();
 }
@@ -32,5 +32,5 @@ export function lockPointer(el: Element | null | undefined): void {
  *  of the screen. No-op on touch (those screens are tap-driven, no cursor). */
 export function unlockPointerForGui(): void {
   document.exitPointerLock();
-  if (!isTouchDevice()) customCursor.show();
+  if (!isTouchDevice()) getCustomCursor().show();
 }

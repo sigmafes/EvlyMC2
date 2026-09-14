@@ -43,7 +43,7 @@ const ri = (min: number, max: number) => min + Math.floor(Math.random() * (max -
  * and duration are LCE's PanicGoal behaviour - sprint away for a few seconds
  * after being hurt, ignoring the wander target until it expires.
  */
-const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpeedMult: number; radius: number; height: number }> = {
+export const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; fleeSpeedMult: number; radius: number; height: number }> = {
   // Animals: 0.9x0.9 footprint, 1.3 tall (radius is the half-width overlapsSolid uses).
   pig: { maxHealth: 10, walkSpeed: 2.3, fleeSpeedMult: 3.2, radius: 0.45, height: 1.3 },
   cow: { maxHealth: 10, walkSpeed: 2.0, fleeSpeedMult: 3.2, radius: 0.45, height: 1.3 },

@@ -57,11 +57,25 @@ function getSharedRenderer(): THREE.WebGLRenderer {
 // "items/apple.png" resolves to its hashed asset URL. A dynamic
 // `new URL(\`../textures/${path}\`, import.meta.url)` only globs one directory
 // level, so it silently broke once textures moved into subfolders.
-const TEXTURE_URLS = import.meta.glob('../textures/**/*.png', {
-  eager: true,
-  query: '?url',
-  import: 'default',
-}) as Record<string, string>;
+//
+// import.meta.glob is a Vite-only build-time transform - it's a no-op string
+// match on this exact call expression, so wrapping it in try/catch doesn't
+// stop Vite from finding and replacing it for the real (browser) client
+// build. The try/catch exists for world-server/'s reuse of mob-ai.ts et al
+// (Fase 5+ of the multiplayer migration) - esbuild (wrangler's bundler)
+// leaves the call as a literal runtime property access, which throws
+// immediately at module load ("(intermediate value).glob is not a
+// function") since nothing about `import.meta` in that environment has a
+// `glob` method. Nothing server-side ever calls buildItemMesh()/etc that
+// would need TEXTURE_URLS populated, so an empty fallback is harmless there.
+let TEXTURE_URLS: Record<string, string> = {};
+try {
+  TEXTURE_URLS = import.meta.glob('../textures/**/*.png', {
+    eager: true,
+    query: '?url',
+    import: 'default',
+  }) as Record<string, string>;
+} catch { /* non-Vite bundler - see comment above */ }
 
 /** Catalog path ("items/apple.png") -> hashed asset URL. Exported because the
  *  particle system needs the same resolution for its item chips. */
