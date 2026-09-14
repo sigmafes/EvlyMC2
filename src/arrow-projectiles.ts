@@ -96,7 +96,7 @@ function getArrowMesh(): THREE.Group {
   // away from you.
   if (!tailBarGeoH) {
     const armLen = ARROW_THICKNESS * 2.2;
-    const armWidth = ARROW_THICKNESS * 0.4;
+    const armWidth = ARROW_THICKNESS * 0.15;
     tailBarGeoH = new THREE.PlaneGeometry(armLen, armWidth);
     tailBarGeoH.userData.shared = true;
     tailBarGeoV = new THREE.PlaneGeometry(armWidth, armLen);
