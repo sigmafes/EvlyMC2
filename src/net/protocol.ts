@@ -97,6 +97,8 @@ export type ClientMessage =
    * multiplayer-game.ts's craft menu doc comment for why.
    */
   | { type: 'craft'; recipeIndex: number }
+  /** Backpack (E) slot click: move/merge whatever is in `from` into `to` - same-id stacks merge (up to maxStack, leftover stays in `from`), otherwise the two slots swap. Both are indices into the same 36-slot inventory (0..8 hotbar, 9..35 backpack) - there's no separate "held item cursor" state to track over the network, each click is a complete, self-contained move. */
+  | { type: 'moveSlot'; from: number; to: number }
   | { type: 'attack'; targetId: number }
   | { type: 'shootBow'; power: number; dir: Vec3 }
   | { type: 'chat'; text: string }
@@ -142,7 +144,7 @@ export type ServerMessage =
 export function isClientMessageType(type: string): type is ClientMessage['type'] {
   return (
     [
-      'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft',
+      'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft', 'moveSlot',
       'attack', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);

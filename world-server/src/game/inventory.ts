@@ -95,6 +95,36 @@ export function removeItemsAnywhere(slots: InventorySlot[], id: number, count: n
   return count - remaining;
 }
 
+/**
+ * Backpack (E) click: move whatever is in `slots[from]` into `slots[to]`.
+ * Same id -> merge (as much as fits into `to`'s stack, leftover stays put
+ * in `from`); different id (or `to` empty) -> the two slots simply swap.
+ * A no-op if `from` is already empty. Mirrors inventory.ts's own
+ * click-to-pick-up/click-to-place model, just without the intermediate
+ * "held item" cursor state - each click is one complete, self-contained
+ * move, described in protocol.ts's moveSlot doc comment.
+ */
+export function moveOrMergeSlot(slots: InventorySlot[], from: number, to: number): void {
+  if (from === to) return;
+  const src = slots[from];
+  const dst = slots[to];
+  if (!src || !dst || src.id === null) return;
+
+  if (dst.id === src.id) {
+    const max = maxStackOf(dst.id);
+    const room = max - (dst.count ?? 0);
+    if (room <= 0) return; // destination stack already full - leave both alone
+    const moved = Math.min(room, src.count ?? 0);
+    dst.count = (dst.count ?? 0) + moved;
+    removeFromSlot(src, moved);
+    return;
+  }
+
+  // Different items (or destination empty) - swap the two slots outright.
+  slots[from] = dst;
+  slots[to] = src;
+}
+
 /** Removes up to `count` from `slot` in place, clearing it back to empty if that empties the stack. Returns how many were actually removed. */
 export function removeFromSlot(slot: InventorySlot, count: number): number {
   if (slot.id === null) return 0;

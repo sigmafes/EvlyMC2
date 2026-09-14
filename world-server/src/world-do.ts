@@ -11,7 +11,7 @@ import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
 import type { MobKind } from './game/mob-manager';
 import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from './game/day-night-math';
-import { createEmptyInventory, addToInventory, removeFromSlot, removeItemsAnywhere, countInInventory } from './game/inventory';
+import { createEmptyInventory, addToInventory, removeFromSlot, removeItemsAnywhere, countInInventory, moveOrMergeSlot, TOTAL_SLOTS } from './game/inventory';
 import { getDrops } from '../../src/drops';
 import { isBlock } from '../../src/item';
 import type { InventorySlot } from '../../src/inventory';
@@ -219,6 +219,15 @@ export class WorldDO implements DurableObject {
         break;
       case 'craft':
         this.handleCraft(session, msg.recipeIndex);
+        break;
+      case 'moveSlot':
+        if (
+          msg.from >= 0 && msg.from < TOTAL_SLOTS &&
+          msg.to >= 0 && msg.to < TOTAL_SLOTS
+        ) {
+          moveOrMergeSlot(session.inventory, msg.from, msg.to);
+          this.sendInventory(session);
+        }
         break;
       case 'chat':
         this.broadcast({ type: 'chat', from: session.name, text: msg.text });

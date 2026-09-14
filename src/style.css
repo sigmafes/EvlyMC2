@@ -1864,6 +1864,36 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
   font-size: 14px;
 }
 
+/* Backpack (E) - hotbar row mirrored on top, then the 27 extra slots wrap
+   onto new lines below it (.backpack-row-start forces the break). */
+#mp-backpack {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+#mp-backpack[hidden] { display: none; }
+#mp-backpack-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 500px;
+  padding: 16px;
+  background: rgba(20, 20, 20, 0.85);
+  border: 2px solid #000;
+}
+#mp-backpack-grid .backpack-row-start { flex-basis: 100%; margin-top: 10px; }
+#mp-backpack-grid .inventory-slot.picked::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 3px solid #ffffff;
+  pointer-events: none;
+}
+
 body.touch .touch-btn {
   pointer-events: auto;
   touch-action: none;

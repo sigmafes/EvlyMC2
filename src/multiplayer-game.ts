@@ -13,7 +13,7 @@ import { SoundManager } from './sound-manager';
 import { getBlockSound } from './block-sounds';
 import { playMobSound } from './mob-sounds';
 import type { MobKind } from './mob-manager';
-import { renderSlot, createEmptySlot, HOTBAR_SIZE, type InventorySlot } from './inventory';
+import { renderSlot, createEmptySlot, HOTBAR_SIZE, TOTAL_SLOTS, type InventorySlot } from './inventory';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot } from './net/protocol';
 
@@ -396,20 +396,20 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   // player pick a slot (number keys) or drop it (Q). Reuses inventory.ts's
   // own renderSlot()/CSS classes (.inventory-slot/.inventory-block/etc,
   // already generic - not scoped to singleplayer's #game-shell) instead of
-  // reinventing slot rendering, and only the 9 hotbar slots for now - the
-  // full backpack/crafting screen (E) is a separate, bigger follow-up.
+  // reinventing slot rendering. The backpack panel (E, below) renders the
+  // rest of the same 36-slot array.
   const hotbarEl = document.createElement('div');
   hotbarEl.id = 'mp-hotbar';
   const hotbarSlotEls: HTMLButtonElement[] = [];
   for (let i = 0; i < HOTBAR_SIZE; i++) {
     const btn = document.createElement('button');
     btn.className = 'inventory-slot';
-    btn.disabled = true; // display-only for now - no drag/drop GUI yet, see the comment above
+    btn.disabled = true; // display-only - clicking a hotbar slot to move items only works from inside the backpack panel (below), same as singleplayer's hotbar row mirrored into #backpack
     hotbarEl.appendChild(btn);
     hotbarSlotEls.push(btn);
   }
   document.body.appendChild(hotbarEl);
-  let inventorySlots: InventorySlot[] = Array.from({ length: HOTBAR_SIZE }, createEmptySlot);
+  let inventorySlots: InventorySlot[] = Array.from({ length: TOTAL_SLOTS }, createEmptySlot);
   let selectedSlotIndex = 0;
   function renderHotbar(): void {
     for (let i = 0; i < HOTBAR_SIZE; i++) {
@@ -418,6 +418,59 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     }
   }
   renderHotbar();
+
+  /**
+   * Backpack (E): the other 27 slots, plus the hotbar row mirrored at the
+   * top (same layout convention as singleplayer's #backpack). Click-based
+   * move instead of real drag-and-drop: click a slot to pick it up
+   * (highlighted), click another to send moveSlot (merge if same item,
+   * otherwise swap - see world-do.ts's moveOrMergeSlot), click the same
+   * slot again to cancel. A real drag/held-cursor UI is a nice-to-have
+   * follow-up; this is the same end result with fewer moving parts to get
+   * right over a network round-trip.
+   */
+  const backpackEl = document.createElement('div');
+  backpackEl.id = 'mp-backpack';
+  backpackEl.hidden = true;
+  const backpackGrid = document.createElement('div');
+  backpackGrid.id = 'mp-backpack-grid';
+  backpackEl.appendChild(backpackGrid);
+  document.body.appendChild(backpackEl);
+  const backpackSlotEls: HTMLButtonElement[] = [];
+  for (let i = 0; i < TOTAL_SLOTS; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'inventory-slot';
+    if (i === HOTBAR_SIZE) btn.classList.add('backpack-row-start'); // CSS line-break between the mirrored hotbar row and the backpack proper
+    btn.addEventListener('click', () => onBackpackSlotClick(i));
+    backpackGrid.appendChild(btn);
+    backpackSlotEls.push(btn);
+  }
+  let backpackOpen = false;
+  let pickedSlot: number | null = null;
+  function renderBackpack(): void {
+    for (let i = 0; i < TOTAL_SLOTS; i++) {
+      renderSlot(backpackSlotEls[i], inventorySlots[i] ?? createEmptySlot());
+      backpackSlotEls[i].classList.toggle('picked', i === pickedSlot);
+    }
+  }
+  function onBackpackSlotClick(index: number): void {
+    if (pickedSlot === null) {
+      if (inventorySlots[index]?.id === null) return; // nothing to pick up
+      pickedSlot = index;
+    } else if (pickedSlot === index) {
+      pickedSlot = null; // clicked the same slot again - cancel
+    } else {
+      client.send({ type: 'moveSlot', from: pickedSlot, to: index });
+      pickedSlot = null;
+    }
+    renderBackpack();
+  }
+  function setBackpackOpen(open: boolean): void {
+    backpackOpen = open;
+    backpackEl.hidden = !open;
+    pickedSlot = null;
+    if (open) { renderBackpack(); unlockPointerForGui(); } else { lockPointer(canvas); }
+  }
 
   /**
    * Crafting menu (C toggles it): a list of what the player can currently
@@ -468,8 +521,9 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
   const onKeyDown = (e: KeyboardEvent) => {
     keys.add(e.code);
     if (e.code === 'Escape') disconnect('Disconnected');
-    if (e.code === 'KeyC') { setCraftMenuOpen(!craftMenuOpen); return; }
-    if (craftMenuOpen) return; // don't move/select slots while the menu has the pointer
+    if (e.code === 'KeyC') { if (backpackOpen) setBackpackOpen(false); setCraftMenuOpen(!craftMenuOpen); return; }
+    if (e.code === 'KeyE') { if (craftMenuOpen) setCraftMenuOpen(false); setBackpackOpen(!backpackOpen); return; }
+    if (craftMenuOpen || backpackOpen) return; // don't move/select slots while a menu has the pointer
     const digitIndex = DIGIT_CODES.indexOf(e.code);
     if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
     if (e.code === 'KeyQ') client.send({ type: 'dropItem' });
@@ -746,6 +800,7 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     labelLayer.remove();
     hotbarEl.remove();
     craftMenuEl.remove();
+    backpackEl.remove();
     for (const [, p] of remoteEntities) removeEntityAvatar(p);
     // Chunk geometries are real GPU resources (BufferGeometry) - renderer.dispose()
     // below doesn't free those on its own, so a reconnect in the same page
@@ -836,9 +891,10 @@ export function startMultiplayer(serverUrl: string, worldId: string, playerName:
     },
     onDayTime: (elapsed) => { clientDayTime = elapsed; },
     onInventoryUpdate: (slots, selectedIndex) => {
-      inventorySlots = slots.slice(0, HOTBAR_SIZE); // backpack slots (9..35) aren't rendered yet - no GUI for them client-side
+      inventorySlots = slots;
       selectedSlotIndex = selectedIndex;
       renderHotbar();
+      if (backpackOpen) renderBackpack();
     },
     onCraftableRecipes: (recipes) => {
       craftableRecipes = recipes;
