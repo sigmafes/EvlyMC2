@@ -19,7 +19,7 @@ import { isTouchDevice } from './is-touch';
 import { InventoryDoll } from './inventory-doll';
 import { applySkinTexture, resetSkinTexture } from './player-model';
 import {
-  loadPlayerName, savePlayerName, clearPlayerSkin,
+  loadPlayerName, clearPlayerSkin,
   readAndValidateSkinFile, applyPersistedSkin, savePlayerSkinDataUrl,
 } from './player-skin';
 
@@ -269,12 +269,10 @@ export class MainMenu {
   private bindPlayerOptions() {
     applyPersistedSkin((image) => applySkinTexture(image));
 
-    const nameInput = document.querySelector<HTMLInputElement>('#player-name-input')!;
-    nameInput.value = loadPlayerName();
-    nameInput.addEventListener('change', () => {
-      savePlayerName(nameInput.value);
-      nameInput.value = loadPlayerName(); // reflect the trimmed/defaulted value back
-    });
+    // Name is fixed to the account used to log in (see access-gate.ts) - no
+    // player-facing way to change it, so it stays in sync with the account.
+    const nameDisplay = document.querySelector<HTMLElement>('#player-name-display')!;
+    nameDisplay.textContent = loadPlayerName();
 
     const fileInput = document.querySelector<HTMLInputElement>('#skin-file-input')!;
     const errorEl = document.querySelector<HTMLElement>('#skin-import-error')!;
