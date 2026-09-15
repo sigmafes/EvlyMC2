@@ -12,7 +12,7 @@ de conexión multiplayer (`src/main-menu.ts`'s `openMultiplayerConnect`),
 que resuelve a `wss://evlymc-world-server.mrfierrocarrilgames.workers.dev/world/prueba1`
 antes de la validación normal de `/world/<id>`.
 
-## Fase 1 — Cursor invisible al abrir inventario/pausa
+## Fase 1 — Cursor invisible al abrir inventario/pausa  ✅ HECHO
 **Causa confirmada:** el cursor visual (`#custom-cursor`) tiene
 `z-index: 100` (`src/style.css:1869`), pero los paneles propios de
 multiplayer están todos por encima: `#mp-backpack`/`#mp-crafting-table`
@@ -37,7 +37,7 @@ ya tienen hoy. Un solo archivo (`style.css`), sin tocar JS.
 real invisible, es muy fácil hacer click al lado del slot que se cree estar
 apuntando. Ver Fase 6 para el resto de ese bug.
 
-## Fase 2 — Rueda del mouse no cambia de slot en la hotbar
+## Fase 2 — Rueda del mouse no cambia de slot en la hotbar  ✅ HECHO
 **Causa confirmada:** singleplayer tiene un handler de rueda dedicado,
 `Inventory.onWheel` (`src/inventory.ts:814-828`), atado con
 `document.addEventListener('wheel', this.onWheel, { passive: false })`
@@ -51,7 +51,7 @@ mientras el backpack/tabla/horno/opciones estén abiertos, ni sin pointer
 lock), enviando `{ type: 'selectSlot', index }` como ya hace el atajo de
 dígitos (`multiplayer-game.ts:1281-1282`).
 
-## Fase 3 — Android no puede cambiar de slot en la hotbar
+## Fase 3 — Android no puede cambiar de slot en la hotbar  ✅ HECHO
 **Causa confirmada:** los botones de la hotbar de multiplayer se crean
 `disabled = true` a propósito, con un comentario que dice "clicking a hotbar
 slot to move items only works from inside the backpack panel"
@@ -73,7 +73,7 @@ en Android ya dispara `click` de forma nativa, así que esto resuelve ambos
 bugs (Fase 3 y el pedido de mouse-wheel es un camino aparte, Fase 2) con un
 solo cambio de UI.
 
-## Fase 4 — Textura de bloques/ítems en blanco en hotbar/inventario
+## Fase 4 — Textura de bloques/ítems en blanco en hotbar/inventario  ✅ HECHO
 **Causa confirmada:** singleplayer llama `createBlockMaterials()` y luego
 `await initPreviewAtlases(materials.atlas)` en el scope de módulo de
 `main.ts:140-141`, ANTES de que el juego arranque — nada puede renderizar un
@@ -142,7 +142,7 @@ deshabilitando los botones por un frame), mismo principio que ya usa este
 archivo en otros lados (esperar el ack antes de considerar el estado
 "fresco").
 
-## Fase 7 — Mensajes de chat no desaparecen
+## Fase 7 — Mensajes de chat no desaparecen  ✅ HECHO
 **Causa confirmada:** `addChatLine()` (`multiplayer-game.ts:919-926`) sólo
 recorta por CANTIDAD (`while (chatLogEl.children.length > 50)
 chatLogEl.firstElementChild!.remove()`) — no hay ningún `setTimeout`,
@@ -157,7 +157,7 @@ que necesite expirar (su consola de comandos es distinta) — no hay una
 función de singleplayer para portar acá, es una mejora de UX propia de
 multiplayer.
 
-## Fase 8 — Tag de nombre muy arriba y sin fondo
+## Fase 8 — Tag de nombre muy arriba y sin fondo  ✅ HECHO
 **Causa confirmada:** el label de cada jugador remoto se crea con estilos
 inline en `multiplayer-game.ts:1662-1667`:
 ```
@@ -179,7 +179,7 @@ portar (ahí no hay multiplayer ni tags de otros jugadores), así que esto es
 una mejora visual propia, no un "arreglar para que coincida con
 singleplayer".
 
-## Fase 9 — Q dropea el stack completo en vez de un solo ítem
+## Fase 9 — Q dropea el stack completo en vez de un solo ítem  ✅ HECHO
 **Causa confirmada:** singleplayer distingue "soltar uno" vs "soltar todo"
 con `ctrlKey`: `if (event.code === 'KeyQ' && this.engaged && !event.repeat)
 this.onDropSelected?.(event.ctrlKey);` (`interaction.ts:688`), pasando un
@@ -266,7 +266,7 @@ multiplayer-game.ts** (grep vacío) — ni para `localPlayerModel` al mandar
   armarlo) y llamar `entity.playerModel?.setHeldItem(...)` en
   `updateRemoteAnimation` cuando cambia.
 
-## Fase 13 — Sin animación de daño en el jugador local
+## Fase 13 — Sin animación de daño en el jugador local  ✅ HECHO
 **Causa confirmada:** `PlayerModel.hurt()` existe y YA se llama para
 entidades remotas (`multiplayer-game.ts:1943`,
 `op.playerModel?.hurt();`). El `onState` handler que detecta la baja de
@@ -294,7 +294,7 @@ armar el snapshot de jugadores), guardarlo en `RemoteEntity` (como ya se
 hace con `lastYaw`) y pasar ese valor real en vez del `0` fijo en la
 llamada de la línea 1794.
 
-## Fase 15 — Agua/lava "sólidas" (no se puede nadar en bloques editados)
+## Fase 15 — Agua/lava "sólidas" (no se puede nadar en bloques editados)  ✅ HECHO
 **Causa confirmada:** `world-do.ts`'s `isSolidAt()` (líneas ~1667-1671):
 ```ts
 private isSolidAt(x, y, z): boolean {
@@ -329,13 +329,13 @@ bugfix).
 cambio soluciona agua sólida, lava sólida Y fuego sólido (Fase 16) a la
 vez, porque las tres comparten exactamente esta única función.
 
-## Fase 16 — Fuego sólido
+## Fase 16 — Fuego sólido  ✅ HECHO
 **Mismo bug y mismo fix que la Fase 15** (`isSolidAt()` en
 `world-do.ts`) — el fuego colocado/propagado es un `edit` no-`AIR`, así que
 cae en el mismo camino roto. No hace falta nada adicional más allá del fix
 de la Fase 15.
 
-## Fase 17 — Filtro azul y cambio de FOV bajo el agua no se ven
+## Fase 17 — Filtro azul y cambio de FOV bajo el agua no se ven  ✅ HECHO
 **Investigado a fondo — dos hallazgos distintos:**
 - El TINTE AZUL (`#mp-underwater-overlay`) está correctamente cableado:
   `underwater.update(currentSkyColor)` se llama todos los frames sin
@@ -394,7 +394,7 @@ golpe si `welcome`/el primer `state` llegan en un orden inesperado. Este
 ítem queda para reproducir en vivo antes de tocar código — no se encontró
 una causa de código concreta para "arreglar a ciegas".
 
-## Fase 20 — El sonido de un mob herido se escucha a cualquier distancia
+## Fase 20 — El sonido de un mob herido se escucha a cualquier distancia  ✅ HECHO
 **Causa confirmada:** el bark de IDLE de un mob remoto SÍ filtra por
 distancia (`multiplayer-game.ts:1804-1805`,
 `entity.mesh.position.distanceTo(camera.position) <= MOB_SOUND_RADIUS`),
@@ -449,7 +449,7 @@ nunca más, nunca se despawnea aunque nadie esté cerca (sólo se "congela" via
   en vez de sólo por el slot que lo originó) — mismo patrón de
   "housekeeping" que ya usa `MAX_FIRE_CELLS`/`MAX_MOBS`.
 
-## Fase 22 — El jugador no debe poder colocar un bloque donde está parado
+## Fase 22 — El jugador no debe poder colocar un bloque donde está parado  ✅ HECHO
 **Causa confirmada:** `world-do.ts`'s `handlePlaceBlock` llama
 `this.setBlockFromPlayer(x, y, z, slot.id)` directo con las coordenadas que
 manda el cliente — CERO validación geométrica contra la posición del
@@ -515,7 +515,7 @@ si se sigue reproduciendo, el próximo paso es instrumentar (contar cuántos
 chunks entran a `relightQueue` por cambio de `skyDarken`) en vez de
 adivinar un fix.
 
-## Fase 25 — Mismos problemas de líquidos con la lava
+## Fase 25 — Mismos problemas de líquidos con la lava  ✅ HECHO
 Cubierto por la Fase 15 (mismo bug, `isSolidAt()`) para el problema de
 "sólida". La física de nado en lava no existe ni en singleplayer (el
 `inWater` de `player-physics.ts` está atado únicamente al callback
