@@ -6,8 +6,9 @@ import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui, isTouchDevice } from './is-touch';
 import { loadSettings, saveSettings } from './settings';
 import { TouchControls } from './touch-controls';
-import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials } from './player-model';
+import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials, type ModelAdjustments } from './player-model';
 import { InventoryDoll } from './inventory-doll';
+import { FirstPersonHand } from './first-person-hand';
 import { loadPlayerSkinDataUrl } from './player-skin';
 import { loadPlayToken } from './access-gate';
 import { setSingleplayerChatEnabled, setSingleplayerPauseMenuEnabled } from './main';
@@ -130,6 +131,24 @@ type RemoteEntity = {
   dyingFor?: number;
 };
 
+/**
+ * PlayerModel.setAdjustments() is what actually MOVES the legs (and torso/
+ * arms/head) into the crouch pose - setSneaking()/updateSneak() alone only
+ * rotate the torso and add an arm-swing offset (see player-model.ts's
+ * setAdjustments doc comment: the leg position shift lives there, reading
+ * the same sneakAmount). Singleplayer calls it every frame with
+ * pauseMenu.modelAdjustments (a debug-tunable, all-zero by default); this
+ * client has no PauseMenu instance, so an all-zero constant stands in for
+ * "no manual tuning applied" - same effective result.
+ */
+const ZERO_MODEL_ADJUSTMENTS: ModelAdjustments = {
+  head: { x: 0, y: 0, z: 0 },
+  torso: { x: 0, y: 0, z: 0 },
+  armLeft: { x: 0, y: 0, z: 0 },
+  armRight: { x: 0, y: 0, z: 0 },
+  legs: { x: 0, y: 0, z: 0 },
+};
+
 /** Matches mobs.ts's DEATH_SPIN_DURATION - how long the server keeps a dying mob around, so the topple finishes exactly as it vanishes. */
 const DEATH_SPIN_DURATION = 0.75;
 
@@ -231,6 +250,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  // First-person held item/arm + its swing/place animation - own overlay
+  // scene+camera (see FirstPersonHand's doc comment), same class singleplayer's
+  // main.ts uses. Was never wired up here at all, which is why neither the
+  // held item nor the swing-on-hit ever showed in the default first-person
+  // view (third-person's own PlayerModel.setHeldItem()/swingArm() - wired
+  // separately below - only become visible in third-person camera mode).
+  const hand = new FirstPersonHand();
+  hand.resize(camera.aspect);
   // Sun/moon/stars/clouds/horizon glow - same class singleplayer's main.ts
   // uses, driven every frame from applyDayNightState() below with the same
   // timeOfDay the flat sky/fog colour already tracks.
@@ -579,7 +606,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // (once, for every edit - ours and everyone else's alike) instead of
     // also at the moment performInteraction() sends breakBlock/placeBlock
     // avoids doubling up our own break/place sound.
-    if (performance.now() - joinedAtMs > 500) {
+    // A flowing water/lava cell re-broadcasts its OWN setBlock() every time
+    // the server's engine advances it (same cell, same blockId, just a new
+    // distance) - world.ts's own water tick never plays a sound for this
+    // either (only its own add()/remove(), called from an actual player
+    // placing/breaking, does). `waterDistance === 0` is the source cell;
+    // anything deeper into the flow (an actual liquid, not this specific
+    // spread step) skips the place sound below.
+    const isFlowingLiquidStep = (id === BlockId.WATER || id === BlockId.LAVA) && waterDistance !== 0;
+    if (performance.now() - joinedAtMs > 500 && !isFlowingLiquidStep) {
       const sound = id === BlockId.AIR
         ? getBlockSound(previousId, 'dig')
         : getBlockSound(id, 'place') ?? getBlockSound(id, 'dig');
@@ -1359,10 +1394,21 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
 
   const DIGIT_CODES = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'];
   const keys = new Set<string>();
+  /**
+   * Double-tap-forward-style sprint toggle, same as player.ts's own
+   * setSprint(): Ctrl only needs a single press (while already moving) to
+   * turn sprint ON, and it clears itself the instant the player stops
+   * moving (sendInput below) - not "held the whole time", which is what
+   * sending `keys.has('ControlLeft')` directly used to do.
+   */
+  let sprintToggled = false;
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.code === 'KeyT' && !chatOpen) { openChat(); return; } // opens even over another panel, same as singleplayer's own T
     keys.add(e.code);
     if (e.code === 'Escape') disconnect('Disconnected');
+    if (e.code === 'ControlLeft' && !e.repeat && (keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || touchMoveX !== 0 || touchMoveZ !== 0)) {
+      sprintToggled = true;
+    }
     if (e.code === 'KeyI') { cycleCameraMode(); return; } // same key singleplayer's player.ts cycles F5's 3 modes on
     if (e.code === 'KeyO' && !e.repeat) { diagnosticsOpen = !diagnosticsOpen; diagnosticsEl.hidden = !diagnosticsOpen; return; } // same key singleplayer's Diagnostics.toggle() uses
     if (e.code === 'KeyR' && !e.repeat) { toggleHitboxDebug(); return; } // same key singleplayer's dropDebug toggle uses
@@ -1468,11 +1514,18 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   function raycastBlockTarget(ndc: THREE.Vector2): { x: number; y: number; z: number; id: BlockId; normal: THREE.Vector3 } | null {
     raycaster.setFromCamera(ndc, camera);
     const hits = raycaster.intersectObjects(chunkMeshes, false);
-    const hit = hits.find((h) => h.distance <= REACH);
-    if (!hit || !hit.face) return null;
-    const normal = hit.face.normal;
-    const b = hit.point.clone().addScaledVector(normal, -0.01).round();
-    return { x: b.x, y: b.y, z: b.z, id: getBlock(b.x, b.y, b.z), normal };
+    for (const hit of hits) {
+      if (hit.distance > REACH || !hit.face) break; // sorted by distance - nothing past REACH is worth checking
+      const normal = hit.face.normal;
+      const b = hit.point.clone().addScaledVector(normal, -0.01).round();
+      const id = getBlock(b.x, b.y, b.z);
+      // Same as src/raycast.ts's own DDA walk (`if (id === BlockId.WATER)
+      // continue`) - water is never a mineable/targetable surface, the ray
+      // passes straight through it to whatever's actually behind/under it.
+      if (id === BlockId.WATER) continue;
+      return { x: b.x, y: b.y, z: b.z, id, normal };
+    }
+    return null;
   }
 
   /**
@@ -1559,6 +1612,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       const mineSound = getBlockSound(mining.id, 'mine') ?? getBlockSound(mining.id, 'hit');
       if (mineSound) soundManager.playSound(mineSound, 0.5);
       localPlayerModel?.swingArm(); // repeats every chip, same cadence interaction.ts's own swing-while-mining uses
+      hand.swing(); // first-person view - same onSwing cue main.ts wires into BlockInteraction
     }
 
     if (mining.elapsed >= mining.total) {
@@ -1594,7 +1648,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // a same-ray terrain hit further away.
     const entityHitboxes = [...remoteEntities.values()].map((r) => r.hitbox);
     const hits = raycaster.intersectObjects([...chunkMeshes, ...entityHitboxes], false);
-    const hit = hits.find((h) => h.distance <= REACH);
+    // Same water-skip as raycastBlockTarget/src/raycast.ts - an entity hit
+    // always counts (it isn't blocked by a water surface), but a terrain hit
+    // on a water cell is passed through to whatever's actually behind/under
+    // it, same reach budget either way.
+    const hit = hits.find((h) => {
+      if (h.distance > REACH) return false;
+      if (h.object.userData.entityId !== undefined) return true;
+      if (!h.face) return false;
+      const b = h.point.clone().addScaledVector(h.face.normal, -0.01).round();
+      return getBlock(b.x, b.y, b.z) !== BlockId.WATER;
+    });
     if (!hit) return false;
     const entityId = hit.object.userData.entityId as number | undefined;
     if (action === 'attack') {
@@ -1604,6 +1668,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       if (entityId === undefined || entityId >= 0) return false;
       client.send({ type: 'attack', targetId: entityId });
       localPlayerModel?.swingArm(); // same third-person swing cue as a successful mine start below
+      hand.swing();
       return true;
     }
     if (entityId !== undefined || !hit.face) return false;
@@ -1632,7 +1697,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (heldId === null || heldId === undefined) return false;
     const p = hit.point.clone().addScaledVector(normal, 0.5).round();
     client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: heldId, face: 0 });
-    localPlayerModel?.swingArm();
+    hand.bump(); // same onPlace cue main.ts wires (dip-and-spring, not a swing - singleplayer doesn't swing the arm on a successful place either)
     return true;
   }
 
@@ -1745,6 +1810,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const onResize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    hand.resize(camera.aspect);
     renderer.setSize(window.innerWidth, window.innerHeight);
   };
   window.addEventListener('resize', onResize);
@@ -1927,6 +1993,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // cycle for other players too, not just this client's own body.
     entity.playerModel.setSneaking(entity.sneaking);
     entity.playerModel.updateSneak(delta);
+    entity.playerModel.setAdjustments(ZERO_MODEL_ADJUSTMENTS); // same as localPlayerModel above - legs don't move without this
     entity.playerModel.setHeldItem(entity.heldItem);
     entity.playerModel.updateWalkingAnimation(delta);
   }
@@ -2204,12 +2271,16 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (keys.has('KeyD')) moveX += 1;
     moveX = THREE.MathUtils.clamp(moveX, -1, 1);
     moveZ = THREE.MathUtils.clamp(moveZ, -1, 1);
+    // Same auto-clear as player.ts's own update(): stopping cancels sprint,
+    // same as touchSprint's on-screen toggle button being its own separate
+    // (still held-style) signal.
+    if (moveX === 0 && moveZ === 0) sprintToggled = false;
     client.send({
       type: 'input',
       seq: ++seq,
       moveX, moveZ,
       wantJump: keys.has('Space') || touchJump,
-      sprinting: keys.has('ControlLeft') || touchSprint,
+      sprinting: sprintToggled || touchSprint,
       sneaking: keys.has('ShiftLeft') || touchSneak,
       yaw, pitch,
       dtMs: SEND_INTERVAL_MS,
@@ -2262,9 +2333,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // overwritten by it.
       localPlayerModel.setSneaking(keys.has('ShiftLeft') || touchSneak);
       localPlayerModel.updateSneak(delta);
+      localPlayerModel.setAdjustments(ZERO_MODEL_ADJUSTMENTS); // legs (and the rest of the crouch shift) never move without this - see its doc comment
       localPlayerModel.setHeldItem(selectedItemId());
       localPlayerModel.updateWalkingAnimation(delta);
     }
+    hand.setSlotById(selectedItemId());
+    // Same visibility gate as main.ts's cameraDistance<=0.5 check - first
+    // person only, and hidden behind any full-screen panel that already
+    // takes the pointer.
+    hand.setVisible(cameraMode === 0 && !backpackOpen && !tableOpen && !furnaceOpenState && !optionsOpen && !chatOpen && !isDead);
+    hand.setLightLevel(lightEngine.getRawBrightness(Math.round(lastServerPos.x), Math.round(lastServerPos.y), Math.round(lastServerPos.z)) / 15);
+    hand.update(delta);
     sendInput(now);
     updateMining(delta);
     updateStreaming();
@@ -2290,10 +2369,25 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const targetFov = baseFov - (submerged ? 10 : 0);
     if (camera.fov !== targetFov) { camera.fov = targetFov; camera.updateProjectionMatrix(); }
     for (let i = 0; i < RELIGHT_CHUNKS_PER_FRAME && relightQueue.length > 0; i++) {
-      chunks.get(relightQueue.shift()!)?.rebuildDirty();
+      // rebuildDirty() alone only re-rebuilds subchunks already flagged dirty
+      // by an actual block edit (chunk.ts:292-306) - a day/night skyDarken
+      // step never marks anything dirty on its own, so without markAllDirty()
+      // first this was a silent no-op for every chunk nobody had touched:
+      // the sky/fog colour updated, but the terrain mesh's baked vertex
+      // brightness never did, until SOMETHING else (an edit in that chunk)
+      // incidentally forced a real rebuild. Same two-call pattern
+      // rebuildAdjacentChunks() already uses just above.
+      const chunk = chunks.get(relightQueue.shift()!);
+      chunk?.markAllDirty();
+      chunk?.rebuildDirty();
     }
     if (materials) materials.updateWaterAnimation(now / 1000);
     renderer.render(scene, camera);
+    // Own depth range on top of the main scene, so the held item never clips
+    // into terrain regardless of how close a wall is - same as main.ts's own
+    // renderer.clearDepth() + hand.render() pair.
+    renderer.clearDepth();
+    hand.render(renderer);
   }
   requestAnimationFrame(frame);
 

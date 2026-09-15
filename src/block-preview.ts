@@ -2,8 +2,28 @@ import * as THREE from 'three';
 import { BlockId } from './block';
 import { itemShapeBoxes, type ShapeBox } from './block-shapes';
 import type { InventorySlot } from './inventory';
-import { ITEMS } from './item';
+import { ITEMS, isBlock } from './item';
+import { BLOCK_CATALOG } from './creative-palette';
 import { buildAtlas, atlasUV, type Atlas } from './texture-atlas';
+
+/**
+ * world-server/src/game/inventory.ts's describeSlot() deliberately sends a
+ * BLOCK slot with no sideTexture/topTexture at all - its own doc comment
+ * says the client's BLOCK_CATALOG is supposed to supply the icon by id
+ * alone, the same catalog singleplayer's own slots are already built from
+ * (main.ts/inventory.ts construct every block slot directly off
+ * BLOCK_CATALOG, so they never hit this gap). Nothing on this side actually
+ * did that lookup, so every multiplayer block slot rendered with no texture
+ * at all (flat previewColor, or plain white without one) despite the tool/
+ * item icons - which DO get a real texture path from the server - working
+ * fine. Called at the top of both render entry points below so any caller,
+ * multiplayer's included, gets a fully-populated slot either way.
+ */
+function withBlockTexture(slot: InventorySlot): InventorySlot {
+  if (slot.id == null || slot.sideTexture || !isBlock(slot.id)) return slot;
+  const catalogEntry = BLOCK_CATALOG.find((b) => b.id === slot.id);
+  return catalogEntry ? { ...slot, ...catalogEntry, id: slot.id, name: slot.name } : slot;
+}
 
 const ITEM_ATLAS_COLS = 32;
 const ITEM_ATLAS_ROWS = 32; // 1024 tiles of headroom - ~47 items used today
@@ -279,6 +299,7 @@ export function tintByLight(root: THREE.Object3D, level01: number): void {
 }
 
 export function renderBlockPreview(canvas: HTMLCanvasElement, slot: InventorySlot) {
+  slot = withBlockTexture(slot);
   canvas.width = PREVIEW_SIZE;
   canvas.height = PREVIEW_SIZE;
   const ctx2d = canvas.getContext('2d');
@@ -355,6 +376,7 @@ function cropBoxUVs(geo: THREE.BoxGeometry, box: ShapeBox) {
 }
 
 export function buildBlockMesh(slot: InventorySlot, onTextureLoad: () => void = () => {}): THREE.Group {
+  slot = withBlockTexture(slot);
   const group = new THREE.Group();
   const isWater = slot.id === BlockId.WATER;
   const isLava = slot.id === BlockId.LAVA;

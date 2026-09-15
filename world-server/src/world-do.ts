@@ -572,6 +572,12 @@ export class WorldDO implements DurableObject {
   private handleBreakStart(session: Session, x: number, y: number, z: number): void {
     const id = this.getBlockAt(x, y, z);
     if (id === BlockId.AIR) return;
+    // Water is never a mineable target (src/raycast.ts's own DDA walk skips
+    // it - a normal client's crosshair can't even land on it), and it has 0
+    // hardness (block-hardness.ts), so without this a modified client could
+    // still "mine" it instantly. Lava isn't excluded here either way - same
+    // as singleplayer, whose raycast only skips water, not lava.
+    if (id === BlockId.WATER) return;
     const itemId = session.inventory[session.selectedSlot].id;
     if (!Number.isFinite(breakTime(id, itemId).time)) return;
     session.mining = { x, y, z, itemId, startedAtMs: Date.now() };
@@ -626,12 +632,13 @@ export class WorldDO implements DurableObject {
     // Same self-collision guard as singleplayer's BlockPlacer.placeBlock()
     // (block-placer.ts:38, via player.intersectsBlock - player-physics.ts's
     // overlapsHorizontally/overlapsVertically): never let a player wedge a
-    // block into the space their own body currently occupies. Liquids don't
-    // go through this client-side either (isLiquid short-circuits it there),
-    // but this server never lets a client place a liquid block by hand in
-    // the first place (isBlock/no bucket-placement path), so there's no
-    // equivalent exception needed here.
-    if (session.physics.intersectsBlock(x, y, z)) return;
+    // SOLID block into the space their own body currently occupies. Liquids
+    // are the one exception there too (`isLiquid || !playerIntersectsBlock`)
+    // - water/lava ARE placeable blocks in this game (no separate bucket
+    // item), so a player standing in the spot they're placing water/lava
+    // into (e.g. flooding the ground under their own feet) isn't blocked.
+    const isLiquid = slot.id === BlockId.WATER || slot.id === BlockId.LAVA;
+    if (!isLiquid && session.physics.intersectsBlock(x, y, z)) return;
     this.setBlockFromPlayer(x, y, z, slot.id);
     removeFromSlot(slot, 1);
     this.sendInventory(session);
