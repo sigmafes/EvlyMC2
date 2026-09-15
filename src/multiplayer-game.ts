@@ -295,6 +295,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const RELIGHT_CHUNKS_PER_FRAME = 2;
   /** Every block edit this client has ever seen (from blockChanged, including the backlog world-do.ts replays right after `welcome`), kept forever - not just "pending" - so a chunk unloaded and later reloaded still shows every edit made in it, not just ones that arrived while it happened to not exist yet. */
   const edits = new Map<string, BlockId>();
+  /**
+   * The server's WaterEngine/LavaEngine spread distance for every WATER/LAVA
+   * cell this client has seen (blockChanged's optional `waterDistance` -
+   * undefined for every non-liquid block, see protocol.ts's doc comment).
+   * This client has no water simulation of its own - the server owns it -
+   * so without this every liquid cell would mesh flat instead of getting the
+   * sloped corner heights singleplayer's own World.getLiquidDistance() feeds
+   * its chunk mesher (see getLiquidDistance/setWaterDistanceReader below,
+   * mirroring world.ts's own wiring).
+   */
+  const waterDistances = new Map<string, number>();
   const loadQueue: string[] = [];
   const queuedKeys = new Set<string>();
   let lastPlayerChunkKey = '';
@@ -358,6 +369,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const chunk = chunks.get(`${cx},${cz}`);
     return chunk ? chunk.getBlock(x, y, z) : BlockId.AIR;
   }
+  /** Same signature/role as world.ts's own getLiquidDistance - fed into every chunk's setWaterDistanceReader below. `id` is unused (the map is already keyed by position only, since a cell is never both water and lava at once) but kept to match the mesher's WaterDistanceReader signature. */
+  function getLiquidDistance(_id: BlockId, x: number, y: number, z: number): number {
+    return waterDistances.get(`${x},${y},${z}`) ?? 0;
+  }
 
   function rebuildChunkMeshList(): void {
     chunkMeshes = [];
@@ -408,6 +423,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // must happen before rebuildDirty() below so the very first mesh build
     // already bakes correct brightness, not a throwaway full-bright one.
     chunk.setLightReader(lightEngine.getRawBrightness.bind(lightEngine));
+    // Same reasoning as setLightReader just above - must be set before the
+    // first rebuildDirty() so the initial mesh already has real liquid
+    // corner heights instead of the mesher's flat default (see
+    // waterDistances/getLiquidDistance's doc comments).
+    chunk.setWaterDistanceReader(getLiquidDistance);
     lightEngine.initializeChunk(chunk);
     chunk.rebuildDirty();
     // Whichever neighbors were already loaded meshed their shared boundary
@@ -534,7 +554,19 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
   }
 
-  function applyBlockChange(x: number, y: number, z: number, id: BlockId): void {
+  function applyBlockChange(x: number, y: number, z: number, id: BlockId, waterDistance?: number): void {
+    // Recorded even when the block id itself doesn't change below (a
+    // flowing cell can stay WATER/LAVA while its distance settles to a
+    // different value) - same limitation singleplayer's own World.setBlock
+    // has (its blockStore-level "changed" check doesn't know about the
+    // separate WaterEngine distance map either), so this is parity with it,
+    // not a new gap: the next remesh this cell's chunk gets for ANY reason
+    // will pick up the latest value even when this specific update doesn't
+    // itself trigger one.
+    const key = `${x},${y},${z}`;
+    if (waterDistance === undefined) waterDistances.delete(key);
+    else waterDistances.set(key, waterDistance);
+
     const previousId = getBlock(x, y, z);
     // Captured BEFORE the edit, same as world.ts's setBlock/place - queueing
     // the light update below needs to know what this cell was lighting like
@@ -2101,7 +2133,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         removeGroundItem(entityId);
       }
     },
-    onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId),
+    onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId, msg.waterDistance),
     onEntityRemoved: (id) => {
       const op = remoteEntities.get(id);
       if (op) { removeEntityAvatar(op); remoteEntities.delete(id); }

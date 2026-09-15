@@ -1057,7 +1057,7 @@ export class WorldDO implements DurableObject {
     // blockChanged is simple and correct at this world's current tiny scale.
     for (const [key, id2] of this.edits) {
       const [x, y, z] = key.split(',').map(Number);
-      this.send(ws, { type: 'blockChanged', x, y, z, blockId: id2 });
+      this.send(ws, { type: 'blockChanged', x, y, z, blockId: id2, waterDistance: this.waterDistanceFor(id2, x, y, z) });
     }
     // Catch this client up on every already-connected player's skin, then
     // tell everyone else about this new player's - same backlog-replay
@@ -1614,6 +1614,13 @@ export class WorldDO implements DurableObject {
     return null;
   }
 
+  /** Only WATER/LAVA carry a spread distance worth sending - see protocol.ts's blockChanged doc comment. `undefined` for every other block, including AIR, so the client can tell "not a liquid" apart from "a liquid at distance 0" (a real, meaningful value). */
+  private waterDistanceFor(id: BlockId, x: number, y: number, z: number): number | undefined {
+    if (id === BlockId.WATER) return this.water.getWaterDistance(x, y, z);
+    if (id === BlockId.LAVA) return this.lava.getWaterDistance(x, y, z);
+    return undefined;
+  }
+
   /**
    * The low-level block write: persist, broadcast, and keep the FIRE engine's
    * cell list in step (a flame washed away by a flow has to stop being
@@ -1635,7 +1642,7 @@ export class WorldDO implements DurableObject {
     const key = `${x},${y},${z}`;
     this.edits.set(key, id);
     void this.state.storage.put(`edit:${key}`, id);
-    this.broadcast({ type: 'blockChanged', x, y, z, blockId: id });
+    this.broadcast({ type: 'blockChanged', x, y, z, blockId: id, waterDistance: this.waterDistanceFor(id, x, y, z) });
     if (id === BlockId.FIRE) this.fire.onFirePlaced(x, y, z);
     else this.fire.onFireRemoved(x, y, z);
     if (id === BlockId.WATER || id === BlockId.LAVA) this.resolveLiquidInteractionAt(x, y, z);
