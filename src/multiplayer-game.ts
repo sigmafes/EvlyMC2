@@ -1196,6 +1196,23 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (optionsOpen) unlockPointerForGui(); else lockPointer(canvas);
   }
 
+  /** Decoded once per skin string and cached, since the same data: URL is re-sent to every client and shouldn't be re-decoded per remote avatar. `null` (the default skin) and a load failure both resolve to `null` - createSkinMaterials(null) already falls back to the built-in skin. Declared here (rather than down by playerSkins, where it used to live) because buildLocalPlayerModel below calls loadSkinImage() immediately, not from a deferred callback - it needs skinImageCache to already exist. */
+  const skinImageCache = new Map<string, Promise<HTMLImageElement | null>>();
+  function loadSkinImage(dataUrl: string | null): Promise<HTMLImageElement | null> {
+    if (!dataUrl) return Promise.resolve(null);
+    let p = skinImageCache.get(dataUrl);
+    if (!p) {
+      p = new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+      });
+      skinImageCache.set(dataUrl, p);
+    }
+    return p;
+  }
+
   /**
    * Third-person camera + this player's own visible body (LCE F5 cycle: 0
    * first person, 1 behind, 2 in front looking back). First person renders
@@ -1607,22 +1624,6 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
 
   /** Every player's currently-known skin ("data: URL, or null for default), keyed by their entity id - populated from the server's playerSkin messages (see client.connect below), which can arrive before OR after that player's first state snapshot creates their avatar. */
   const playerSkins = new Map<number, string | null>();
-  /** Decoded once per skin string and cached, since the same data: URL is re-sent to every client and shouldn't be re-decoded per remote avatar. `null` (the default skin) and a load failure both resolve to `null` - createSkinMaterials(null) already falls back to the built-in skin. */
-  const skinImageCache = new Map<string, Promise<HTMLImageElement | null>>();
-  function loadSkinImage(dataUrl: string | null): Promise<HTMLImageElement | null> {
-    if (!dataUrl) return Promise.resolve(null);
-    let p = skinImageCache.get(dataUrl);
-    if (!p) {
-      p = new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = () => resolve(null);
-        img.src = dataUrl;
-      });
-      skinImageCache.set(dataUrl, p);
-    }
-    return p;
-  }
 
   /**
    * Real avatar for another player: the exact same PlayerModel (skinned,
