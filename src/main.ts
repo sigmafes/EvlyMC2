@@ -58,6 +58,34 @@ import { viewportSize, fitInventoryPanels, createApplyViewport, makeFloatingPane
 // unlocked it earlier).
 await waitForAccessGate();
 
+/**
+ * Set once startGame() below actually creates the singleplayer Chat instance
+ * - which only happens if/when the player picks Singleplayer from the menu,
+ * so this stays null for a session that goes straight to Multiplayer.
+ * setSingleplayerChatEnabled() has to tolerate that (see its own comment).
+ */
+let singleplayerChat: Chat | null = null;
+
+/**
+ * Multiplayer runs alongside this same page (see multiplayer-game.ts's
+ * disconnect(), which restores #game-shell rather than reloading, so a
+ * session can go Singleplayer -> Multiplayer -> back without a reload) -
+ * while it's active it needs sole ownership of the "T" key, or singleplayer's
+ * own Chat, if one has been created, would steal every "T" press via its
+ * document-level capture-phase listener before multiplayer-game.ts's own
+ * chat ever sees it.
+ */
+export function setSingleplayerChatEnabled(on: boolean): void {
+  singleplayerChat?.setEnabled(on);
+}
+
+/** Same story as singleplayerChat above, for PauseMenu's own "Tab" listener. */
+let singleplayerPauseMenu: PauseMenu | null = null;
+
+export function setSingleplayerPauseMenuEnabled(on: boolean): void {
+  singleplayerPauseMenu?.setEnabled(on);
+}
+
 async function startGame() {
 const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas')!;
 keepFullscreenOnGesture();
@@ -160,6 +188,7 @@ const pauseMenu = new PauseMenu(
   (on) => { viewBobOn = on; player.setViewBobEnabled(on); },
   (percent) => applyButtonOpacity?.(percent),
 );
+singleplayerPauseMenu = pauseMenu;
 
 // Save everything and return to the main menu (skipping the intro on reload).
 async function leaveWorld() {
@@ -513,6 +542,7 @@ if (playerSave?.dayTime != null) dayNightCycle.restoreTime(playerSave.dayTime);
 const skyRenderer = new SkyRenderer(scene, camera);
 
 const chat = new Chat({ canvas, onOpenChange: (open) => player.setMovementLocked(open) });
+singleplayerChat = chat;
 chat.cheatsEnabled = activeWorld()?.cheats ?? false;
 
 const mobSpawning = createMobSpawning({ world, player, mobManager, dayNightCycle, lightEngine });

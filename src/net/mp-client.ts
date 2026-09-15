@@ -17,6 +17,8 @@ export type MpClientHandlers = {
   onCraftGridClosed: () => void;
   onDied: (killedBy?: string) => void;
   onChat: (from: string, text: string) => void;
+  /** Round-trip reply to a `ping` this client sent - `clientTimeMs` is its own value echoed back, so `performance.now() - clientTimeMs` is the RTT. */
+  onPong: (clientTimeMs: number, serverTimeMs: number) => void;
   onClose: (reason: string) => void;
 };
 
@@ -63,7 +65,8 @@ export class MpClient {
         case 'craftGridClosed': handlers.onCraftGridClosed(); break;
         case 'died': handlers.onDied(msg.killedBy); break;
         case 'chat': handlers.onChat(msg.from, msg.text); break;
-        default: break; // chunkData/pong: not used by this client yet
+        case 'pong': handlers.onPong(msg.clientTimeMs, msg.serverTimeMs); break;
+        default: break; // chunkData: not used by this client yet
       }
     });
 

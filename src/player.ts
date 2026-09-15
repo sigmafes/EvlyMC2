@@ -3,6 +3,7 @@ import { BlockId, isSolidBlock } from './block';
 import { PlayerPhysics } from './player-physics';
 import { ViewBob } from './view-bob';
 import { getBlockSound } from './block-sounds';
+import { thirdPersonCameraPosition } from './third-person-camera';
 
 const DEG = Math.PI / 180;
 import type { BlockCollider } from './chunk';
@@ -33,7 +34,6 @@ export class PlayerController {
   };
 
   private readonly physics: PlayerPhysics;
-  private readonly thirdPersonOffset = new THREE.Vector3(0, 0, 4.5);
   private readonly keys = new Set<string>();
   private readonly baseFov: number;
   /** LCE F5 cycle: 0 = first person, 1 = third-person behind, 2 = third-person front. */
@@ -253,16 +253,14 @@ export class PlayerController {
       // Front view (mode 2) swings the boom to the opposite side; the camera
       // still looks back at the player (LCE F5 third-person-front).
       const front = this.cameraMode === 2;
-      const desiredOffset = this.thirdPersonOffset.clone()
-        .applyAxisAngle(new THREE.Vector3(1, 0, 0), (front ? 1 : -1) * -this.state.pitch)
-        .applyAxisAngle(new THREE.Vector3(0, 1, 0), this.state.yaw + (front ? Math.PI : 0));
       const deathZoomOut = this.deathZoomActive
         ? PlayerController.DEATH_ZOOM_EXTRA * (this.deathZoomTimer / PlayerController.DEATH_ZOOM_DURATION)
         : 0;
-      const maxDist = desiredOffset.length() + deathZoomOut;
-      const dir = desiredOffset.clone().normalize();
-      const dist = this.cameraCollisionDistance(eye, dir, maxDist);
-      this.camera.position.copy(dir).multiplyScalar(dist).add(eye);
+      this.camera.position.copy(thirdPersonCameraPosition(
+        eye, this.state.yaw, this.state.pitch, front,
+        (x, y, z) => isSolidBlock(this.getBlock ? this.getBlock(x, y, z) : BlockId.AIR),
+        deathZoomOut,
+      ));
       this.camera.lookAt(eye);
     } else {
       this.camera.position.copy(eye);
@@ -277,21 +275,6 @@ export class PlayerController {
     }
   }
 
-  /**
-   * Voxel-stepping camera boom collision: walks from the player's eye toward
-   * the desired third-person camera position and stops just before the first
-   * solid block, so the boom no longer clips through walls/terrain.
-   */
-  private cameraCollisionDistance(eye: THREE.Vector3, dir: THREE.Vector3, maxDist: number): number {
-    if (!this.getBlock) return maxDist;
-    const step = 0.1;
-    for (let dist = step; dist <= maxDist; dist += step) {
-      const p = eye.x + dir.x * dist, py = eye.y + dir.y * dist, pz = eye.z + dir.z * dist;
-      const id = this.getBlock(Math.floor(p), Math.floor(py), Math.floor(pz));
-      if (isSolidBlock(id)) return Math.max(dist - step, 0.2);
-    }
-    return maxDist;
-  }
 
   private applyViewBob() {
     const b = this.viewBob.phase;

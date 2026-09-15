@@ -23,6 +23,8 @@ export class Chat {
   private readonly lines: HTMLElement[] = [];
   private buffer = '';
   private open = false;
+  /** False while a multiplayer session owns the keyboard's "T" (see setEnabled) - singleplayer's own Chat instance lives for the whole page lifetime and its document-level, capture-phase listener would otherwise steal every "T" press away from multiplayer-game.ts's own chat, which never even gets to run since stopImmediatePropagation() below halts the event first. */
+  private enabled = true;
   private idleTimer = 0;
   /** Hidden real <input>: on a phone, focusing it raises the soft keyboard. */
   private readonly softInput = document.createElement('input');
@@ -57,6 +59,12 @@ export class Chat {
 
   get isOpen() {
     return this.open;
+  }
+
+  /** Multiplayer (multiplayer-game.ts) toggles this off for the duration of its own session and back on when it disconnects, so its own chat gets "T" instead of this always-on singleplayer instance. Closes this chat first if it happened to be open. */
+  setEnabled(on: boolean): void {
+    this.enabled = on;
+    if (!on && this.open) this.closeChat(false);
   }
 
   /** Open the chat input (on-screen chat button; mirrors pressing T). */
@@ -161,6 +169,7 @@ export class Chat {
   }
 
   private onKeyDown = (event: KeyboardEvent) => {
+    if (!this.enabled) return;
     if (!this.open) {
       if ((event.key === 't' || event.key === 'T') && !event.repeat) {
         const active = document.activeElement;

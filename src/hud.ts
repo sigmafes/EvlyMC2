@@ -8,9 +8,20 @@ const MAX_HEARTS = 10; // 20 health points, 2 per heart
 const MAX_BUBBLES = 10; // 300 air ticks, 30 per bubble
 const POP_MS = 220;
 
+export type HudIds = { hearts: string; bubbles: string; xpFill: string };
+
+/** Singleplayer's own DOM ids - the default so `new Hud()` behaves exactly as before. */
+const DEFAULT_IDS: HudIds = { hearts: '#hud-hearts', bubbles: '#hud-bubbles', xpFill: '#hud-xp-fill' };
+
 /**
  * In-game HUD stats above the hotbar: air bubbles (only while submerged), the
  * heart row, and the XP bar.
+ *
+ * Takes its container ids as a constructor param (defaulting to
+ * singleplayer's own) rather than hardcoding them, so multiplayer-game.ts can
+ * point a second instance at its own `#mp-hud-*` elements instead of either
+ * fighting over the same DOM or reimplementing this class - same reasoning
+ * as third-person-camera.ts's extraction.
  */
 export class Hud {
   private readonly hearts: HTMLElement[] = [];
@@ -21,8 +32,8 @@ export class Hud {
   private popIndex = -1;
   private popUntil = 0;
 
-  constructor() {
-    const heartsRoot = document.querySelector<HTMLElement>('#hud-hearts')!;
+  constructor(ids: HudIds = DEFAULT_IDS) {
+    const heartsRoot = document.querySelector<HTMLElement>(ids.hearts)!;
     for (let i = 0; i < MAX_HEARTS; i++) {
       const heart = document.createElement('div');
       heart.className = 'hud-heart';
@@ -30,7 +41,7 @@ export class Hud {
       this.hearts.push(heart);
     }
 
-    this.bubblesRoot = document.querySelector<HTMLElement>('#hud-bubbles')!;
+    this.bubblesRoot = document.querySelector<HTMLElement>(ids.bubbles)!;
     for (let i = 0; i < MAX_BUBBLES; i++) {
       const bubble = document.createElement('div');
       bubble.className = 'hud-bubble';
@@ -38,7 +49,7 @@ export class Hud {
       this.bubbles.push(bubble);
     }
 
-    this.xpFill = document.querySelector<HTMLElement>('#hud-xp-fill')!;
+    this.xpFill = document.querySelector<HTMLElement>(ids.xpFill)!;
     this.setHealth(20);
     this.setAir(MAX_BUBBLES, true);
     this.setXp(0);

@@ -1,13 +1,16 @@
 import * as THREE from 'three';
 import { MpClient } from './net/mp-client';
-import { BlockId, blockLightProperties, createBlockMaterials, type BlockMaterials } from './block';
+import { BlockId, blockLightProperties, createBlockMaterials, isSolidBlock, type BlockMaterials } from './block';
 import { Chunk, CHUNK_SIZE, CHUNK_HEIGHT } from './chunk';
 import { TerrainNoise } from './terrain-noise';
-import { lockPointer, unlockPointerForGui } from './is-touch';
+import { lockPointer, unlockPointerForGui, isTouchDevice } from './is-touch';
+import { loadSettings, saveSettings } from './settings';
 import { TouchControls } from './touch-controls';
 import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials } from './player-model';
 import { loadPlayerSkinDataUrl } from './player-skin';
 import { loadPlayToken } from './access-gate';
+import { setSingleplayerChatEnabled, setSingleplayerPauseMenuEnabled } from './main';
+import { thirdPersonCameraPosition } from './third-person-camera';
 import { LightEngine, type LightWorld } from './light-engine';
 import { SkyRenderer } from './sky-renderer';
 import { SoundManager } from './sound-manager';
@@ -21,10 +24,13 @@ import { SHEEP_SPEC } from './sheep-model';
 import { ZOMBIE_SPEC } from './zombie-model';
 import { SKELETON_SPEC } from './skeleton-model';
 import { renderSlot, createEmptySlot, HOTBAR_SIZE, TOTAL_SLOTS, type InventorySlot } from './inventory';
+import { Hud } from './hud';
 import { COOK_SECONDS } from './smelting';
 import { foodValue, isBlock, ItemId } from './item';
 import { makeStack } from './item-stack';
-import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight } from './block-preview';
+import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight, initPreviewAtlases } from './block-preview';
+import { breakTime } from './block-hardness';
+import { BreakOverlay } from './break-overlay';
 import { createArrowMesh, orientArrowMesh } from './arrow-projectiles';
 import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
@@ -74,7 +80,7 @@ import type { EntitySnapshot, DroppedItemSnapshot, ArrowSnapshot, CraftSlotRef }
 
 const TICK_HZ = 20;
 const SEND_INTERVAL_MS = 1000 / TICK_HZ;
-const MOUSE_SENSITIVITY = 0.0022;
+const MOUSE_SENSITIVITY_BASE = 0.0022; // matches player.ts's own base look constant exactly
 const REACH = 5;
 const VIEW_RADIUS_CHUNKS = 3; // 7x7 chunks (112x112 blocks) around the player, kept loaded
 const UNLOAD_MARGIN_CHUNKS = 1; // a chunk isn't unloaded until it's this far PAST the view radius, so walking back and forth right at the edge doesn't thrash load/unload every frame
@@ -133,11 +139,34 @@ const MOB_SOUND_RADIUS = 4;
 const nextIdleDelay = () => IDLE_SOUND_MIN + Math.random() * (IDLE_SOUND_MAX - IDLE_SOUND_MIN);
 
 export function startMultiplayer(serverUrl: string, worldId: string): void {
+  // Singleplayer's own Chat/PauseMenu instances live for the whole page and
+  // would otherwise steal every "T"/"Tab" press from this session's own chat
+  // and options panel (see main.ts's doc comments) - both re-enabled in
+  // disconnect() below.
+  setSingleplayerChatEnabled(false);
+  setSingleplayerPauseMenuEnabled(false);
+
   const canvas = document.querySelector<HTMLCanvasElement>('#mp-canvas')!;
   const crosshair = document.querySelector<HTMLElement>('#mp-crosshair')!;
   const hint = document.querySelector<HTMLElement>('#mp-hint')!;
-  const healthEl = document.querySelector<HTMLElement>('#mp-health')!;
-  const airEl = document.querySelector<HTMLElement>('#mp-air')!;
+  /**
+   * Real HUD (heart/bubble/XP textures), not the old emoji-text stand-in -
+   * built here rather than in index.html like every other MP-only panel in
+   * this file, but the ELEMENTS underneath are the exact same structure
+   * singleplayer's #hud/#hud-hearts/#hud-bubbles/#hud-xp use (see style.css's
+   * mp- prefixed mirror of those rules), so the shared `Hud` class (hud.ts)
+   * needs no changes beyond accepting which ids to bind to.
+   */
+  const hudEl = document.createElement('div');
+  hudEl.id = 'mp-hud';
+  hudEl.hidden = true;
+  hudEl.innerHTML = [
+    '<div id="mp-hud-bubbles" hidden></div>',
+    '<div id="mp-hud-hearts"></div>',
+    '<div id="mp-hud-xp"><div id="mp-hud-xp-fill"></div></div>',
+  ].join('');
+  document.body.appendChild(hudEl);
+  const hud = new Hud({ hearts: '#mp-hud-hearts', bubbles: '#mp-hud-bubbles', xpFill: '#mp-hud-xp-fill' });
   const menu = document.querySelector<HTMLElement>('#main-menu')!;
   const connectScreen = document.querySelector<HTMLElement>('#multiplayer-connect')!;
   // #game-shell (singleplayer's HUD/hotbar/crosshair/chat/game-canvas) is
@@ -161,7 +190,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   canvas.hidden = false;
   crosshair.hidden = false;
   hint.hidden = false;
-  healthEl.hidden = false;
+  hudEl.hidden = false;
   menu.hidden = true;
   connectScreen.hidden = true;
 
@@ -185,7 +214,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   sun.position.set(3, 10, 2);
   scene.add(sun);
 
-  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 500);
+  // Seeded from the same persisted settings singleplayer's own PauseMenu
+  // reads/writes (localStorage, per origin) - a sensitivity or FOV set in
+  // one mode carries over to the other, since it's the same person at the
+  // same device either way.
+  const mpSettings = loadSettings();
+  const camera = new THREE.PerspectiveCamera(mpSettings.fov, window.innerWidth / window.innerHeight, 0.05, 500);
+  // Same formula interaction.ts's onMouseMove applies to pauseMenu.mouseSensitivity: the 0-100 slider value divided by 100, scaling the base look constant. Mutable so the options panel's slider takes effect immediately.
+  let sensitivityScale = mpSettings.sensitivity / 100;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -316,6 +352,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   async function initTerrain(seed: number): Promise<void> {
     worldSeed = seed;
     materials = await createBlockMaterials();
+    // Wires up the shared block/item atlas that renderBlockPreview()/
+    // renderItemIcon() (src/block-preview.ts, used by every inventory-slot
+    // render in this file) need to crop a texture. main.ts calls this too,
+    // right after its own createBlockMaterials() - without it those two
+    // functions fail silently and every slot just stays blank, which is why
+    // no item/block texture ever showed up in the hotbar or backpack.
+    await initPreviewAtlases(materials.atlas);
     terrainNoise = new TerrainNoise(seed);
     // Block-break particles need the block atlas, so this can only be built
     // once the materials exist - hence here rather than alongside the other
@@ -350,6 +393,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     chunk.setLightReader(lightEngine.getRawBrightness.bind(lightEngine));
     lightEngine.initializeChunk(chunk);
     chunk.rebuildDirty();
+    // Whichever neighbors were already loaded meshed their shared boundary
+    // assuming this chunk didn't exist - now that it does, that guess is
+    // wrong and their mesh at this edge needs to be recomputed against the
+    // real block/light data instead (see rebuildAdjacentChunks's doc
+    // comment). Without this, streaming order determined which chunk
+    // boundaries ended up with missing or duplicated faces.
+    rebuildAdjacentChunks(cx, cz);
     rebuildChunkMeshList();
   }
 
@@ -445,14 +495,42 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     skyRenderer.update(timeOfDay, delta);
   }
 
+  /**
+   * Rebuild every already-loaded orthogonal neighbor of (cx,cz) from scratch.
+   * Two unrelated bugs share this one fix:
+   * - A chunk that streamed in AFTER its neighbor was already meshed left
+   *   that neighbor's boundary faces stuck with whatever culling decision it
+   *   made when there was nothing there yet (generateChunk's call below).
+   * - Light propagated by a block edit can spread across a chunk boundary
+   *   (a column that lost its roof near the edge, say) - the edited chunk's
+   *   own rebuild in applyBlockChange doesn't touch the neighbor's mesh, so
+   *   its shading would stay stale even though the light DATA is correct.
+   * Both are the same shape of bug: "a chunk's mesh is stale because
+   * something changed just outside it" - so one helper covers both.
+   */
+  function rebuildAdjacentChunks(cx: number, cz: number): void {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const neighbor = chunks.get(`${cx + dx},${cz + dz}`);
+      if (!neighbor) continue;
+      neighbor.markAllDirty();
+      neighbor.rebuildDirty();
+    }
+  }
+
   function applyBlockChange(x: number, y: number, z: number, id: BlockId): void {
+    const previousId = getBlock(x, y, z);
+    // Captured BEFORE the edit, same as world.ts's setBlock/place - queueing
+    // the light update below needs to know what this cell was lighting like
+    // just before it changed, not after.
+    const oldSkyLight = lightWorld.getLight('skyLight', x, y, z);
+    const oldBlockLight = lightWorld.getLight('blockLight', x, y, z);
+
     // Reactive, not optimistic: world-do.ts's setBlock() broadcasts to
     // EVERY session including whoever sent the edit, so playing a sound here
     // (once, for every edit - ours and everyone else's alike) instead of
     // also at the moment performInteraction() sends breakBlock/placeBlock
     // avoids doubling up our own break/place sound.
     if (performance.now() - joinedAtMs > 500) {
-      const previousId = getBlock(x, y, z);
       const sound = id === BlockId.AIR
         ? getBlockSound(previousId, 'dig')
         : getBlockSound(id, 'place') ?? getBlockSound(id, 'dig');
@@ -467,7 +545,21 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     edits.set(`${x},${y},${z}`, id);
     const [cx, cz] = chunkCoordOf(x, z);
     const chunk = chunks.get(`${cx},${cz}`);
-    if (chunk && chunk.setBlock(x, y, z, id)) chunk.rebuildDirty(Infinity, y);
+    if (!chunk || !chunk.setBlock(x, y, z, id)) return;
+
+    // Light was only ever computed ONCE, at chunk generation - nothing here
+    // told it a block changed, so a broken block kept the darkness of
+    // whatever solid thing used to occupy it (rendering pitch black) and a
+    // placed one never cast or blocked anything. queueBlockUpdate() re-seeds
+    // the BFS from this cell; processUpdates() drains it synchronously right
+    // here rather than waiting for a frame-loop pass, since a single edit's
+    // propagation is small and this mirrors the one-rebuild-per-edit
+    // approach this function already had (see chunkData backlog replay on
+    // join, which can call this dozens of times back to back).
+    lightEngine.queueBlockUpdate(x, y, z, oldSkyLight, oldBlockLight);
+    lightEngine.processUpdates();
+    chunk.rebuildDirty(Infinity, y);
+    rebuildAdjacentChunks(cx, cz);
   }
 
   const remoteEntities = new Map<number, RemoteEntity>();
@@ -585,56 +677,193 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   renderHotbar();
 
   /**
-   * Backpack (E): the other 27 slots, plus the hotbar row mirrored at the
-   * top (same layout convention as singleplayer's #backpack). Click-based
-   * move instead of real drag-and-drop: click a slot to pick it up
-   * (highlighted), click another to send moveSlot (merge if same item,
-   * otherwise swap - see world-do.ts's moveOrMergeSlot), click the same
-   * slot again to cancel. A real drag/held-cursor UI is a nice-to-have
-   * follow-up; this is the same end result with fewer moving parts to get
-   * right over a network round-trip.
+   * One "held" reference shared by every grid in this file (backpack's own
+   * cells, its embedded 2x2, and the crafting table's 3x3) - click a slot to
+   * pick it up (highlighted), click another to move/merge, click the same
+   * slot again to cancel. Always sent as `craftMove` (zone-tagged on both
+   * ends) rather than the older bare `moveSlot`: world-do.ts's
+   * handleCraftMove already collapses to a plain inventory-to-inventory move
+   * when both ends are zone:'inventory' (`arrayFor` returns `session.inventory`
+   * either way), and since opening the backpack now ALSO opens the player's
+   * personal 2x2 grid (see setBackpackOpen), a craft grid is always open by
+   * the time any of these panels are visible - `moveSlot` never had to be a
+   * second code path here, just an accident of Fase 10 building the grid
+   * before Fase 4 gave it a place to live.
+   */
+  let craftPicked: CraftSlotRef | null = null;
+  const sameCraftRef = (a: CraftSlotRef | null, b: CraftSlotRef) => a !== null && a.zone === b.zone && a.index === b.index;
+  function slotAt(ref: CraftSlotRef): InventorySlot | undefined {
+    return ref.zone === 'grid' ? craftInputs[ref.index] : inventorySlots[ref.index];
+  }
+  function onGridSlotClick(ref: CraftSlotRef): void {
+    if (craftPicked === null) {
+      if (slotAt(ref)?.id == null) return; // nothing there to pick up
+      craftPicked = ref;
+    } else if (sameCraftRef(craftPicked, ref)) {
+      craftPicked = null; // clicked the same cell again - cancel
+    } else {
+      client.send({ type: 'craftMove', from: craftPicked, to: ref });
+      craftPicked = null;
+    }
+    if (backpackOpen) renderBackpack();
+    if (tableOpen) renderTable();
+  }
+
+  /** `count` fresh `.inventory-slot` buttons, each wired to `onGridSlotClick({ zone: 'inventory', index: indexOffset + i })` - the shared building block for every inventory-slot grid below (backpack's own 27, the mirrored hotbar rows in both panels, and the table's 27). */
+  function makeInventorySlotButtons(count: number, indexOffset: number): HTMLButtonElement[] {
+    const out: HTMLButtonElement[] = [];
+    for (let i = 0; i < count; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'inventory-slot';
+      btn.type = 'button';
+      btn.addEventListener('click', () => onGridSlotClick({ zone: 'inventory', index: indexOffset + i }));
+      out.push(btn);
+    }
+    return out;
+  }
+  /** `count` fresh `.inventory-slot` buttons for a crafting grid's own cells (zone:'grid'), same wiring pattern as makeInventorySlotButtons. */
+  function makeCraftSlotButtons(count: number): HTMLButtonElement[] {
+    const out: HTMLButtonElement[] = [];
+    for (let i = 0; i < count; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'inventory-slot craft-slot';
+      btn.type = 'button';
+      btn.addEventListener('click', () => onGridSlotClick({ zone: 'grid', index: i }));
+      out.push(btn);
+    }
+    return out;
+  }
+
+  /**
+   * Backpack (E): singleplayer's real GUI texture (gui/inventory.png) with
+   * the personal 2x2 crafting grid embedded in it, not a separate C-toggled
+   * panel - same layout `#backpack`/`#backpack-panel` use, mirrored here
+   * under mp- ids (see style.css) since main.ts's own #backpack is a
+   * different DOM tree bound to singleplayer's Inventory class.
+   *
+   * Opening the backpack also opens a side-2 crafting grid server-side
+   * (`craftOpen({ table: null })`) - the 2x2 is real crafting-grid state the
+   * whole time the backpack is up, not a cosmetic 4 buttons.
    */
   const backpackEl = document.createElement('div');
   backpackEl.id = 'mp-backpack';
   backpackEl.hidden = true;
-  const backpackGrid = document.createElement('div');
-  backpackGrid.id = 'mp-backpack-grid';
-  backpackEl.appendChild(backpackGrid);
+  const backpackPanelEl = document.createElement('div');
+  backpackPanelEl.id = 'mp-backpack-panel';
+  const backpackCraftEl = document.createElement('div');
+  backpackCraftEl.id = 'mp-backpack-craft';
+  const backpackCraftEls = makeCraftSlotButtons(4);
+  backpackCraftEls.forEach((el) => backpackCraftEl.appendChild(el));
+  const backpackCraftResultEl = document.createElement('button');
+  backpackCraftResultEl.type = 'button';
+  backpackCraftResultEl.className = 'inventory-slot craft-result';
+  backpackCraftResultEl.addEventListener('click', () => client.send({ type: 'craftTakeOutput' }));
+  const backpackGridEl = document.createElement('div');
+  backpackGridEl.id = 'mp-backpack-grid';
+  const backpackGridEls = makeInventorySlotButtons(TOTAL_SLOTS - HOTBAR_SIZE, HOTBAR_SIZE);
+  backpackGridEls.forEach((el) => backpackGridEl.appendChild(el));
+  const backpackHotbarEl = document.createElement('div');
+  backpackHotbarEl.id = 'mp-backpack-hotbar';
+  const backpackHotbarEls = makeInventorySlotButtons(HOTBAR_SIZE, 0);
+  backpackHotbarEls.forEach((el) => backpackHotbarEl.appendChild(el));
+  backpackPanelEl.append(backpackCraftEl, backpackCraftResultEl, backpackGridEl, backpackHotbarEl);
+  backpackEl.appendChild(backpackPanelEl);
   document.body.appendChild(backpackEl);
-  const backpackSlotEls: HTMLButtonElement[] = [];
-  for (let i = 0; i < TOTAL_SLOTS; i++) {
-    const btn = document.createElement('button');
-    btn.className = 'inventory-slot';
-    if (i === HOTBAR_SIZE) btn.classList.add('backpack-row-start'); // CSS line-break between the mirrored hotbar row and the backpack proper
-    btn.addEventListener('click', () => onBackpackSlotClick(i));
-    backpackGrid.appendChild(btn);
-    backpackSlotEls.push(btn);
-  }
+
   let backpackOpen = false;
-  let pickedSlot: number | null = null;
   function renderBackpack(): void {
-    for (let i = 0; i < TOTAL_SLOTS; i++) {
-      renderSlot(backpackSlotEls[i], inventorySlots[i] ?? createEmptySlot());
-      backpackSlotEls[i].classList.toggle('picked', i === pickedSlot);
+    backpackCraftEls.forEach((el, i) => {
+      renderSlot(el, craftInputs[i] ?? createEmptySlot());
+      el.classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'grid', index: i }));
+    });
+    renderSlot(backpackCraftResultEl, craftOutput);
+    for (let i = 0; i < backpackGridEls.length; i++) {
+      const index = HOTBAR_SIZE + i;
+      renderSlot(backpackGridEls[i], inventorySlots[index] ?? createEmptySlot());
+      backpackGridEls[i].classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index }));
     }
-  }
-  function onBackpackSlotClick(index: number): void {
-    if (pickedSlot === null) {
-      if (inventorySlots[index]?.id === null) return; // nothing to pick up
-      pickedSlot = index;
-    } else if (pickedSlot === index) {
-      pickedSlot = null; // clicked the same slot again - cancel
-    } else {
-      client.send({ type: 'moveSlot', from: pickedSlot, to: index });
-      pickedSlot = null;
+    for (let i = 0; i < backpackHotbarEls.length; i++) {
+      renderSlot(backpackHotbarEls[i], inventorySlots[i] ?? createEmptySlot());
+      backpackHotbarEls[i].classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index: i }));
     }
-    renderBackpack();
   }
   function setBackpackOpen(open: boolean): void {
     backpackOpen = open;
     backpackEl.hidden = !open;
-    pickedSlot = null;
-    if (open) { renderBackpack(); unlockPointerForGui(); } else { lockPointer(canvas); }
+    craftPicked = null;
+    if (open) {
+      craftSide = 2;
+      client.send({ type: 'craftOpen', table: null });
+      renderBackpack();
+      unlockPointerForGui();
+    } else {
+      client.send({ type: 'craftClose' });
+      lockPointer(canvas);
+    }
+  }
+
+  /**
+   * Crafting table (right-click a placed one): the real 3x3, singleplayer's
+   * `#crafting-table`/`#crafting-table-panel` (gui/Crafting_table_gui.png)
+   * mirrored the same way the backpack above is. Only a real table grants
+   * this - world-do.ts's openCraftGrid checks the block itself, a client
+   * can't just ask for the bigger grid.
+   */
+  const tableEl = document.createElement('div');
+  tableEl.id = 'mp-crafting-table';
+  tableEl.hidden = true;
+  const tablePanelEl = document.createElement('div');
+  tablePanelEl.id = 'mp-crafting-table-panel';
+  const tableCraftEl = document.createElement('div');
+  tableCraftEl.id = 'mp-ct-craft';
+  const tableCraftEls = makeCraftSlotButtons(9);
+  tableCraftEls.forEach((el) => tableCraftEl.appendChild(el));
+  const tableCraftResultEl = document.createElement('button');
+  tableCraftResultEl.type = 'button';
+  tableCraftResultEl.className = 'inventory-slot ct-result';
+  tableCraftResultEl.addEventListener('click', () => client.send({ type: 'craftTakeOutput' }));
+  const tableBackpackEl = document.createElement('div');
+  tableBackpackEl.id = 'mp-ct-backpack';
+  const tableBackpackEls = makeInventorySlotButtons(TOTAL_SLOTS - HOTBAR_SIZE, HOTBAR_SIZE);
+  tableBackpackEls.forEach((el) => tableBackpackEl.appendChild(el));
+  const tableHotbarEl = document.createElement('div');
+  tableHotbarEl.id = 'mp-ct-hotbar';
+  const tableHotbarEls = makeInventorySlotButtons(HOTBAR_SIZE, 0);
+  tableHotbarEls.forEach((el) => tableHotbarEl.appendChild(el));
+  tablePanelEl.append(tableCraftEl, tableCraftResultEl, tableBackpackEl, tableHotbarEl);
+  tableEl.appendChild(tablePanelEl);
+  document.body.appendChild(tableEl);
+
+  let tableOpen = false;
+  function renderTable(): void {
+    tableCraftEls.forEach((el, i) => {
+      renderSlot(el, craftInputs[i] ?? createEmptySlot());
+      el.classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'grid', index: i }));
+    });
+    renderSlot(tableCraftResultEl, craftOutput);
+    for (let i = 0; i < tableBackpackEls.length; i++) {
+      const index = HOTBAR_SIZE + i;
+      renderSlot(tableBackpackEls[i], inventorySlots[index] ?? createEmptySlot());
+      tableBackpackEls[i].classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index }));
+    }
+    for (let i = 0; i < tableHotbarEls.length; i++) {
+      renderSlot(tableHotbarEls[i], inventorySlots[i] ?? createEmptySlot());
+      tableHotbarEls[i].classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index: i }));
+    }
+  }
+  function setTableOpen(open: boolean, table: { x: number; y: number; z: number } | null = null): void {
+    tableOpen = open;
+    tableEl.hidden = !open;
+    craftPicked = null;
+    if (open) {
+      craftSide = 3;
+      client.send({ type: 'craftOpen', table });
+      renderTable();
+      unlockPointerForGui();
+    } else {
+      client.send({ type: 'craftClose' });
+      lockPointer(canvas);
+    }
   }
 
   /**
@@ -659,6 +888,78 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   fireOverlayEl.setAttribute('aria-hidden', 'true');
   document.body.appendChild(fireOverlayEl);
 
+  /**
+   * Real networked chat: press T (or the touch chat button) to type, Enter
+   * to send. There's no local echo on submit - the server's own broadcast
+   * (world-do.ts's `case 'chat'`) goes to every connected session INCLUDING
+   * the sender, so this only ever prints what actually reached the server,
+   * never a message that looked sent but got dropped by the socket.
+   *
+   * Own element rather than singleplayer's #chat, for the same reason as the
+   * death screen and overlays: that one is bound to `loadPlayerName()`/its
+   * own slash-command dispatcher, and main.ts's Chat instance lives for the
+   * whole page - see setSingleplayerChatEnabled's doc comment for how the
+   * "T" key itself is handed over for the duration of this session.
+   */
+  const chatEl = document.createElement('div');
+  chatEl.id = 'mp-chat';
+  const chatLogEl = document.createElement('div');
+  chatLogEl.id = 'mp-chat-log';
+  const chatInputEl = document.createElement('input');
+  chatInputEl.id = 'mp-chat-input';
+  chatInputEl.type = 'text';
+  chatInputEl.maxLength = 256;
+  chatInputEl.autocomplete = 'off';
+  chatInputEl.spellcheck = false;
+  chatInputEl.hidden = true;
+  chatEl.append(chatLogEl, chatInputEl);
+  document.body.appendChild(chatEl);
+  let chatOpen = false;
+
+  function addChatLine(text: string): void {
+    const line = document.createElement('div');
+    line.className = 'mp-chat-line';
+    line.textContent = text;
+    chatLogEl.appendChild(line);
+    while (chatLogEl.children.length > 50) chatLogEl.firstElementChild!.remove();
+    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  }
+
+  function openChat(): void {
+    chatOpen = true;
+    chatInputEl.hidden = false;
+    chatInputEl.value = '';
+    document.exitPointerLock();
+    chatInputEl.focus(); // from the T press/tap's own gesture, so a phone's soft keyboard is allowed to open
+  }
+
+  function closeChat(regrabPointer: boolean): void {
+    chatOpen = false;
+    chatInputEl.hidden = true;
+    chatInputEl.blur();
+    if (regrabPointer) lockPointer(canvas);
+  }
+
+  chatInputEl.addEventListener('keydown', (e) => {
+    // Stop this from ALSO reaching the document-level onKeyDown below -
+    // without it, typing "e"/"c"/"q"/a digit while chatting would toggle the
+    // backpack, the craft menu, drop the held item, or change hotbar slot,
+    // and an Escape meant to cancel the message would also disconnect (that
+    // key doubles as "leave the world" while not typing).
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      const text = chatInputEl.value.trim();
+      if (text.length > 0) client.send({ type: 'chat', text });
+      closeChat(true);
+    } else if (e.key === 'Escape') {
+      closeChat(true);
+    }
+  });
+  // Losing focus any other way (tapping elsewhere on a phone, alt-tab) must
+  // still clear `chatOpen` - otherwise sendInput()'s movement guard below
+  // would stay stuck thinking the player is chatting forever.
+  chatInputEl.addEventListener('blur', () => { if (chatOpen) closeChat(false); });
+
   const deathEl = document.createElement('div');
   deathEl.id = 'mp-death-screen';
   deathEl.hidden = true;
@@ -681,113 +982,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     lockPointer(canvas);
   });
 
-  /**
-   * The real crafting grid, replacing the old "pick from a list of what you
-   * can afford" shortcut. C opens the 2x2 you carry; right-clicking a placed
-   * crafting table opens the 3x3 (the server decides which - it checks the
-   * block is really a table rather than trusting the request).
-   *
-   * Items move with the same two-click pick-then-place the backpack uses, not
-   * a dragged cursor: each move is one self-contained message, so there's no
-   * "held item" state to keep in sync across the network. The only extra is
-   * that a pick now remembers WHICH grid it came from, since moves can cross
-   * between the inventory and the cells.
-   *
-   * Everything shown here is server state: the cells live in the session, and
-   * the result comes from the server running matchRecipe(), so this client
-   * never needs the recipe list or the shape-matching rules.
-   */
-  const craftMenuEl = document.createElement('div');
-  craftMenuEl.id = 'mp-craft-menu';
-  craftMenuEl.hidden = true;
-  const craftGridCells = document.createElement('div');
-  craftGridCells.id = 'mp-craft-cells';
-  const craftOutputSlot = document.createElement('button');
-  craftOutputSlot.className = 'inventory-slot';
-  craftOutputSlot.addEventListener('click', () => client.send({ type: 'craftTakeOutput' }));
-  const craftInvEls: HTMLElement[] = [];
-  const craftInvGrid = document.createElement('div');
-  craftInvGrid.id = 'mp-craft-inventory';
-  for (let i = 0; i < TOTAL_SLOTS; i++) {
-    const btn = document.createElement('button');
-    btn.className = 'inventory-slot';
-    btn.addEventListener('click', () => onCraftSlotClick({ zone: 'inventory', index: i }));
-    craftInvEls.push(btn);
-    craftInvGrid.appendChild(btn);
-  }
-  const craftTopRow = document.createElement('div');
-  craftTopRow.id = 'mp-craft-top';
-  craftTopRow.append(craftGridCells, craftOutputSlot);
-  craftMenuEl.append(craftTopRow, craftInvGrid);
-  document.body.appendChild(craftMenuEl);
-
-  let craftMenuOpen = false;
+  /** Which side grid is currently open (2 = backpack's own, 3 = a real table) - only meaningful while one of backpackOpen/tableOpen is true, but kept as one flag since only one can be open at a time and both renderBackpack()/renderTable() read the same craftInputs/craftOutput either way. */
   let craftSide: 2 | 3 = 2;
   let craftInputs: InventorySlot[] = [];
   let craftOutput: InventorySlot = createEmptySlot();
-  let craftCellEls: HTMLElement[] = [];
-  /** Which slot is "picked up" for the next click, and which grid it lives in - null when nothing is held. */
-  let craftPicked: CraftSlotRef | null = null;
-
-  function rebuildCraftCells(side: 2 | 3): void {
-    craftGridCells.innerHTML = '';
-    craftGridCells.style.gridTemplateColumns = `repeat(${side}, auto)`;
-    craftCellEls = [];
-    for (let i = 0; i < side * side; i++) {
-      const btn = document.createElement('button');
-      btn.className = 'inventory-slot';
-      btn.addEventListener('click', () => onCraftSlotClick({ zone: 'grid', index: i }));
-      craftCellEls.push(btn);
-      craftGridCells.appendChild(btn);
-    }
-  }
-
-  const sameCraftRef = (a: CraftSlotRef | null, b: CraftSlotRef) => a !== null && a.zone === b.zone && a.index === b.index;
-
-  function slotAt(ref: CraftSlotRef): InventorySlot | undefined {
-    return ref.zone === 'grid' ? craftInputs[ref.index] : inventorySlots[ref.index];
-  }
-
-  function onCraftSlotClick(ref: CraftSlotRef): void {
-    if (craftPicked === null) {
-      if (slotAt(ref)?.id == null) return; // nothing there to pick up
-      craftPicked = ref;
-    } else if (sameCraftRef(craftPicked, ref)) {
-      craftPicked = null; // clicked the same cell again - cancel
-    } else {
-      client.send({ type: 'craftMove', from: craftPicked, to: ref });
-      craftPicked = null;
-    }
-    renderCraftMenu();
-  }
-
-  function renderCraftMenu(): void {
-    if (craftCellEls.length !== craftSide * craftSide) rebuildCraftCells(craftSide);
-    craftCellEls.forEach((el, i) => {
-      renderSlot(el, craftInputs[i] ?? createEmptySlot());
-      el.classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'grid', index: i }));
-    });
-    craftInvEls.forEach((el, i) => {
-      renderSlot(el, inventorySlots[i] ?? createEmptySlot());
-      el.classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index: i }));
-    });
-    renderSlot(craftOutputSlot, craftOutput);
-  }
-
-  function setCraftMenuOpen(open: boolean, table: { x: number; y: number; z: number } | null = null): void {
-    craftMenuOpen = open;
-    craftMenuEl.hidden = !open;
-    craftPicked = null;
-    if (open) {
-      client.send({ type: 'craftOpen', table });
-      unlockPointerForGui();
-    } else {
-      // Tell the server too: it hands whatever was staged in the cells back
-      // to the inventory, so closing the panel can't swallow items.
-      client.send({ type: 'craftClose' });
-      lockPointer(canvas);
-    }
-  }
 
   /**
    * Furnace GUI: right-click a placed furnace block to open it. Simplified
@@ -861,20 +1059,208 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   let seq = 0;
   let running = true;
   const lastServerPos = new THREE.Vector3(0, 2, 0);
+  /** World-space movement since the last server tick, for the local third-person body's walk animation - see onState below for why this is a position delta rather than the server's raw velocity. */
+  let localMoveDeltaX = 0;
+  let localMoveDeltaZ = 0;
+
+  /**
+   * Hitbox wireframes (R) - the exact meshes onMouseDown already raycasts
+   * against for attack targeting (player/mob hitboxes, see
+   * buildPlayerHitbox and makeMobAvatar), not a separate set of debug boxes:
+   * they're built invisible by default and this just flips `.visible` on
+   * every one currently in `remoteEntities`, plus seeds new ones with the
+   * current state so an entity that spawns while debug is already on
+   * doesn't start invisible.
+   */
+  let hitboxDebug = false;
+  function toggleHitboxDebug(): void {
+    hitboxDebug = !hitboxDebug;
+    for (const entity of remoteEntities.values()) {
+      (entity.hitbox.material as THREE.MeshBasicMaterial).visible = hitboxDebug;
+    }
+  }
+
+  /**
+   * Diagnostics panel (O) - singleplayer's own Diagnostics class
+   * (src/diagnostics.ts) is built around a singleplayer `World`/`player`
+   * this client doesn't have, so this is its own lean readout of whatever
+   * multiplayer-game.ts already tracks: no new measurements invented for it,
+   * just surfaced. `pingMs` starts null (no round trip completed yet) and is
+   * updated by onPong below.
+   */
+  const diagnosticsEl = document.createElement('div');
+  diagnosticsEl.id = 'mp-diagnostics';
+  diagnosticsEl.hidden = true;
+  document.body.appendChild(diagnosticsEl);
+  let diagnosticsOpen = false;
+  let pingMs: number | null = null;
+  let fps = 0;
+
+  function renderDiagnostics(): void {
+    if (!diagnosticsOpen) return;
+    const p = lastServerPos;
+    diagnosticsEl.textContent = [
+      `FPS: ${fps.toFixed(0)}`,
+      `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
+      `Yaw/Pitch: ${(yaw * 180 / Math.PI).toFixed(1)} / ${(pitch * 180 / Math.PI).toFixed(1)}`,
+      `Chunks loaded: ${chunks.size}`,
+      `Entities: ${remoteEntities.size}`,
+      `Camera mode: ${cameraMode === 0 ? 'first-person' : cameraMode === 1 ? 'third-person' : 'third-person-front'}`,
+      `Day time: ${clientDayTime.toFixed(0)}s`,
+      `Ping: ${pingMs === null ? '...' : `${pingMs.toFixed(0)}ms`}`,
+    ].join('\n');
+  }
+
+  // A ping every couple of seconds is plenty for a diagnostics readout - this
+  // isn't driving any gameplay decision, just a number on a debug panel.
+  const PING_INTERVAL_MS = 2000;
+  let lastPingSentAt = 0;
+  function updatePing(now: number): void {
+    if (now - lastPingSentAt < PING_INTERVAL_MS) return;
+    lastPingSentAt = now;
+    client.send({ type: 'ping', clientTimeMs: now });
+  }
+
+  /**
+   * Pause/options panel (Tab) - own element rather than singleplayer's
+   * #pause-menu for the same reason as chat/death/overlays: that one is
+   * PauseMenu's own DOM, and main.ts's instance lives for the whole page
+   * (guarded off for the duration of this session by
+   * setSingleplayerPauseMenuEnabled, same pattern as the chat "T" guard).
+   *
+   * Only sliders that actually DO something in this client are here -
+   * render distance is deliberately left out: raising it past
+   * SIMULATION_RADIUS_CHUNKS (game/active-region.ts, server-side) would show
+   * frozen mobs/fire sitting motionless at the edge of view, so it isn't a
+   * safe knob to hand the player without also plumbing a server-side cap
+   * negotiation that doesn't exist yet.
+   */
+  const optionsEl = document.createElement('div');
+  optionsEl.id = 'mp-options';
+  optionsEl.hidden = true;
+
+  function makeSlider(label: string, min: number, max: number, value: number, onInput: (v: number) => void): HTMLElement {
+    const row = document.createElement('label');
+    row.className = 'mp-options-row';
+    const text = document.createElement('span');
+    text.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = String(min);
+    input.max = String(max);
+    input.value = String(value);
+    const out = document.createElement('output');
+    out.textContent = String(value);
+    input.addEventListener('input', () => {
+      const v = Number(input.value);
+      out.textContent = String(v);
+      onInput(v);
+    });
+    row.append(text, input, out);
+    return row;
+  }
+
+  const sensitivityRow = makeSlider('Sensitivity', 1, 200, mpSettings.sensitivity, (v) => {
+    sensitivityScale = v / 100;
+    saveSettings({ sensitivity: v });
+  });
+  const fovRow = makeSlider('FOV', 30, 110, mpSettings.fov, (v) => {
+    camera.fov = v;
+    camera.updateProjectionMatrix();
+    saveSettings({ fov: v });
+  });
+  optionsEl.append(sensitivityRow, fovRow);
+
+  // Touch-only controls: meaningless (and disabled in singleplayer's own
+  // panel too) on a device with no on-screen buttons or touch-drag look.
+  if (isTouchDevice()) {
+    const opacityRow = makeSlider('Button opacity', 10, 100, mpSettings.buttonOpacity, (v) => {
+      touchControls?.setButtonOpacity(v);
+      saveSettings({ buttonOpacity: v });
+    });
+    optionsEl.append(opacityRow);
+  }
+
+  const leaveBtn = document.createElement('button');
+  leaveBtn.type = 'button';
+  leaveBtn.className = 'mc-button';
+  leaveBtn.innerHTML = '<span>Leave World</span>';
+  leaveBtn.addEventListener('click', () => disconnect('Disconnected'));
+  optionsEl.appendChild(leaveBtn);
+  document.body.appendChild(optionsEl);
+
+  let optionsOpen = false;
+  function toggleOptionsPanel(): void {
+    optionsOpen = !optionsOpen;
+    optionsEl.hidden = !optionsOpen;
+    if (optionsOpen) unlockPointerForGui(); else lockPointer(canvas);
+  }
+
+  /**
+   * Third-person camera + this player's own visible body (LCE F5 cycle: 0
+   * first person, 1 behind, 2 in front looking back). First person renders
+   * no local avatar at all - the camera IS the eye, same as singleplayer's
+   * own first-person mode hides its player model.
+   *
+   * The camera math (thirdPersonCameraPosition) is the exact function
+   * player.ts's PlayerController extracted its own boom into, so both modes
+   * feel identical - see third-person-camera.ts's doc comment for why that
+   * was pulled out rather than written twice.
+   */
+  let cameraMode: 0 | 1 | 2 = 0;
+  let localPlayerModel: PlayerModel | null = null;
+  let localSkinMaterials: PlayerSkinMaterials | null = null;
+
+  function buildLocalPlayerModel(materials: PlayerSkinMaterials): void {
+    if (localPlayerModel) {
+      scene.remove(localPlayerModel.group);
+      disposeGroupGeometries(localPlayerModel.group);
+      disposeSkinMaterials(localSkinMaterials!);
+    }
+    localPlayerModel = new PlayerModel(materials);
+    localPlayerModel.setVisible(cameraMode !== 0);
+    scene.add(localPlayerModel.group);
+    localSkinMaterials = materials;
+  }
+  void loadSkinImage(loadPlayerSkinDataUrl()).then((img) => buildLocalPlayerModel(createSkinMaterials(img)));
+
+  function cycleCameraMode(): void {
+    cameraMode = ((cameraMode + 1) % 3) as 0 | 1 | 2;
+    localPlayerModel?.setVisible(cameraMode !== 0);
+  }
+
+  /** Solid-block test for the third-person boom's collision, straight from this client's own streamed chunks - not the server, since this is purely a local camera concern. */
+  const isSolidAtLocal = (x: number, y: number, z: number) => isSolidBlock(getBlock(x, y, z));
 
   const DIGIT_CODES = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'];
   const keys = new Set<string>();
   const onKeyDown = (e: KeyboardEvent) => {
+    if (e.code === 'KeyT' && !chatOpen) { openChat(); return; } // opens even over another panel, same as singleplayer's own T
     keys.add(e.code);
     if (e.code === 'Escape') disconnect('Disconnected');
-    if (e.code === 'KeyC') { if (backpackOpen) setBackpackOpen(false); if (furnaceOpenState) setFurnaceOpen(false); setCraftMenuOpen(!craftMenuOpen); return; }
-    if (e.code === 'KeyE') {
-      if (craftMenuOpen) setCraftMenuOpen(false);
-      if (furnaceOpenState) { setFurnaceOpen(false); return; } // E closes the furnace instead of opening the backpack while it's up
+    if (e.code === 'KeyI') { cycleCameraMode(); return; } // same key singleplayer's player.ts cycles F5's 3 modes on
+    if (e.code === 'KeyO' && !e.repeat) { diagnosticsOpen = !diagnosticsOpen; diagnosticsEl.hidden = !diagnosticsOpen; return; } // same key singleplayer's Diagnostics.toggle() uses
+    if (e.code === 'KeyR' && !e.repeat) { toggleHitboxDebug(); return; } // same key singleplayer's dropDebug toggle uses
+    if (e.code === 'Tab') {
+      e.preventDefault();
+      // Don't stack it on top of another panel - closing is always allowed
+      // (getting back OUT of options can't be blocked by anything), opening
+      // is refused while backpack/table/furnace already have the pointer.
+      if (optionsOpen || !(tableOpen || backpackOpen || furnaceOpenState)) toggleOptionsPanel();
+      return;
+    }
+    if (e.code === 'KeyE' && !optionsOpen) {
+      // E closes the table instead of opening the backpack over it, same
+      // reasoning as the furnace branch right below - only one panel at a
+      // time. There's no C shortcut any more: the 2x2 lives inside the
+      // backpack now (setBackpackOpen opens it server-side too), so E alone
+      // covers "personal crafting", matching singleplayer's own E.
+      if (tableOpen) { setTableOpen(false); return; }
+      if (furnaceOpenState) { setFurnaceOpen(false); return; }
       setBackpackOpen(!backpackOpen);
       return;
     }
-    if (craftMenuOpen || backpackOpen || furnaceOpenState) return; // don't move/select slots while a menu has the pointer
+    if (tableOpen || backpackOpen || furnaceOpenState || optionsOpen) return; // don't move/select slots while a menu has the pointer
     const digitIndex = DIGIT_CODES.indexOf(e.code);
     if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
     if (e.code === 'KeyQ') {
@@ -888,8 +1274,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
 
   const onMouseMove = (e: MouseEvent) => {
     if (document.pointerLockElement !== canvas) return;
-    yaw -= e.movementX * MOUSE_SENSITIVITY;
-    pitch -= e.movementY * MOUSE_SENSITIVITY;
+    yaw -= e.movementX * MOUSE_SENSITIVITY_BASE * sensitivityScale;
+    pitch -= e.movementY * MOUSE_SENSITIVITY_BASE * sensitivityScale;
     pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
   };
   document.addEventListener('mousemove', onMouseMove);
@@ -930,7 +1316,117 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
   }
 
-  function performInteraction(ndc: THREE.Vector2, action: 'break' | 'place' | 'attack'): boolean {
+  /**
+   * Raycasts for the block under `ndc` (terrain meshes only, not entities -
+   * mining specifically targets a block, unlike performInteraction below
+   * which has to choose between a block and an entity for break/attack).
+   * Shared by performInteraction's own logic used to and by the mining state
+   * machine below, which needs to re-run this every frame while the button
+   * is held to know whether the player is still looking at the same block.
+   */
+  function raycastBlockTarget(ndc: THREE.Vector2): { x: number; y: number; z: number; id: BlockId; normal: THREE.Vector3 } | null {
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(chunkMeshes, false);
+    const hit = hits.find((h) => h.distance <= REACH);
+    if (!hit || !hit.face) return null;
+    const normal = hit.face.normal;
+    const b = hit.point.clone().addScaledVector(normal, -0.01).round();
+    return { x: b.x, y: b.y, z: b.z, id: getBlock(b.x, b.y, b.z), normal };
+  }
+
+  /**
+   * Real mining: how long a dig takes (and whether it drops anything) comes
+   * from breakTime() (src/block-hardness.ts, pure - same formula
+   * singleplayer's interaction.ts uses), driven every frame while the mine
+   * button is held rather than sending `breakBlock` the instant it's
+   * pressed. The server re-derives the same duration itself and rejects
+   * anything that arrives too early (world-do.ts's handleBreakBlock) - this
+   * client-side timer is purely what makes the wait feel real (the break
+   * overlay, the chip sound/particles), never something the server trusts.
+   */
+  type MiningState = { x: number; y: number; z: number; id: BlockId; elapsed: number; total: number };
+  let mining: MiningState | null = null;
+  let miningChipTimer = 0;
+  const MINING_CHIP_INTERVAL = 0.18; // matches interaction.ts's own CHIP_INTERVAL
+  let leftHeld = false; // desktop: mouse button 0 currently down
+  let touchMiningHeld = false; // touch: the hold-to-break gesture is active (onBreakStart/onBreakEnd below)
+  const breakOverlay = new BreakOverlay();
+  breakOverlay.attachToScene(scene);
+
+  function selectedItemId(): number | null {
+    return inventorySlots[selectedSlotIndex]?.id ?? null;
+  }
+
+  /** True while the block at `id` is even worth timing - unbreakable (Infinity) blocks like bedrock never start a dig, matching singleplayer's own canMine(). */
+  function canMineClient(id: BlockId): boolean {
+    return id !== BlockId.AIR && Number.isFinite(breakTime(id, selectedItemId()).time);
+  }
+
+  function cancelMining(): void {
+    mining = null;
+    breakOverlay.hide();
+  }
+
+  function startMining(target: { x: number; y: number; z: number; id: BlockId }): void {
+    const { time } = breakTime(target.id, selectedItemId());
+    client.send({ type: 'breakStart', x: target.x, y: target.y, z: target.z });
+    if (time <= 0) {
+      // Hardness-0 blocks (torches, fire, ...) break the instant the dig
+      // starts - same short-circuit singleplayer's startMining() takes,
+      // rather than showing an overlay for a duration of zero.
+      client.send({ type: 'breakBlock', x: target.x, y: target.y, z: target.z });
+      return;
+    }
+    mining = { x: target.x, y: target.y, z: target.z, id: target.id, elapsed: 0, total: time };
+    miningChipTimer = 0;
+  }
+
+  /** Called every frame from frame() below - see the module's per-frame update pass. */
+  function updateMining(delta: number): void {
+    if (!(leftHeld || touchMiningHeld)) {
+      if (mining) cancelMining();
+      return;
+    }
+    const ndc = document.pointerLockElement === canvas ? CENTER_NDC : touchAimNdc;
+    const target = ndc ? raycastBlockTarget(ndc) : null;
+
+    if (!mining) {
+      // Hold-to-continue: once a breakable block comes under the crosshair
+      // while the button is still held, start on it - matches singleplayer's
+      // own "start on the next block once it's targeted" behaviour.
+      if (target && canMineClient(target.id)) startMining(target);
+      return;
+    }
+
+    const sameBlock = !!target && target.x === mining.x && target.y === mining.y && target.z === mining.z && target.id === mining.id;
+    if (!sameBlock) {
+      // Looking elsewhere (or the block changed under them): retarget if
+      // still holding and the new one is breakable, else give up.
+      if (target && canMineClient(target.id)) startMining(target);
+      else cancelMining();
+      return;
+    }
+
+    mining.elapsed += delta;
+    breakOverlay.setProgress(new THREE.Vector3(mining.x, mining.y, mining.z), mining.elapsed / mining.total);
+
+    miningChipTimer += delta;
+    if (miningChipTimer >= MINING_CHIP_INTERVAL) {
+      miningChipTimer -= MINING_CHIP_INTERVAL;
+      const light = lightEngine.getRawBrightness(mining.x, mining.y, mining.z) / 15;
+      particles?.mine(new THREE.Vector3(mining.x, mining.y, mining.z), target!.normal, mining.id, light);
+      const mineSound = getBlockSound(mining.id, 'mine') ?? getBlockSound(mining.id, 'hit');
+      if (mineSound) soundManager.playSound(mineSound, 0.5);
+    }
+
+    if (mining.elapsed >= mining.total) {
+      client.send({ type: 'breakBlock', x: mining.x, y: mining.y, z: mining.z });
+      mining = null;
+      breakOverlay.hide();
+    }
+  }
+
+  function performInteraction(ndc: THREE.Vector2, action: 'place' | 'attack'): boolean {
     // Eating doesn't need anything in reach (unlike breaking/placing/
     // attacking) - checked first, before the raycast even runs, so holding
     // a food item and right-clicking always eats regardless of what's (or
@@ -969,35 +1465,30 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
     if (entityId !== undefined || !hit.face) return false;
     const normal = hit.face.normal;
-    if (action === 'break') {
-      const b = hit.point.clone().addScaledVector(normal, -0.01).round();
-      client.send({ type: 'breakBlock', x: b.x, y: b.y, z: b.z });
-    } else {
-      // Right-clicking an existing FURNACE block opens its GUI instead of
-      // placing a new block against it - same "existing block under the
-      // crosshair" coordinate the break branch uses, not the neighbouring
-      // spot a new block would land in.
-      const existing = hit.point.clone().addScaledVector(normal, -0.01).round();
-      if (getBlock(existing.x, existing.y, existing.z) === BlockId.FURNACE) {
-        setFurnaceOpen(true, { x: existing.x, y: existing.y, z: existing.z });
-        return true;
-      }
-      // A crafting table opens the 3x3 rather than getting a block placed
-      // against it, same as singleplayer's own right-click on one.
-      if (getBlock(existing.x, existing.y, existing.z) === BlockId.CRAFTING_TABLE) {
-        setCraftMenuOpen(true, { x: existing.x, y: existing.y, z: existing.z });
-        return true;
-      }
-      // The server ignores this blockId and places whatever is actually in
-      // the player's selected inventory slot (world-do.ts's handlePlaceBlock
-      // doc comment) - sent here only because the protocol message still
-      // needs some number in that field. No-op silently if the slot's empty
-      // or holds a non-block item.
-      const heldId = inventorySlots[selectedSlotIndex]?.id;
-      if (heldId === null || heldId === undefined) return false;
-      const p = hit.point.clone().addScaledVector(normal, 0.5).round();
-      client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: heldId, face: 0 });
+    // Right-clicking an existing FURNACE block opens its GUI instead of
+    // placing a new block against it - same "existing block under the
+    // crosshair" coordinate raycastBlockTarget uses for mining, not the
+    // neighbouring spot a new block would land in.
+    const existing = hit.point.clone().addScaledVector(normal, -0.01).round();
+    if (getBlock(existing.x, existing.y, existing.z) === BlockId.FURNACE) {
+      setFurnaceOpen(true, { x: existing.x, y: existing.y, z: existing.z });
+      return true;
     }
+    // A crafting table opens the 3x3 rather than getting a block placed
+    // against it, same as singleplayer's own right-click on one.
+    if (getBlock(existing.x, existing.y, existing.z) === BlockId.CRAFTING_TABLE) {
+      setTableOpen(true, { x: existing.x, y: existing.y, z: existing.z });
+      return true;
+    }
+    // The server ignores this blockId and places whatever is actually in
+    // the player's selected inventory slot (world-do.ts's handlePlaceBlock
+    // doc comment) - sent here only because the protocol message still
+    // needs some number in that field. No-op silently if the slot's empty
+    // or holds a non-block item.
+    const heldId = inventorySlots[selectedSlotIndex]?.id;
+    if (heldId === null || heldId === undefined) return false;
+    const p = hit.point.clone().addScaledVector(normal, 0.5).round();
+    client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: heldId, face: 0 });
     return true;
   }
 
@@ -1031,15 +1522,28 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const onMouseDown = (e: MouseEvent) => {
     if (document.pointerLockElement !== canvas) { lockPointer(canvas); return; }
     if (e.button === 0) {
-      // A left-click first tries an attack (mob under the crosshair); if that
-      // misses, it falls back to breaking whatever block is under it instead.
-      if (!performInteraction(CENTER_NDC, 'attack')) performInteraction(CENTER_NDC, 'break');
+      // A left-click first tries an attack (mob under the crosshair) as a
+      // one-shot action, same as singleplayer's own onMouseDown; only if
+      // that misses does holding the button start (and continue) mining,
+      // driven every frame by updateMining() rather than an instant break.
+      if (!performInteraction(CENTER_NDC, 'attack')) leftHeld = true;
     } else if (e.button === 2) {
       if (holdingBow() && hasArrows()) bowDrawStart = performance.now();
       else if (!holdingBow()) performInteraction(CENTER_NDC, 'place');
     }
   };
-  const onMouseUp = (e: MouseEvent) => { if (e.button === 2) releaseBow(); };
+  const onMouseUp = (e: MouseEvent) => {
+    if (e.button === 0) { leftHeld = false; cancelMining(); }
+    if (e.button === 2) releaseBow();
+  };
+  // Losing pointer lock any other way (Escape, alt-tab, the browser's own
+  // lock-loss on a long hold) doesn't fire a mouseup - without this, a mine
+  // in progress when that happens would keep "holding" forever, mining
+  // straight through walking into a menu.
+  const onPointerLockChange = () => {
+    if (document.pointerLockElement !== canvas) { leftHeld = false; cancelMining(); }
+  };
+  document.addEventListener('pointerlockchange', onPointerLockChange);
   const onContextMenu = (e: MouseEvent) => e.preventDefault();
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mouseup', onMouseUp);
@@ -1052,13 +1556,21 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         onSneak: (on) => { touchSneak = on; },
         onSprint: (on) => { touchSprint = on; },
         onLook: (dx, dy) => {
-          yaw -= dx * MOUSE_SENSITIVITY;
-          pitch -= dy * MOUSE_SENSITIVITY;
+          // Singleplayer's own touchSensitivity setting isn't actually wired
+          // to anything there either (its slider persists a value nothing
+          // reads) - reusing the desktop sensitivity here isn't a regression
+          // against a working feature, it's the same gap singleplayer has,
+          // just not silently ignoring the shared slider like that one does.
+          yaw -= dx * MOUSE_SENSITIVITY_BASE * sensitivityScale;
+          pitch -= dy * MOUSE_SENSITIVITY_BASE * sensitivityScale;
           pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
         },
         onTapPlace: () => { if (touchAimNdc) performInteraction(touchAimNdc, 'place'); },
-        onBreakStart: () => { if (touchAimNdc) performInteraction(touchAimNdc, 'break'); },
-        onBreakEnd: () => {}, // breaking is instant server-side (no mining time yet) - nothing to stop
+        // Same hold-driven mining as the desktop mouse button - TouchControls
+        // already recognizes "finger held still" as the gesture (HOLD_MS),
+        // this just flags it for updateMining() to act on every frame.
+        onBreakStart: () => { touchMiningHeld = true; },
+        onBreakEnd: () => { touchMiningHeld = false; cancelMining(); },
         onAttackTry: () => (touchAimNdc ? performInteraction(touchAimNdc, 'attack') : false),
         onAimMove: (clientX, clientY) => {
           const rect = canvas.getBoundingClientRect();
@@ -1067,10 +1579,22 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
           touchAimNdc = touchAimNdc ? touchAimNdc.set(ndcX, ndcY) : new THREE.Vector2(ndcX, ndcY);
         },
         onAimEnd: () => { touchAimNdc = null; },
-        onInventory: () => {}, // no inventory in multiplayer yet - see the module doc comment
-        onThirdPerson: () => {}, // no third-person camera in multiplayer yet
-        onChat: () => {}, // no chat UI in multiplayer yet (chat messages only go to devtools console)
-        onPause: () => disconnect('Disconnected'),
+        // Same E-key logic as onKeyDown below: don't open the backpack over
+        // the furnace GUI, and close the table first if it's up.
+        onInventory: () => {
+          if (furnaceOpenState) return;
+          if (tableOpen) setTableOpen(false);
+          setBackpackOpen(!backpackOpen);
+        },
+        onThirdPerson: () => cycleCameraMode(),
+        // Toggle: tap again while open to send-or-cancel back to the world
+        // instead of leaving the keyboard up with no obvious way down.
+        onChat: () => { if (chatOpen) closeChat(true); else openChat(); },
+        // Opens the options panel (with its own Leave World button inside)
+        // rather than disconnecting outright - matches singleplayer's own
+        // touch pause button (pauseMenu.toggle()), which was never a
+        // one-tap quit either.
+        onPause: () => { if (!(tableOpen || backpackOpen || furnaceOpenState)) toggleOptionsPanel(); },
       }, document.body) // not #game-shell (default) - that's hidden entirely above, which would hide these controls too
     : null;
 
@@ -1117,7 +1641,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   function buildPlayerHitbox(id: number): THREE.Mesh {
     const hitbox = new THREE.Mesh(
       new THREE.BoxGeometry(0.6, 1.8, 0.6),
-      new THREE.MeshBasicMaterial({ visible: false }),
+      // Invisible by default (this box only exists as a raycast target) -
+      // wireframe+color are set up front so toggling `.visible` on for the R
+      // debug key (see hitboxDebug below) is the only thing that has to
+      // happen later, not a second material swap.
+      new THREE.MeshBasicMaterial({ visible: hitboxDebug, wireframe: true, color: 0xff2222 }),
     );
     hitbox.position.y = -0.72;
     hitbox.userData.entityId = id;
@@ -1185,7 +1713,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // onMouseDown needs one object to hit, not a multi-part model group.
     const hitbox = new THREE.Mesh(
       new THREE.BoxGeometry(stats.radius * 2, stats.height, stats.radius * 2),
-      new THREE.MeshBasicMaterial({ visible: false }),
+      new THREE.MeshBasicMaterial({ visible: hitboxDebug, wireframe: true, color: 0xff2222 }),
     );
     hitbox.position.y = stats.height / 2; // feet-origin group -> box centred on the body
     hitbox.userData.entityId = id; // read by onMouseDown to tell an attack target apart from terrain
@@ -1281,6 +1809,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   function disconnect(reason: string): void {
     if (!running) return;
     running = false;
+    setSingleplayerChatEnabled(true);
+    setSingleplayerPauseMenuEnabled(true);
+    leftHeld = false;
+    touchMiningHeld = false;
+    cancelMining();
     client.disconnect();
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('keyup', onKeyUp);
@@ -1288,6 +1821,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     canvas.removeEventListener('mousedown', onMouseDown);
     canvas.removeEventListener('mouseup', onMouseUp);
     canvas.removeEventListener('contextmenu', onContextMenu);
+    document.removeEventListener('pointerlockchange', onPointerLockChange);
     window.removeEventListener('resize', onResize);
     touchControls?.destroy();
     document.removeEventListener('pointerdown', onFirstGesture);
@@ -1299,17 +1833,24 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     canvas.hidden = true;
     crosshair.hidden = true;
     hint.hidden = true;
-    healthEl.hidden = true;
-    airEl.hidden = true;
     gameShell.style.display = previousGameShellDisplay;
     labelLayer.remove();
     hotbarEl.remove();
+    hudEl.remove();
     deathEl.remove();
     fireOverlayEl.remove();
     underwaterOverlayEl.remove();
-    craftMenuEl.remove();
     backpackEl.remove();
+    tableEl.remove();
     furnaceEl.remove();
+    chatEl.remove();
+    diagnosticsEl.remove();
+    optionsEl.remove();
+    if (localPlayerModel) {
+      scene.remove(localPlayerModel.group);
+      disposeGroupGeometries(localPlayerModel.group);
+      if (localSkinMaterials) disposeSkinMaterials(localSkinMaterials);
+    }
     for (const [, p] of remoteEntities) removeEntityAvatar(p);
     for (const entityId of [...groundItems.keys()]) removeGroundItem(entityId);
     for (const mesh of arrowMeshes.values()) scene.remove(mesh); // shared geometry/material, nothing to dispose per arrow
@@ -1349,14 +1890,21 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     },
     onRejected: (reason) => disconnect(`Rejected: ${reason}`),
     onState: (msg) => {
+      // Same trick updateRemoteAnimation uses for every OTHER player, applied
+      // to this one's own third-person body: a plain world-space delta since
+      // the last server tick, computed before lastServerPos is overwritten
+      // below - not a raw velocity, so it already accounts for anything that
+      // changed the position besides walking (a knockback, a respawn).
+      localMoveDeltaX = msg.self.pos.x - lastServerPos.x;
+      localMoveDeltaZ = msg.self.pos.z - lastServerPos.z;
       lastServerPos.set(msg.self.pos.x, msg.self.pos.y, msg.self.pos.z);
-      healthEl.textContent = '❤ '.repeat(Math.ceil(msg.self.health / 2)).trim() || '💀';
+      hud.setHealth(msg.self.health);
       if (msg.self.health < lastSelfHealth) soundManager.playRandom('player/Player_hurt', 3, 0.7);
       lastSelfHealth = msg.self.health;
-      // Bubbles only while actually drowning - a full bar means "on dry land",
-      // where singleplayer's HUD hides the row rather than showing 10 of 10.
-      airEl.hidden = msg.self.air >= 10;
-      if (!airEl.hidden) airEl.textContent = '🫧'.repeat(msg.self.air);
+      // `full` (bar hidden) once air reads 10 - "on dry land", same threshold
+      // the emoji version used and the same one singleplayer's own Hud caller
+      // (main.ts) applies for hiding the row entirely.
+      hud.setAir(msg.self.air, msg.self.air >= 10);
       fireOverlayEl.classList.toggle('active', msg.self.onFire);
       const seen = new Set<number>();
       for (const e of msg.entities as EntitySnapshot[]) {
@@ -1455,7 +2003,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       selectedSlotIndex = selectedIndex;
       renderHotbar();
       if (backpackOpen) renderBackpack();
-      if (craftMenuOpen) renderCraftMenu();
+      if (tableOpen) renderTable();
     },
     // The server still offers the older "craft straight from a recipe index"
     // shortcut, but this client drives the real grid instead, so there's
@@ -1465,7 +2013,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       craftSide = side;
       craftInputs = inputs;
       craftOutput = output;
-      if (craftMenuOpen) renderCraftMenu();
+      if (backpackOpen) renderBackpack();
+      if (tableOpen) renderTable();
     },
     onCraftGridClosed: () => {
       craftInputs = [];
@@ -1474,7 +2023,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onFurnaceState: (x, y, z, state) => {
       if (furnacePos && furnacePos.x === x && furnacePos.y === y && furnacePos.z === z) renderFurnace(state);
     },
-    onChat: (from, text) => console.log(`[chat] ${from}: ${text}`),
+    onChat: (from, text) => addChatLine(`<${from}> ${text}`),
+    onPong: (clientTimeMs) => { pingMs = performance.now() - clientTimeMs; },
     onClose: (reason) => disconnect(reason),
   }, loadPlayerSkinDataUrl());
 
@@ -1483,6 +2033,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (now - lastSend < SEND_INTERVAL_MS) return;
     lastSend = now;
     if (isDead) return; // the server ignores a dead player's input anyway; not sending it keeps the corpse from "walking" the moment they respawn
+    // Typing swallows every keydown for the game (see chatInputEl's own
+    // listener), but not a keyUP for a movement key that was ALREADY held
+    // when chat opened - that key would otherwise stay stuck in `keys` and
+    // keep moving the player for as long as they're chatting.
+    if (chatOpen || optionsOpen) return;
     let moveX = touchMoveX, moveZ = touchMoveZ;
     if (keys.has('KeyW')) moveZ -= 1;
     if (keys.has('KeyS')) moveZ += 1;
@@ -1519,26 +2074,45 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   function frame(now: number): void {
     if (!running) return;
     requestAnimationFrame(frame);
-    // Position is always the server's last confirmed value (no local
-    // prediction yet - see the module doc comment); look direction is local
-    // for a responsive camera despite network latency on movement itself.
-    camera.position.copy(lastServerPos);
-    camera.rotation.set(pitch, yaw, 0, 'YXZ');
-    sendInput(now);
-    updateStreaming();
-    updateLabels();
     // Same 0.1s spiral-of-death clamp main.ts's own animate() uses - a
     // backgrounded/minimized tab's first frame back can report a
     // multi-second gap, which would otherwise fling a remote player's
     // walk-cycle/orientation easing wildly off in one step.
     const delta = lastFrameTime === 0 ? 0 : Math.min((now - lastFrameTime) / 1000, 0.1);
     lastFrameTime = now;
+    // Position is always the server's last confirmed value (no local
+    // prediction yet - see the module doc comment); look direction is local
+    // for a responsive camera despite network latency on movement itself.
+    // First person: the camera IS the eye. Third person: pull the boom back
+    // (thirdPersonCameraPosition, shared with singleplayer's own) and look at
+    // the eye instead of sitting on it, same as player.ts's updateCamera().
+    if (cameraMode === 0) {
+      camera.position.copy(lastServerPos);
+      camera.rotation.set(pitch, yaw, 0, 'YXZ');
+    } else {
+      camera.position.copy(thirdPersonCameraPosition(lastServerPos, yaw, pitch, cameraMode === 2, isSolidAtLocal));
+      camera.lookAt(lastServerPos);
+    }
+    if (localPlayerModel) {
+      localPlayerModel.group.position.copy(lastServerPos);
+      const moving = localMoveDeltaX * localMoveDeltaX + localMoveDeltaZ * localMoveDeltaZ > 0.0001;
+      if (moving) localPlayerModel.startWalking(); else localPlayerModel.stopWalking();
+      localPlayerModel.setOrientation(yaw, pitch, localMoveDeltaX, localMoveDeltaZ, delta);
+      localPlayerModel.updateWalkingAnimation(delta);
+    }
+    sendInput(now);
+    updateMining(delta);
+    updateStreaming();
+    updateLabels();
     for (const entity of remoteEntities.values()) updateRemoteAnimation(entity, delta);
     animateGroundItems(delta);
     particles?.update(delta, camera);
     smokeParticles.update(delta);
     updateChewing(delta);
     ambient.update(camera.position, delta);
+    if (delta > 0) fps = 1 / delta;
+    renderDiagnostics();
+    updatePing(now);
     clientDayTime += delta;
     applyDayNightState(clientDayTime, delta);
     // After the day/night pass, so surfacing restores the sky for the CURRENT

@@ -362,12 +362,17 @@ todas.
   booleano de estado del jugador", se implementan igual una vez que el
   booleano exista en el protocolo.
 
-## Fase 9 — Comandos de chat: descartado por ahora
-Decisión: **nadie puede usar comandos en multiplayer** hasta que el resto del
-modo esté 100% funcional — se revisa recién en ese punto, no antes. No se
-implementa nada de `chat-commands.ts` server-side en este plan. Queda la fase
-numerada acá solo para no romper la numeración de las que siguen y para que
-quede registrado que fue una decisión explícita, no un olvido.
+## Fase 9 — Comandos de chat: descartado por ahora (revertido)
+Decisión original: **nadie puede usar comandos en multiplayer** hasta que el
+resto del modo esté 100% funcional — se revisaba recién en ese punto, no
+antes. No se implementaba nada de `chat-commands.ts` server-side en este plan.
+
+**Revertido en `PLAN-MULTIPLAYER-BUGFIXES.md`, Fase 6**: con las 13 fases de
+este plan más las bugfixes ya completas, el modo se considera funcional, así
+que se implementó `/summon` y `/give`, abiertos a cualquier jugador conectado
+(sin sistema de permisos/creativo, que no existe en el proyecto), parseados y
+resueltos por el servidor — nunca por el cliente. Ver ese documento para el
+detalle.
 
 ## Fase 10 — Grid de crafteo real 2x2/3x3  ✅ HECHO
 Hoy multiplayer usa una lista simplificada de "lo craftable ahora". Portar el
@@ -535,8 +540,8 @@ presupuesto, el lag lo sufren todos, no solo quien lo causó.
 
 ## Decisiones ya tomadas (para no reabrir la discusión más adelante)
 - **PvP**: habilitado, con spawn protection de 3x3 chunks (Fase 7).
-- **Comandos de chat**: nadie los puede usar por ahora; se reevalúa cuando el
-  multiplayer esté 100% funcional (Fase 9).
+- **Comandos de chat**: implementados y abiertos a cualquier jugador (`/summon`,
+  `/give`) — ver Fase 9 arriba y `PLAN-MULTIPLAYER-BUGFIXES.md`, Fase 6.
 - **Agua/fuego**: simulación completa server-side (no visual-only), acotada a
   un render distance fijo de 4 chunks por jugador vía la región activa de
   Fase 6, para controlar el costo de CPU del Durable Object.

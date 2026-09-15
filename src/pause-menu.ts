@@ -30,6 +30,8 @@ export class PauseMenu {
   private viewBobEnabled = true;
   private underwater = false;
   private paused = false;
+  /** False while a multiplayer session owns "Tab" (see setEnabled) - this instance lives for the whole page and its document-level listener would otherwise steal every Tab press from multiplayer-game.ts's own pause/options panel. */
+  private enabled = true;
   mouseSensitivity = 100;
   /** Look sensitivity for touch-drag (Android only; sliders are disabled on desktop). */
   touchSensitivity = 100;
@@ -155,6 +157,12 @@ export class PauseMenu {
     this.updateToggle(this.viewBobToggle, this.viewBobEnabled);
   }
 
+  /** Multiplayer (multiplayer-game.ts) toggles this off for the duration of its own session and back on when it disconnects, so its own options panel gets "Tab" instead of this always-on singleplayer instance. Closes this menu first if it happened to be open. */
+  setEnabled(on: boolean): void {
+    this.enabled = on;
+    if (!on && this.paused) this.close();
+  }
+
   /** Sync the in-game options UI to the persisted settings (called from main.ts). */
   setViewBob(enabled: boolean) {
     this.viewBobEnabled = enabled;
@@ -223,6 +231,7 @@ export class PauseMenu {
   }
 
   private onKeyDown = (event: KeyboardEvent) => {
+    if (!this.enabled) return;
     if (event.code !== 'Tab' || event.repeat) return;
     event.preventDefault();
     if (this.paused) this.close();

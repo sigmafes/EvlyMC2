@@ -1301,33 +1301,53 @@ body.touch #crosshair {
   pointer-events: none;
 }
 #mp-hint[hidden] { display: none; }
-#mp-health {
+/* Real HUD (hearts/bubbles/XP), same textures and layout math as
+   singleplayer's own #hud/#hud-hearts/#hud-bubbles/#hud-xp (see hud.ts's Hud
+   class, which now takes its container ids as a param instead of being
+   hardcoded to singleplayer's). #mp-hotbar sits at bottom:18px, same as
+   singleplayer's own hotbar, so the same bottom:72px lines this up flush
+   above it. .hud-heart/.hud-bubble are the shared, class-scoped rules
+   already defined above for singleplayer - only the id-scoped containers
+   need an mp- mirror here. */
+#mp-hud {
   position: fixed;
-  bottom: 14px;
   left: 50%;
+  bottom: 72px;
   transform: translateX(-50%);
   z-index: 901;
-  color: #ff5555;
-  font-size: 20px;
-  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  image-rendering: pixelated;
   pointer-events: none;
+  filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, .55));
 }
-#mp-health[hidden] { display: none; }
-
-/* Breath bubbles, only while submerged (the server sends `air` as 0..10 - see
-   protocol.ts). Sits clear above the hotbar rather than beside the hearts,
-   which share the very bottom strip with it. */
-#mp-air {
-  position: fixed;
-  bottom: 70px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 901;
-  font-size: 18px;
-  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
-  pointer-events: none;
+#mp-hud[hidden] { display: none; }
+#mp-hud-bubbles {
+  display: flex;
+  gap: 2px;
 }
-#mp-air[hidden] { display: none; }
+#mp-hud-bubbles[hidden] { display: none; }
+#mp-hud-hearts {
+  display: flex;
+  gap: 2px;
+}
+#mp-hud-xp {
+  position: relative;
+  width: 468px;
+  height: 9px;
+  background: url('../gui/xp_empty.png') center / 100% 100% no-repeat;
+  overflow: hidden;
+}
+#mp-hud-xp-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0%;
+  background: url('../gui/xp.png') left center / 468px 100% no-repeat;
+}
 
 /* Underwater tint. Separate element from singleplayer's #underwater-overlay -
    see multiplayer-game.ts's underwaterOverlayEl comment. */
@@ -1363,6 +1383,55 @@ body.touch #crosshair {
 }
 #mp-fire-overlay.active { opacity: 0.8; }
 
+/* Networked chat. Same look as singleplayer's own #chat, own element for the
+   same reason as the overlays above (see multiplayer-game.ts's chatEl doc
+   comment). The input is a real <input>, not a styled span like singleplayer's
+   - it needs no manual key-by-key text buffer this way, and focusing it is
+   what raises a phone's soft keyboard. */
+#mp-chat {
+  position: fixed;
+  left: 12px;
+  bottom: 64px;
+  width: min(52ch, 60vw);
+  z-index: 902;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: 'Tricraft', monospace;
+  font-size: 15px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+#mp-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow: hidden;
+}
+.mp-chat-line {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 6px;
+  color: #fff;
+  background: rgba(0, 0, 0, .5);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, .6);
+  word-wrap: break-word;
+}
+#mp-chat-input {
+  pointer-events: auto;
+  width: 100%;
+  padding: 3px 6px;
+  color: #fff;
+  background: rgba(0, 0, 0, .62);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
+  border: none;
+  font: inherit;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, .6);
+}
+#mp-chat-input[hidden] { display: none; }
+#mp-chat-input:focus { outline: none; }
+
 /* Death screen. Sits above every other multiplayer HUD layer (all z-index
    901) and, unlike them, DOES take pointer events - the respawn button is the
    only way out, since the server holds the player dead until it's pressed. */
@@ -1382,6 +1451,49 @@ body.touch #crosshair {
 #mp-death-screen[hidden] { display: none; }
 #mp-death-screen h1 { margin: 0; font-size: 42px; }
 #mp-death-screen p { margin: 0; font-size: 16px; min-height: 1em; }
+
+/* Diagnostics panel (O) - a plain monospace text block, no texture, same
+   spirit as singleplayer's own #diagnostics-panel debug overlay. */
+#mp-diagnostics {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 902;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, .6);
+  color: #fff;
+  font-family: monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre;
+  pointer-events: none;
+}
+#mp-diagnostics[hidden] { display: none; }
+
+/* Options panel (Tab) - own element, see multiplayer-game.ts's optionsEl
+   doc comment for why this isn't singleplayer's #pause-menu. */
+#mp-options {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+}
+#mp-options[hidden] { display: none; }
+.mp-options-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(360px, 80vw);
+}
+.mp-options-row span { flex: 0 0 120px; }
+.mp-options-row input[type="range"] { flex: 1; }
+.mp-options-row output { flex: 0 0 40px; text-align: right; }
 
 /* Touch aims freeform from wherever the finger is, same reasoning as
    singleplayer's own #crosshair rule above - a fixed centre crosshair would
@@ -1885,7 +1997,7 @@ body.touch #touch-gameplay[hidden] { display: none; }
 
 /* Multiplayer mounts TouchControls straight into <body> (see
    multiplayer-game.ts) instead of #game-shell, and its own scene sits at
-   z-index 900+ (#mp-canvas/#mp-crosshair/#mp-hint/#mp-health) - well above
+   z-index 900+ (#mp-canvas/#mp-crosshair/#mp-hint/#mp-hud) - well above
    these controls' singleplayer-tuned z-index of 1/6. Without this override
    #mp-canvas would sit on top and swallow every touch before it reached
    #touch-look/#touch-ui underneath. */
@@ -1908,79 +2020,121 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
    disabled <button> would otherwise render dimmed/desaturated by default. */
 #mp-hotbar .inventory-slot:disabled { opacity: 1; filter: none; }
 
-/* Crafting menu (C) - a simple "what can I make right now" list, not the
-   real drag-and-drop grid (see multiplayer-game.ts's craftMenuEl doc
-   comment). Reuses .inventory-slot for each recipe button. */
-#mp-craft-menu {
-  position: fixed;
-  inset: 0;
-  z-index: 950;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-}
-#mp-craft-menu[hidden] { display: none; }
-/* Real crafting grid: the cells + result on top, the player's inventory
-   underneath, so a stack can be clicked from one into the other. Column count
-   on #mp-craft-cells is set from JS since it's 2 or 3 depending on whether a
-   crafting table is open. */
-#mp-craft-menu {
-  flex-direction: column;
-  gap: 12px;
-}
-#mp-craft-top {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px;
-  background: rgba(20, 20, 20, 0.85);
-  border: 2px solid #000;
-}
-#mp-craft-cells {
-  display: grid;
-  gap: 4px;
-}
-#mp-craft-inventory {
-  display: grid;
-  grid-template-columns: repeat(9, auto);
-  gap: 4px;
-  padding: 16px;
-  background: rgba(20, 20, 20, 0.85);
-  border: 2px solid #000;
-}
-/* The slot currently "picked up" by the first of the two clicks. */
-#mp-craft-menu .inventory-slot.picked { outline: 2px solid #ffd700; }
-
-/* Backpack (E) - hotbar row mirrored on top, then the 27 extra slots wrap
-   onto new lines below it (.backpack-row-start forces the break). */
-#mp-backpack {
-  position: fixed;
-  inset: 0;
-  z-index: 950;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-}
-#mp-backpack[hidden] { display: none; }
-#mp-backpack-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-width: 500px;
-  padding: 16px;
-  background: rgba(20, 20, 20, 0.85);
-  border: 2px solid #000;
-}
-#mp-backpack-grid .backpack-row-start { flex-basis: 100%; margin-top: 10px; }
-#mp-backpack-grid .inventory-slot.picked::after {
+/* Real inventory/crafting GUI, same textures and pixel layout singleplayer's
+   #backpack/#backpack-panel and #crafting-table/#crafting-table-panel use
+   (see index.html/style.css's originals) - own mp- ids because those belong
+   to main.ts's Inventory/CraftingTableUI classes and their own DOM, not
+   because the look should differ. The 2x2 lives INSIDE the backpack panel
+   (opening the backpack opens a side-2 crafting grid server-side, see
+   multiplayer-game.ts's setBackpackOpen) instead of a separate menu - the
+   3x3 is the only thing that still gets its own overlay, exactly like
+   singleplayer only grants it via an actual table.
+   The slot currently "picked up" by the first of the two clicks reuses
+   .inventory-slot.selected's own hotbar_high.png ring (::after) rather than
+   a plain outline, so it reads as "highlighted" using art already loaded for
+   the hotbar instead of introducing a second highlight style. */
+.inventory-slot.picked::after {
   content: '';
   position: absolute;
   inset: -3px;
-  border: 3px solid #ffffff;
+  background: url('../gui/hotbar_high.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
   pointer-events: none;
 }
+
+#mp-backpack,
+#mp-crafting-table {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, .55);
+  --inv-scale: 1.18;
+}
+#mp-backpack[hidden],
+#mp-crafting-table[hidden] { display: none; }
+
+#mp-backpack-panel,
+#mp-crafting-table-panel {
+  position: relative;
+  width: 352px;
+  height: 332px;
+  image-rendering: pixelated;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: 512px 512px;
+  transform: scale(var(--inv-scale));
+  transform-origin: center;
+  filter: drop-shadow(4px 4px 0 rgba(0, 0, 0, .5));
+}
+#mp-backpack-panel { background-image: url('../gui/inventory.png'); }
+#mp-crafting-table-panel { background-image: url('../gui/Crafting_table_gui.png'); }
+
+#mp-backpack-panel .inventory-slot,
+#mp-crafting-table-panel .inventory-slot {
+  width: 32px;
+  height: 32px;
+  background: none;
+}
+#mp-backpack-panel .inventory-block,
+#mp-crafting-table-panel .inventory-block {
+  top: 1px;
+  left: 1px;
+  width: 30px;
+  height: 30px;
+}
+
+/* Backpack: 2x2 crafting + result, the 27-slot grid, and the mirrored hotbar
+   row - same coordinates as singleplayer's #backpack-craft/.craft-result/
+   #backpack-grid/#backpack-hotbar (inventory.png's actual well positions). */
+#mp-backpack-craft {
+  position: absolute;
+  left: 196px;
+  top: 36px;
+  display: grid;
+  grid-template-columns: repeat(2, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#mp-backpack-panel .craft-result { position: absolute; left: 308px; top: 56px; }
+#mp-backpack-grid,
+#mp-backpack-hotbar {
+  position: absolute;
+  left: 16px;
+  display: grid;
+  grid-template-columns: repeat(9, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#mp-backpack-grid { top: 168px; }
+#mp-backpack-hotbar { top: 284px; }
+
+/* Crafting table: 3x3 + result, same 27-slot grid + hotbar as the backpack -
+   coordinates from singleplayer's #ct-craft/.ct-result/#ct-backpack/#ct-hotbar
+   (Crafting_table_gui.png's well positions). */
+#mp-ct-craft {
+  position: absolute;
+  left: 58px;
+  top: 34px;
+  display: grid;
+  grid-template-columns: repeat(3, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#mp-crafting-table-panel .ct-result { position: absolute; left: 242px; top: 67px; }
+#mp-ct-backpack,
+#mp-ct-hotbar {
+  position: absolute;
+  left: 16px;
+  display: grid;
+  grid-template-columns: repeat(9, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#mp-ct-backpack { top: 168px; }
+#mp-ct-hotbar { top: 284px; }
 
 /* Furnace GUI (right-click a placed furnace) - input/output/fuel slots plus
    the cook/fuel-burn gauges, and two "insert selected hotbar slot" buttons

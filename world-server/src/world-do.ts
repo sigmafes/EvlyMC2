@@ -5,15 +5,17 @@ import type {
   ClientMessage, ServerMessage, EntitySnapshot, Vec3, CraftSlotRef,
 } from '../../src/net/protocol';
 import { PROTOCOL_VERSION, isClientMessageType } from '../../src/net/protocol';
-import { BlockId } from '../../src/block';
+import { BlockId, blockLightProperties } from '../../src/block';
 import { ServerTerrain } from './terrain';
 import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
-import type { MobKind } from './game/mob-manager';
-import { DAY_LENGTH, computeDayNightState, resolveCycleTime } from './game/day-night-math';
+import { DAY_LENGTH, NIGHT_SKY_DARKEN, computeDayNightState, resolveCycleTime } from './game/day-night-math';
 import { createEmptyInventory, createEmptySlot, describeSlot, addToInventory, removeFromSlot, removeItemsAnywhere, countInInventory, moveOrMergeSlot, moveOrMergeBetween, TOTAL_SLOTS } from './game/inventory';
 import { getDrops } from '../../src/drops';
-import { isBlock, maxStackOf, foodValue } from '../../src/item';
+import { breakTime } from '../../src/block-hardness';
+import { isBlock, maxStackOf, foodValue, ITEMS } from '../../src/item';
+import { BLOCK_CATALOG } from '../../src/creative-palette';
+import type { MobKind } from './game/mob-manager';
 import type { InventorySlot } from '../../src/inventory';
 import { RECIPES, matchRecipe, type Recipe } from '../../src/crafting';
 import { FurnaceManager } from '../../src/furnace';
@@ -21,6 +23,7 @@ import { emptyFurnace, type FurnaceState } from '../../src/block-data';
 import { ServerDroppedItems } from './game/dropped-items';
 import { ServerArrows, powerToSpeed } from './game/arrow-projectiles';
 import { ActiveRegion, chunkCoordOf } from './game/active-region';
+import { createMobSpawning, type MobSpawning } from './game/mob-spawning';
 import { WaterEngine, LavaEngine } from './game/water-engine';
 import { FireEngine } from './game/fire-engine';
 import type { FluidWorld } from './game/fluid-world';
@@ -107,6 +110,14 @@ const SPAWN_PROTECTION_CHUNKS = 3;
 const PLAYER_FIRE_AFTERBURN_TICKS = 8;
 const PLAYER_FIRE_TICK_INTERVAL = 1;
 
+/** Every mob /summon can spawn - mirrors mob-manager.ts's MobKind union, listed out because that type itself can't be iterated at runtime. */
+const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep', 'zombie', 'skeleton'];
+
+/** Same normalisation as src/chat-commands.ts's /give, duplicated (not imported) because that file pulls in THREE/Chat/DOM-adjacent types this headless server doesn't have. */
+function slugifyItemName(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
 /**
  * Per-connection state. One per joined player. `physics` is the exact same
  * PlayerPhysics class the client uses for local prediction (player-physics.ts
@@ -148,6 +159,17 @@ type Session = {
   craft: { side: 2 | 3; inputs: InventorySlot[] } | null;
   /** Mid-bite: which slot is being eaten, what was in it, and how long it's been going. Null when not eating. */
   eating: { slotIndex: number; itemId: number; elapsed: number } | null;
+  /**
+   * The dig in progress, or null. `itemId` is captured at `breakStart` and
+   * never re-read - switching hotbar slots mid-dig doesn't retroactively
+   * speed up or slow down it, matching singleplayer's own interaction.ts
+   * (see protocol.ts's breakStart doc comment). Nothing ever needs to clear
+   * this on its own: a `breakBlock` that doesn't match consumes and discards
+   * it, and a new `breakStart` just overwrites it.
+   */
+  mining: { x: number; y: number; z: number; itemId: number | null; startedAtMs: number } | null;
+  /** This player's own 16-slot animal/hostile-surface/hostile-cave spawner (game/mob-spawning.ts, Fase 9) - independent ids/spawn-rolls/cooldowns per player, all writing into the one shared ServerMobManager roster. Created on join, discarded on disconnect. */
+  mobSpawning: MobSpawning;
 };
 
 /**
@@ -163,8 +185,10 @@ type Session = {
  *   a placeholder flat plane.
  * - Real block break/place, persisted in Durable Object storage and
  *   broadcast to everyone.
- * - Mobs (ServerMobManager/mobs.ts) spawned on the real terrain, running
- *   mob-ai.ts/mob-physics.ts unmodified.
+ * - Mobs (ServerMobManager/mobs.ts) running mob-ai.ts/mob-physics.ts
+ *   unmodified, spawned by each connected player's OWN 16-slot spawner
+ *   (game/mob-spawning.ts, Fase 9) - independent spawn rolls/cooldowns per
+ *   player, all landing in the one shared roster everyone sees and can fight.
  * - Combat: melee against mobs (attackMob) and against other players
  *   (attackPlayer, gated by spawn protection), hostile mobs hurting the
  *   nearest player, and real arrows with travel time for both the player's
@@ -299,6 +323,8 @@ export class WorldDO implements DurableObject {
    * field is the one true version they're periodically resynced to.
    */
   private dayNightElapsed = DAY_LENGTH / 2;
+  /** Last skyDarken this.tick() computed - kept as a field purely so isNight() (mob-spawning's day/night gate) doesn't need to recompute the whole cycle a second time. */
+  private lastSkyDarken = 0;
   private lastBroadcastSkyDarken = -1;
   private lastDayTimeBroadcast = 0;
 
@@ -348,13 +374,15 @@ export class WorldDO implements DurableObject {
       this.furnacesLoaded = true;
     }
     if (!this.mobsSpawned) {
-      // Restore whatever was alive when this DO was last evicted; only a world
-      // that has genuinely never been visited gets a fresh initial population,
-      // so a player coming back doesn't find the herd they thinned out
-      // magically restocked.
+      // Restore whatever was alive when this DO was last evicted. A world
+      // that has genuinely never been visited starts with none at all now -
+      // there's no fixed initial batch any more (Fase 9): the moment the
+      // first player's own per-player spawner runs its first update(), every
+      // one of its 16 slots is empty with a zero cooldown, so it fills up
+      // from nothing within the first few ticks anyway, same cold-start
+      // singleplayer itself has on a fresh world.
       const saved = await this.state.storage.get<MobRecord[]>(MOBS_KEY);
       if (saved && saved.length > 0) this.mobs.restore(saved);
-      else if (!saved) this.spawnInitialMobs();
       this.mobsSpawned = true;
     }
 
@@ -440,6 +468,9 @@ export class WorldDO implements DurableObject {
         };
         session.physics.setSneaking(msg.sneaking);
         break;
+      case 'breakStart':
+        this.handleBreakStart(session, msg.x, msg.y, msg.z);
+        break;
       case 'breakBlock':
         this.handleBreakBlock(session, msg.x, msg.y, msg.z);
         break;
@@ -496,7 +527,12 @@ export class WorldDO implements DurableObject {
         this.handleFurnaceTakeOutput(session, msg.x, msg.y, msg.z);
         break;
       case 'chat':
-        this.broadcast({ type: 'chat', from: session.name, text: msg.text });
+        // A command is parsed and answered by the SERVER, never the client -
+        // same trust boundary as breakBlock/placeBlock. Anyone connected can
+        // use one (see Fase 6 of PLAN-MULTIPLAYER-BUGFIXES.md); there's no
+        // creative mode or permission system in this project to gate it with.
+        if (msg.text.startsWith('/')) this.handleChatCommand(session, msg.text.slice(1));
+        else this.broadcast({ type: 'chat', from: session.name, text: msg.text });
         break;
       case 'attack':
         // Mob ids are always negative (ServerMobManager), session ids always
@@ -514,29 +550,62 @@ export class WorldDO implements DurableObject {
       case 'shootBow':
         this.handleShootBow(session, msg.power, msg.dir);
         break;
-      // 'ping': accepted so a client sending it doesn't error, but this
-      // server doesn't do latency measurement yet.
+      case 'ping':
+        this.send(ws, { type: 'pong', clientTimeMs: msg.clientTimeMs, serverTimeMs: Date.now() });
+        break;
       default:
         break;
     }
   }
 
   /**
-   * Item drop rolled from getDrops() (same table singleplayer's interaction.ts
-   * uses) always harvests for now - no tool/harvest-level gating server-side
-   * yet, same "plain fixed punch" scope as PLAYER_MELEE_DAMAGE.
+   * Records that a dig started, with whatever's SELECTED right now captured
+   * fixed for the whole thing (see Session.mining's doc comment). No-op on
+   * air or on a block breakTime() says is unbreakable (Infinity) - there's
+   * nothing to time, and it keeps a stray breakStart from ever validating a
+   * breakBlock against Infinity later (mining.startedAtMs would just sit
+   * there unconsumed instead, harmless either way, but this is clearer).
+   */
+  private handleBreakStart(session: Session, x: number, y: number, z: number): void {
+    const id = this.getBlockAt(x, y, z);
+    if (id === BlockId.AIR) return;
+    const itemId = session.inventory[session.selectedSlot].id;
+    if (!Number.isFinite(breakTime(id, itemId).time)) return;
+    session.mining = { x, y, z, itemId, startedAtMs: Date.now() };
+  }
+
+  /**
+   * Applies a dig the client says finished. Re-derives the real duration
+   * from breakTime() using the item captured at breakStart - never a
+   * duration or a canHarvest flag the client claims - and checks enough
+   * real time has actually elapsed for THIS position before allowing it.
+   * `mining` is consumed (set null) unconditionally so a duplicate/stale
+   * breakBlock can't re-validate against the same recorded start twice.
    *
-   * The drop lands as a real ground entity at the block's centre (matching
-   * singleplayer, whose interaction.ts routes every drop through
-   * DroppedItems.spawn) rather than teleporting straight into the breaker's
-   * inventory - so a block broken across the room has to actually be walked
-   * over, and anyone can pick it up, not just whoever swung at it.
+   * The 0.8 multiplier is slack for latency and frame jitter between the
+   * client's local timer finishing and this message arriving - strict
+   * enough that a modified client sending breakBlock right after breakStart
+   * still gets rejected, loose enough that no legitimate dig ever is.
    */
   private handleBreakBlock(session: Session, x: number, y: number, z: number): void {
     const brokenId = this.getBlockAt(x, y, z);
-    this.setBlockFromPlayer(x, y, z, BlockId.AIR);
+    const mining = session.mining;
+    session.mining = null;
     if (brokenId === BlockId.AIR) return;
-    for (const drop of getDrops(brokenId, true)) {
+    if (!mining || mining.x !== x || mining.y !== y || mining.z !== z) return;
+
+    const { time, canHarvest } = breakTime(brokenId, mining.itemId);
+    const elapsedSeconds = (Date.now() - mining.startedAtMs) / 1000;
+    if (elapsedSeconds < time * 0.8) return;
+
+    this.setBlockFromPlayer(x, y, z, BlockId.AIR);
+    // The drop lands as a real ground entity at the block's centre (matching
+    // singleplayer, whose interaction.ts routes every drop through
+    // DroppedItems.spawn) rather than teleporting straight into the
+    // breaker's inventory - so a block broken across the room has to
+    // actually be walked over, and anyone can pick it up, not just whoever
+    // dug it.
+    for (const drop of getDrops(brokenId, canHarvest)) {
       this.droppedItems.spawn(drop.id, drop.count, new THREE.Vector3(x, y, z));
     }
   }
@@ -946,6 +1015,21 @@ export class WorldDO implements DurableObject {
       dead: false,
       craft: null,
       eating: null,
+      mining: null,
+      // References `physics` (declared with `let` above and assigned just
+      // before this) rather than `spawn`/`session.physics` - it has to track
+      // wherever this player actually IS as they move, not the fixed point
+      // they joined at.
+      mobSpawning: createMobSpawning({
+        getPlayerPos: () => physics.state.position,
+        isSolidAt: (x, y, z) => this.isSolidAt(x, y, z),
+        getBlockAt: (x, y, z) => this.getBlockAt(x, y, z),
+        surfaceHeight: (x, z) => this.terrain!.surfaceHeight(x, z),
+        isActiveAt: (x, z) => this.activeRegion.isActiveAt(x, z),
+        isNight: () => this.isNight(),
+        approxBrightnessAt: (x, y, z) => this.approxBrightnessAt(x, y, z),
+        mobs: this.mobs,
+      }),
     };
     this.sessions.set(ws, session);
     this.joining.delete(ws);
@@ -1057,6 +1141,7 @@ export class WorldDO implements DurableObject {
     this.dayNightElapsed += dt;
     const cycleTime = resolveCycleTime(this.dayNightElapsed, 0);
     const { skyDarken } = computeDayNightState(cycleTime);
+    this.lastSkyDarken = skyDarken;
     const flooredSkyDarken = Math.floor(skyDarken);
     // Resync every client's local clock (multiplayer-game.ts free-runs its
     // own copy between corrections, see day-night-math.ts's doc comment)
@@ -1099,6 +1184,16 @@ export class WorldDO implements DurableObject {
         this.mobsDirty = true;
       },
     });
+
+    // Each connected player's own 16-slot spawner (Fase 9) - run after the
+    // active-region recompute above so a slot's "did my mob leave the active
+    // area" check and any fresh spawn attempt both see this tick's real
+    // regions, not last tick's. Frozen the same way physics/damage are: a
+    // dead player waiting on the death screen doesn't keep repopulating the
+    // world around their corpse.
+    for (const session of this.sessions.values()) {
+      if (!session.dead) session.mobSpawning.update(dt);
+    }
 
     this.droppedItems.update(dt, {
       isSolid: (x, y, z) => this.isSolidAt(x, y, z),
@@ -1358,6 +1453,70 @@ export class WorldDO implements DurableObject {
    * cleared here, not just health - respawning still out of breath or still
    * burning would kill them again on dry land.
    */
+  /**
+   * Reduced port of src/chat-commands.ts's /summon and /give (Fase 6 of
+   * PLAN-MULTIPLAYER-BUGFIXES.md) - the rest of that file (time/seed/panorama/
+   * fly/mobstatus) is either purely client-side or not something an untrusted
+   * player should be able to flip for everyone, so it stays singleplayer-only.
+   * The result is echoed back to the caller ONLY, as a `from: 'server'` chat
+   * line - never broadcast, same as a real Minecraft server's command output.
+   */
+  private handleChatCommand(session: Session, raw: string): void {
+    const args = raw.trim().split(/\s+/).filter(Boolean);
+    const cmd = (args.shift() ?? '').toLowerCase();
+    const reply = (text: string) => this.send(session.ws, { type: 'chat', from: 'server', text });
+
+    if (cmd === 'summon') {
+      const kind = (args[0] ?? '').toLowerCase() as MobKind;
+      if (!MOB_KINDS.includes(kind)) {
+        reply(`Usage: /summon <${MOB_KINDS.join('|')}>`);
+        return;
+      }
+      // A few blocks in front of the player, facing back toward them - same
+      // placement math as the singleplayer command.
+      const dir = new THREE.Vector3(-Math.sin(session.yaw), 0, -Math.cos(session.yaw));
+      const pos = session.physics.state.position.clone().addScaledVector(dir, 3);
+      pos.y -= 1.62;
+      const id = this.mobs.spawn(kind, pos, session.yaw + Math.PI);
+      reply(id === null ? 'Could not summon: too many mobs already in the world.' : `Summoned a ${kind}.`);
+      return;
+    }
+
+    if (cmd === 'give') {
+      if (args.length === 0) { reply('Usage: /give <item|block> [count]'); return; }
+
+      // Trailing pure-number argument is the count; the rest is the item name.
+      let count = 1;
+      let nameParts = args;
+      const last = args[args.length - 1];
+      if (args.length > 1 && /^\d+$/.test(last)) {
+        count = Math.max(1, Math.min(6400, parseInt(last, 10)));
+        nameParts = args.slice(0, -1);
+      }
+      const query = slugifyItemName(nameParts.join(' ').replace(/^minecraft:/, ''));
+
+      let id: number | null = null;
+      let label = '';
+      for (const b of BLOCK_CATALOG) {
+        if (slugifyItemName(b.name) === query || String(b.id) === query) { id = b.id; label = b.name; break; }
+      }
+      if (id == null) {
+        for (const [key, def] of Object.entries(ITEMS)) {
+          if (slugifyItemName(def.name) === query || key === query) { id = Number(key); label = def.name; break; }
+        }
+      }
+      if (id == null) { reply(`Unknown item: ${nameParts.join(' ')}`); return; }
+
+      const leftover = addToInventory(session.inventory, id, count);
+      const gave = count - leftover;
+      this.sendInventory(session);
+      reply(gave > 0 ? `Gave ${gave} × ${label}` : 'Inventory full');
+      return;
+    }
+
+    reply(`Unknown command: /${cmd}`);
+  }
+
   private handleRespawn(session: Session): void {
     if (!session.dead) return;
     session.dead = false;
@@ -1474,6 +1633,37 @@ export class WorldDO implements DurableObject {
     }
   }
 
+  /** Same threshold day-night-cycle.ts's own isNight() uses (skyDarken past half the night's max) - drives mob-spawning.ts's day/night gate. */
+  private isNight(): boolean {
+    return this.lastSkyDarken > NIGHT_SKY_DARKEN / 2;
+  }
+
+  /**
+   * Approximate brightness (0..15) at a cave column, for game/mob-spawning.ts
+   * to gate hostile spawns near a torch. NOT real light propagation - this
+   * server has no per-voxel light engine at all, lighting has only ever been
+   * a client rendering concern until now. This is just the strongest known
+   * emissive EDITED block within reach, faded by straight-line (Chebyshev)
+   * distance rather than a real flood-fill that stops at corners - good
+   * enough to keep hostiles out of a lit room, not pixel-identical to what
+   * the client would render. Only scans `edits` (bounded by how much of the
+   * world has actually been touched), and only runs when a cave spawn slot
+   * is empty and off cooldown - not every tick.
+   */
+  private approxBrightnessAt(x: number, y: number, z: number): number {
+    let best = 0;
+    for (const [key, id] of this.edits) {
+      const emission = blockLightProperties[id].emission;
+      if (emission <= 0) continue;
+      const [ex, ey, ez] = key.split(',').map(Number);
+      const dist = Math.max(Math.abs(ex - x), Math.abs(ey - y), Math.abs(ez - z));
+      if (dist > emission) continue;
+      const level = emission - dist;
+      if (level > best) best = level;
+    }
+    return best;
+  }
+
   private isSolidAt(x: number, y: number, z: number): boolean {
     const edit = this.edits.get(`${x},${y},${z}`);
     if (edit !== undefined) return edit !== BlockId.AIR;
@@ -1563,19 +1753,6 @@ export class WorldDO implements DurableObject {
     return [0, 0];
   }
 
-  /** A handful of animals + a couple of hostiles scattered around spawn, once per WORLD (not per DO instance): the roster is persisted from here on, so an evicted world wakes up with the mobs it actually had rather than a fresh batch. */
-  private spawnInitialMobs(): void {
-    this.mobsDirty = true; // write the starting roster out on the next tick, so "never visited" stays distinguishable from "everything got killed"
-    const kinds: MobKind[] = ['pig', 'cow', 'sheep', 'pig', 'cow', 'zombie', 'skeleton'];
-    for (const kind of kinds) {
-      const angle = Math.random() * Math.PI * 2;
-      const radius = 6 + Math.random() * 14;
-      const x = Math.round(Math.cos(angle) * radius);
-      const z = Math.round(Math.sin(angle) * radius);
-      const y = this.findSpawnEyeY(x, z) - 2.25 + 0.5; // feet-level: same ground-surface scan as the player spawn, converted from eye-height back to feet
-      this.mobs.spawn(kind, new THREE.Vector3(x, y, z), Math.random() * Math.PI * 2);
-    }
-  }
 }
 
 /** Small deterministic string hash - same worldId always derives the same terrain seed. */

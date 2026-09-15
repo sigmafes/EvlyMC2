@@ -13,6 +13,16 @@ const KNOCKBACK_SPEED = 5;
 const KNOCKBACK_UP = 4;
 const FLEE_DURATION = 3;
 const DEATH_SPIN_DURATION = 0.75; // seconds toppling before vanishing - same as mob-manager.ts's own
+/**
+ * Global safety net, not a gameplay rule: singleplayer's 16-slot cap only
+ * ever needed to bound ONE player's population. Fase 9 runs one independent
+ * 16-slot spawner PER connected player (game/mob-spawning.ts), so several
+ * players spread across a world could otherwise sum to far more mobs than
+ * this server has ever had to simulate at once. Past this, spawning just
+ * stops - existing mobs are unaffected, same pattern as the fire engine's
+ * own MAX_FIRE_CELLS (game/fire-engine.ts).
+ */
+const MAX_MOBS = 200;
 
 /** A mob as persisted to Durable Object storage: only what respawning it needs, never the AI/path/timer scratch state (all of which is fine to start fresh). */
 export type MobRecord = { id: number; kind: MobKind; x: number; y: number; z: number; yaw: number; health: number };
@@ -69,14 +79,17 @@ export class ServerMobManager {
   private readonly mobs: Mob[] = [];
   private nextId = -1; // negative ids - never collide with Session ids (positive, from WorldDO.nextId)
 
-  spawn(kind: MobKind, pos: THREE.Vector3, yaw: number): void {
+  /** Returns the new mob's id, or null if the global cap (MAX_MOBS) is already reached and nothing was spawned. */
+  spawn(kind: MobKind, pos: THREE.Vector3, yaw: number): number | null {
+    if (this.mobs.length >= MAX_MOBS) return null;
     const stats = MOB_STATS[kind];
     const group = new THREE.Group();
     group.position.copy(pos);
     group.rotation.y = yaw;
 
+    const id = this.nextId--;
     this.mobs.push({
-      id: this.nextId--,
+      id,
       kind,
       model: {
         getGroup: () => group,
@@ -123,6 +136,7 @@ export class ServerMobManager {
       idleSoundTimer: Math.random() * 9,
       box: new THREE.LineSegments(),
     });
+    return id;
   }
 
   update(delta: number, ctx: MobCombatDeps): void {
@@ -218,6 +232,17 @@ export class ServerMobManager {
   /** For a caller (e.g. WorldDO's melee reach check) that needs a mob's position without going through a full snapshot. */
   getPos(id: number): THREE.Vector3 | null {
     return this.mobs.find((m) => m.id === id)?.pos ?? null;
+  }
+
+  /** True if a mob with this id is still around (dying ones included - not gone until the topple finishes), for a per-player spawn slot (game/mob-spawning.ts) to know its mob is still its own to track. Same "dying still counts" rule as mob-manager.ts's own isAlive(). */
+  isAlive(id: number): boolean {
+    return this.mobs.some((m) => m.id === id);
+  }
+
+  /** Silent despawn (no drops, no death animation, no loot) - for a mob whose spawn slot decided it wandered out of anyone's active region, mirroring mob-manager.ts's own forceRemove() for a mob that left the loaded area. */
+  forceRemove(id: number): void {
+    const index = this.mobs.findIndex((m) => m.id === id);
+    if (index >= 0) this.mobs.splice(index, 1);
   }
 
   /** Nearest mob along a ray within `maxDist`, or null - what an in-flight arrow tests against. Same stacked-spheres approximation mob-manager.ts's own raycastMobs() uses (its helpers are private there, so the math is mirrored here, same as the tuning constants at the top of this file). */

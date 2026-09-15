@@ -127,6 +127,27 @@ export type ClientMessage =
       pitch: number;
       dtMs: number; // this input's own client-side frame delta, so the server advances physics by the same amount the client predicted
     }
+  /**
+   * Player started mining this block, with whatever's in their currently
+   * SELECTED slot at this instant - the server captures that item and holds
+   * it fixed for the whole dig (switching hotbar slots mid-swing doesn't
+   * speed up or slow down an already-started dig, matching singleplayer's
+   * own interaction.ts, which only reads the selected item once in
+   * startMining()). Re-sending this for a new position retargets; there's no
+   * separate cancel message because an abandoned dig that's never completed
+   * with `breakBlock` just sits unused until overwritten or the block itself
+   * changes - nothing to clean up.
+   */
+  | { type: 'breakStart'; x: number; y: number; z: number }
+  /**
+   * Player finished the dig animation client-side and wants it applied.
+   * `x/y/z` must match the position from the most recent `breakStart`, and
+   * enough real time must have passed since then (see world-do.ts's
+   * handleBreakBlock) - the server re-derives the dig duration itself from
+   * breakTime() using the item captured at breakStart, it never trusts a
+   * claimed elapsed time or believes a `breakBlock` with no matching
+   * `breakStart` at all.
+   */
   | { type: 'breakBlock'; x: number; y: number; z: number }
   | { type: 'placeBlock'; x: number; y: number; z: number; blockId: BlockId; face: number }
   | { type: 'selectSlot'; index: number }
@@ -237,7 +258,7 @@ export type ServerMessage =
 export function isClientMessageType(type: string): type is ClientMessage['type'] {
   return (
     [
-      'join', 'input', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft', 'moveSlot',
+      'join', 'input', 'breakStart', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft', 'moveSlot',
       'craftOpen', 'craftClose', 'craftMove', 'craftTakeOutput',
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
       'attack', 'respawn', 'shootBow', 'chat', 'ping',
