@@ -5,7 +5,7 @@ import type {
   ClientMessage, ServerMessage, EntitySnapshot, Vec3, CraftSlotRef,
 } from '../../src/net/protocol';
 import { PROTOCOL_VERSION, isClientMessageType } from '../../src/net/protocol';
-import { BlockId, blockLightProperties } from '../../src/block';
+import { BlockId, blockLightProperties, isSolidBlock } from '../../src/block';
 import { ServerTerrain } from './terrain';
 import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
@@ -484,7 +484,7 @@ export class WorldDO implements DurableObject {
         }
         break;
       case 'dropItem':
-        this.handleDropItem(session, msg.dir);
+        this.handleDropItem(session, msg.dir, msg.all);
         break;
       case 'craft':
         this.handleCraft(session, msg.recipeIndex);
@@ -620,24 +620,36 @@ export class WorldDO implements DurableObject {
   private handlePlaceBlock(session: Session, x: number, y: number, z: number): void {
     const slot = session.inventory[session.selectedSlot];
     if (slot.id === null || !isBlock(slot.id)) return;
+    // Same self-collision guard as singleplayer's BlockPlacer.placeBlock()
+    // (block-placer.ts:38, via player.intersectsBlock - player-physics.ts's
+    // overlapsHorizontally/overlapsVertically): never let a player wedge a
+    // block into the space their own body currently occupies. Liquids don't
+    // go through this client-side either (isLiquid short-circuits it there),
+    // but this server never lets a client place a liquid block by hand in
+    // the first place (isBlock/no bucket-placement path), so there's no
+    // equivalent exception needed here.
+    if (session.physics.intersectsBlock(x, y, z)) return;
     this.setBlockFromPlayer(x, y, z, slot.id);
     removeFromSlot(slot, 1);
     this.sendInventory(session);
   }
 
   /**
-   * Q - throws the selected slot's whole stack out in front of the player as a
+   * Q - throws the selected slot's item(s) out in front of the player as a
    * real ground entity, mirroring singleplayer's own Q handler (main.ts's
    * onDropSelected: spawn 0.6 blocks along the look direction, 0.2 below eye
    * level, thrown along that direction). The client's claimed `dir` is only
    * used for the throw arc - it can't move the player or reach further than
    * their own position, so there's nothing to validate beyond normalising it.
+   * `all` mirrors that same onDropSelected(ctrlKey): plain Q (all=false)
+   * drops a single item, Ctrl+Q (all=true) drops the whole stack.
    */
-  private handleDropItem(session: Session, dir: Vec3): void {
+  private handleDropItem(session: Session, dir: Vec3, all: boolean): void {
     const slot = session.inventory[session.selectedSlot];
     if (slot.id === null) return;
-    const count = slot.count ?? 0;
-    if (count <= 0) return;
+    const held = slot.count ?? 0;
+    if (held <= 0) return;
+    const count = all ? held : 1;
 
     const look = new THREE.Vector3(dir.x, dir.y, dir.z);
     if (look.lengthSq() > 0) look.normalize();
@@ -645,7 +657,7 @@ export class WorldDO implements DurableObject {
     from.y -= 0.2;
 
     this.droppedItems.spawn(slot.id, count, from, look);
-    removeFromSlot(slot, Infinity);
+    removeFromSlot(slot, count);
     this.sendInventory(session);
   }
 
@@ -1666,7 +1678,13 @@ export class WorldDO implements DurableObject {
 
   private isSolidAt(x: number, y: number, z: number): boolean {
     const edit = this.edits.get(`${x},${y},${z}`);
-    if (edit !== undefined) return edit !== BlockId.AIR;
+    // Same isSolidBlock() terrain.isSolid() already uses for generated
+    // terrain (terrain.ts:60-64) - `edit !== AIR` alone treated any edited
+    // non-air block as solid, including water/lava/fire/torches (all in
+    // block.ts's NON_SOLID_BLOCKS), so a player-PLACED liquid or a
+    // fire-spread edit was solid like stone while the same block straight
+    // out of world generation wasn't.
+    if (edit !== undefined) return isSolidBlock(edit);
     return this.terrain!.isSolid(x, y, z);
   }
 

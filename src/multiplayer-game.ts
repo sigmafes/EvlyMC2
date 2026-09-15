@@ -332,6 +332,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     underwaterOverlayEl,
   );
   let worldSeed = 0;
+  /**
+   * initTerrain() awaits initPreviewAtlases() (see below) before block/item
+   * slot previews can render anything but a flat white placeholder - it used
+   * to be called fire-and-forget (`void initTerrain(...)`), so if the
+   * server's first `inventory` packet won the race against that promise,
+   * renderHotbar()/renderBackpack() would call renderSlot() with the atlas
+   * still null and every slot rendered white forever (block-preview.ts's
+   * slower per-texture fallback path can lose its own late redraw). Kept so
+   * the inventory-render call sites below can wait on it.
+   */
+  let terrainReady: Promise<void> | null = null;
 
   function chunkCoordOf(x: number, z: number): [number, number] {
     return [Math.floor((x + 8) / CHUNK_SIZE), Math.floor((z + 8) / CHUNK_SIZE)];
@@ -661,7 +672,16 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   for (let i = 0; i < HOTBAR_SIZE; i++) {
     const btn = document.createElement('button');
     btn.className = 'inventory-slot';
-    btn.disabled = true; // display-only - clicking a hotbar slot to move items only works from inside the backpack panel (below), same as singleplayer's hotbar row mirrored into #backpack
+    btn.type = 'button';
+    // Tap/click selects this slot, same as singleplayer's HUD hotbar row
+    // (Inventory.createSlotElement's click handler, src/inventory.ts:306-309)
+    // - this is the ONLY way a touch player can change slots (no keyboard),
+    // and it works for a mouse click too, alongside the digit keys above and
+    // the scroll wheel (onWheel below). Moving items between STORAGE slots
+    // still only works from inside the backpack panel, but selecting the
+    // currently-held hotbar slot doesn't need it open at all.
+    const index = i;
+    btn.addEventListener('click', () => client.send({ type: 'selectSlot', index }));
     hotbarEl.appendChild(btn);
     hotbarSlotEls.push(btn);
   }
@@ -916,6 +936,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   document.body.appendChild(chatEl);
   let chatOpen = false;
 
+  const CHAT_LINE_LIFETIME_MS = 15000;
   function addChatLine(text: string): void {
     const line = document.createElement('div');
     line.className = 'mp-chat-line';
@@ -923,6 +944,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     chatLogEl.appendChild(line);
     while (chatLogEl.children.length > 50) chatLogEl.firstElementChild!.remove();
     chatLogEl.scrollTop = chatLogEl.scrollHeight;
+    // Each line times out on its OWN clock rather than a single shared timer,
+    // so an old line doesn't get its lifetime reset just because a new one
+    // arrived - it disappears 15s after it was added, independent of chat
+    // activity around it.
+    setTimeout(() => line.remove(), CHAT_LINE_LIFETIME_MS);
   }
 
   function openChat(): void {
@@ -1164,9 +1190,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     sensitivityScale = v / 100;
     saveSettings({ sensitivity: v });
   });
+  // Kept separate from camera.fov itself (mirrors pause-menu.ts's own
+  // fovSlider vs camera.fov split) because the underwater dip below needs
+  // its own baseline to subtract from every frame, not the last value it
+  // itself wrote.
+  let baseFov = mpSettings.fov;
   const fovRow = makeSlider('FOV', 30, 110, mpSettings.fov, (v) => {
-    camera.fov = v;
-    camera.updateProjectionMatrix();
+    baseFov = v;
     saveSettings({ fov: v });
   });
   optionsEl.append(sensitivityRow, fovRow);
@@ -1282,7 +1312,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
     if (e.code === 'KeyQ') {
       const dir = camera.getWorldDirection(new THREE.Vector3());
-      client.send({ type: 'dropItem', dir: { x: dir.x, y: dir.y, z: dir.z } });
+      // Same split as singleplayer's interaction.ts onDropSelected(ctrlKey):
+      // plain Q drops one item, Ctrl+Q drops the whole stack.
+      client.send({ type: 'dropItem', dir: { x: dir.x, y: dir.y, z: dir.z }, all: e.ctrlKey });
     }
   };
   const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
@@ -1296,6 +1328,20 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
   };
   document.addEventListener('mousemove', onMouseMove);
+
+  // Hotbar slot switch by scroll wheel - same circular formula and the same
+  // "only while actually playing" gate as singleplayer's Inventory.onWheel
+  // (src/inventory.ts:814-828), just re-derived here since this client keeps
+  // its own selectedSlotIndex/panel-open flags instead of that class.
+  const onWheel = (e: WheelEvent) => {
+    if (tableOpen || backpackOpen || furnaceOpenState || optionsOpen || chatOpen) return;
+    if (document.pointerLockElement !== canvas) return;
+    e.preventDefault();
+    const direction = e.deltaY > 0 ? 1 : -1;
+    const next = (selectedSlotIndex + direction + HOTBAR_SIZE) % HOTBAR_SIZE;
+    client.send({ type: 'selectSlot', index: next });
+  };
+  document.addEventListener('wheel', onWheel, { passive: false });
 
   // --- Touch (Android/mobile) input state - see TouchControls wiring below.
   // Mirrors main.ts's desktop-vs-touch split: keyboard/mouse drive `keys`
@@ -1661,10 +1707,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     model.group.add(hitbox);
     const label = document.createElement('div');
     label.textContent = name;
-    label.style.cssText = 'position:absolute;color:#fff;font:12px Tricraft,sans-serif;text-shadow:1px 1px 0 #000;transform:translate(-50%,-100%);white-space:nowrap;';
+    label.className = 'mp-name-tag';
     labelLayer.appendChild(label);
     return {
-      mesh: model.group, hitbox, label, labelOffsetY: 1.1, playerModel: model, skinMaterials: materials,
+      // Lower than before (was 1.1, above the model's actual head) and with
+      // a translucent background (see .mp-name-tag in style.css) so it reads
+      // over any background instead of relying only on a 1px text-shadow.
+      mesh: model.group, hitbox, label, labelOffsetY: 0.55, playerModel: model, skinMaterials: materials,
       lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0, kind: 'player',
     };
   }
@@ -1819,6 +1868,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('keyup', onKeyUp);
     document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('wheel', onWheel);
     canvas.removeEventListener('mousedown', onMouseDown);
     canvas.removeEventListener('mouseup', onMouseUp);
     canvas.removeEventListener('contextmenu', onContextMenu);
@@ -1887,7 +1937,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       joinedAtMs = performance.now();
       clientDayTime = msg.dayTime;
       applyDayNightState(clientDayTime);
-      void initTerrain(msg.worldSeed);
+      terrainReady = initTerrain(msg.worldSeed);
     },
     onRejected: (reason) => disconnect(`Rejected: ${reason}`),
     onState: (msg) => {
@@ -1900,7 +1950,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       localMoveDeltaZ = msg.self.pos.z - lastServerPos.z;
       lastServerPos.set(msg.self.pos.x, msg.self.pos.y, msg.self.pos.z);
       hud.setHealth(msg.self.health);
-      if (msg.self.health < lastSelfHealth) soundManager.playRandom('player/Player_hurt', 3, 0.7);
+      if (msg.self.health < lastSelfHealth) {
+        soundManager.playRandom('player/Player_hurt', 3, 0.7);
+        localPlayerModel?.hurt(); // same cue remote players already get, see makePlayerAvatar/onState's entity loop below
+      }
       lastSelfHealth = msg.self.health;
       // `full` (bar hidden) once air reads 10 - "on dry land", same threshold
       // the emoji version used and the same one singleplayer's own Hud caller
@@ -1931,7 +1984,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         if (e.dying && op.dyingFor === undefined) {
           op.dyingFor = 0;
           op.mobModel?.setDying(true); // holds the red tint on for the whole topple instead of letting the hurt flash expire mid-fall
-          playMobSound(soundManager, op.kind as MobKind, 'death', 0.8);
+          // Same distance gate the idle bark above already uses (mob-manager.ts's
+          // own inSoundRange) - without it, every connected client hears every
+          // mob death/hurt in the world at full volume regardless of where
+          // their own camera is, since everyone gets the same snapshot.
+          if (op.mesh.position.distanceTo(camera.position) <= MOB_SOUND_RADIUS) playMobSound(soundManager, op.kind as MobKind, 'death', 0.8);
           smokeParticles.burst(new THREE.Vector3(e.pos.x, e.pos.y + 0.6, e.pos.z));
         }
         // Both model kinds carry the orange tint + flame overlay, and the
@@ -1942,7 +1999,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         if (e.health < op.lastHealth) {
           op.playerModel?.hurt();
           op.mobModel?.hurt();
-          if (!op.playerModel) playMobSound(soundManager, op.kind as MobKind, 'hurt', 0.7);
+          if (!op.playerModel && op.mesh.position.distanceTo(camera.position) <= MOB_SOUND_RADIUS) {
+            playMobSound(soundManager, op.kind as MobKind, 'hurt', 0.7);
+          }
         }
         op.lastHealth = e.health;
       }
@@ -2002,9 +2061,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onInventoryUpdate: (slots, selectedIndex) => {
       inventorySlots = slots;
       selectedSlotIndex = selectedIndex;
-      renderHotbar();
-      if (backpackOpen) renderBackpack();
-      if (tableOpen) renderTable();
+      // Wait for the block/item atlas (see terrainReady's doc comment) so a
+      // slot never renders before it can show its real texture.
+      void (terrainReady ?? Promise.resolve()).then(() => {
+        renderHotbar();
+        if (backpackOpen) renderBackpack();
+        if (tableOpen) renderTable();
+      });
     },
     // The server still offers the older "craft straight from a recipe index"
     // shortcut, but this client drives the real grid instead, so there's
@@ -2014,8 +2077,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       craftSide = side;
       craftInputs = inputs;
       craftOutput = output;
-      if (backpackOpen) renderBackpack();
-      if (tableOpen) renderTable();
+      void (terrainReady ?? Promise.resolve()).then(() => {
+        if (backpackOpen) renderBackpack();
+        if (tableOpen) renderTable();
+      });
     },
     onCraftGridClosed: () => {
       craftInputs = [];
@@ -2120,6 +2185,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // time of day rather than a fixed daytime blue - and so `submerged` is
     // fresh for the next frame's applyDayNightState guard.
     submerged = underwater.update(currentSkyColor).isUnderwater;
+    // Same -10 FOV dip singleplayer's PauseMenu.setUnderwater()/updateFov()
+    // apply while submerged (pause-menu.ts:206-215) - UnderwaterManager
+    // itself only handles the sky/fog/overlay tint, not FOV, in either client.
+    const targetFov = baseFov - (submerged ? 10 : 0);
+    if (camera.fov !== targetFov) { camera.fov = targetFov; camera.updateProjectionMatrix(); }
     for (let i = 0; i < RELIGHT_CHUNKS_PER_FRAME && relightQueue.length > 0; i++) {
       chunks.get(relightQueue.shift()!)?.rebuildDirty();
     }

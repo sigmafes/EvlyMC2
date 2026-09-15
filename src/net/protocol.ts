@@ -152,8 +152,8 @@ export type ClientMessage =
   | { type: 'placeBlock'; x: number; y: number; z: number; blockId: BlockId; face: number }
   | { type: 'selectSlot'; index: number }
   | { type: 'useItem'; slotIndex: number }
-  /** Q - throws the whole stack in the selected hotbar slot out in front of the player as a real ground entity (DroppedItemSnapshot), same as singleplayer's own Q. `dir` is the player's look direction, used for the throw arc; the server clamps/normalises it itself. */
-  | { type: 'dropItem'; dir: Vec3 }
+  /** Q - throws the selected hotbar slot's item(s) out in front of the player as a real ground entity (DroppedItemSnapshot), same as singleplayer's own Q. `dir` is the player's look direction, used for the throw arc; the server clamps/normalises it itself. `all` mirrors singleplayer's interaction.ts onDropSelected(ctrlKey): false (plain Q) drops a single item, true (Ctrl+Q) drops the whole stack. */
+  | { type: 'dropItem'; dir: Vec3; all: boolean }
   /**
    * Craft one of the recipes the server last told this client it can
    * afford (`craftableRecipes`) - `recipeIndex` is RECIPES' own array

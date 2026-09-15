@@ -226,7 +226,14 @@ export class MainMenu {
 
     const onSubmit = (event: Event) => {
       event.preventDefault();
-      const url = urlInput.value.trim();
+      // Shortcut for the dev/test world, so nobody has to type or paste the
+      // full Cloudflare Workers URL by hand - resolves before the regular
+      // /world/<id> validation below, so it behaves exactly as if that full
+      // URL had been typed in.
+      const raw = urlInput.value.trim();
+      const url = raw.toLowerCase() === 'xatatestserver'
+        ? 'wss://evlymc-world-server.mrfierrocarrilgames.workers.dev/world/prueba1'
+        : raw;
       const match = url.match(/\/world\/([A-Za-z0-9_-]+)\/?$/);
       if (!url || !match) {
         message.textContent = 'Enter a URL ending in /world/<id>, e.g. wss://host/world/myworld';

@@ -1362,6 +1362,18 @@ body.touch #crosshair {
 }
 #mp-underwater-overlay.active { opacity: 1; }
 
+/* Other players' name tags - see multiplayer-game.ts's makePlayerAvatar. */
+.mp-name-tag {
+  position: absolute;
+  color: #fff;
+  font: 12px Tricraft, sans-serif;
+  white-space: nowrap;
+  transform: translate(-50%, -100%);
+  background: rgba(0, 0, 0, 0.5);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
 /* Burning: flames up the bottom of the screen, driven by `self.onFire` from
    the server (protocol.ts). Same look as singleplayer's #fire-screen-overlay,
    but a separate element - see multiplayer-game.ts's fireOverlayEl comment.
@@ -1866,7 +1878,11 @@ body.touch #mp-crosshair {
   width: 0;
   height: 0;
   transform: translate(-2px, -2px);
-  z-index: 100;
+  /* Above every multiplayer GUI panel (#mp-backpack/#mp-crafting-table/
+     #mp-options etc. sit at z-index 950 - see multiplayer-game.ts) as well
+     as singleplayer's own #pause-menu (10) - the cursor has to stay on top
+     of whichever mouse-driven panel is open, not just singleplayer's. */
+  z-index: 2000;
   pointer-events: none;
   border-style: solid;
   border-width: 13px 9px 0 0;
