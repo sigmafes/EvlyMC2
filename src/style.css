@@ -1482,30 +1482,31 @@ body.touch #crosshair {
 }
 #mp-diagnostics[hidden] { display: none; }
 
-/* Options panel (Tab) - own element, see multiplayer-game.ts's optionsEl
-   doc comment for why this isn't singleplayer's #pause-menu. */
+/* Options panel (Tab) - reuses singleplayer's real #pause-menu layout and
+   classes (.pause-view/.texture-button/.slider-row/.option-toggle, defined
+   above around line 458) instead of a bespoke look, per explicit request to
+   copy it as-is. Own id (not #pause-menu itself) because that instance stays
+   alive in the DOM for the whole page - see multiplayer-game.ts's optionsEl
+   doc comment for why multiplayer needs a separate element with the same
+   look rather than reusing that one directly. Same rule body as #pause-menu,
+   just z-index 950 (multiplayer's own panel layer) instead of 10. */
 #mp-options {
   position: fixed;
   inset: 0;
   z-index: 950;
   display: flex;
-  flex-direction: column;
-  align-items: center;
   justify-content: center;
-  gap: 12px;
-  background: rgba(0, 0, 0, .55);
-  color: #fff;
+  align-items: flex-start;
+  padding-top: clamp(48px, 12vh, 128px);
+  padding-bottom: 24px;
+  overflow-y: auto;
+  background-image: url('../gui/bg.png');
+  background-repeat: repeat;
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
 }
-#mp-options[hidden] { display: none; }
-.mp-options-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: min(360px, 80vw);
-}
-.mp-options-row span { flex: 0 0 120px; }
-.mp-options-row input[type="range"] { flex: 1; }
-.mp-options-row output { flex: 0 0 40px; text-align: right; }
+#mp-options[hidden],
+#mp-options [hidden] { display: none !important; }
 
 /* Touch aims freeform from wherever the finger is, same reasoning as
    singleplayer's own #crosshair rule above - a fixed centre crosshair would
@@ -2100,6 +2101,19 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
   left: 1px;
   width: 30px;
   height: 30px;
+}
+
+/* Paper doll preview - same coordinates as singleplayer's own #backpack-doll
+   (style.css:182-191), since #mp-backpack-panel uses the same inventory.png
+   background/coordinate system. */
+#mp-backpack-doll {
+  position: absolute;
+  left: 52px;
+  top: 16px;
+  width: 98px;
+  height: 140px;
+  display: block;
+  pointer-events: none;
 }
 
 /* Backpack: 2x2 crafting + result, the 27-slot grid, and the mirrored hotbar

@@ -83,6 +83,12 @@ export type EntitySnapshot = {
   dying: boolean;
   /** Only present for kind:'player' - display name for name tags/chat attribution. */
   name?: string;
+  /** Only present for kind:'player' - look pitch, so PlayerModel.setOrientation() can tilt their head up/down for everyone else, not just the local client's own body. */
+  pitch?: number;
+  /** Only present for kind:'player' - drives PlayerModel.setSneaking()/updateSneak() for everyone else. */
+  sneaking?: boolean;
+  /** Only present for kind:'player' - the selected hotbar slot's item/block id (or null for empty), drives PlayerModel.setHeldItem() for everyone else. */
+  heldItem?: number | null;
 };
 
 // --- Client -> Server --------------------------------------------------

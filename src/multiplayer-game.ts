@@ -7,6 +7,7 @@ import { lockPointer, unlockPointerForGui, isTouchDevice } from './is-touch';
 import { loadSettings, saveSettings } from './settings';
 import { TouchControls } from './touch-controls';
 import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials } from './player-model';
+import { InventoryDoll } from './inventory-doll';
 import { loadPlayerSkinDataUrl } from './player-skin';
 import { loadPlayToken } from './access-gate';
 import { setSingleplayerChatEnabled, setSingleplayerPauseMenuEnabled } from './main';
@@ -105,6 +106,11 @@ type RemoteEntity = {
   lastHealth: number;
   /** This entity's yaw as of the last `state` tick - updateRemoteAnimation's setOrientation() reads this every render frame (not just on a tick), since it owns and eases group.rotation.y itself once a player has a playerModel. */
   lastYaw: number;
+  /** Only for kind:'player' - look pitch as of the last `state` tick, same read pattern as lastYaw (PlayerModel.setOrientation() applies it to the head bone every render frame). */
+  lastPitch: number;
+  /** Only for kind:'player' - as of the last `state` tick, applied every render frame in updateRemoteAnimation via setSneaking()/setHeldItem(). */
+  sneaking: boolean;
+  heldItem: number | null;
   /**
    * Movement since the previous `state` tick (raw position delta, not
    * divided by tick duration - only its direction and whether it clears a
@@ -786,9 +792,18 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   backpackHotbarEl.id = 'mp-backpack-hotbar';
   const backpackHotbarEls = makeInventorySlotButtons(HOTBAR_SIZE, 0);
   backpackHotbarEls.forEach((el) => backpackHotbarEl.appendChild(el));
-  backpackPanelEl.append(backpackCraftEl, backpackCraftResultEl, backpackGridEl, backpackHotbarEl);
+  // Paper-doll preview, same class and coordinates as singleplayer's own
+  // #backpack-doll (style.css:182-191) - #mp-backpack-panel uses the exact
+  // same inventory.png background/coordinate system, so the empty well to
+  // the left of the 2x2 grid is in the same spot here.
+  const backpackDollEl = document.createElement('canvas');
+  backpackDollEl.id = 'mp-backpack-doll';
+  backpackDollEl.setAttribute('aria-hidden', 'true');
+  backpackPanelEl.append(backpackDollEl, backpackCraftEl, backpackCraftResultEl, backpackGridEl, backpackHotbarEl);
   backpackEl.appendChild(backpackPanelEl);
   document.body.appendChild(backpackEl);
+  const backpackDoll = new InventoryDoll({ canvasSelector: '#mp-backpack-doll', containerSelector: '#mp-backpack' });
+  backpackDoll.setSlim(mpSettings.alexSkin);
 
   let backpackOpen = false;
   function renderBackpack(): void {
@@ -811,6 +826,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     backpackOpen = open;
     backpackEl.hidden = !open;
     craftPicked = null;
+    backpackDoll.setActive(open);
     if (open) {
       craftSide = 2;
       client.send({ type: 'craftOpen', table: null });
@@ -1148,11 +1164,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   }
 
   /**
-   * Pause/options panel (Tab) - own element rather than singleplayer's
-   * #pause-menu for the same reason as chat/death/overlays: that one is
-   * PauseMenu's own DOM, and main.ts's instance lives for the whole page
-   * (guarded off for the duration of this session by
-   * setSingleplayerPauseMenuEnabled, same pattern as the chat "T" guard).
+   * Pause/options panel (Tab) - copies singleplayer's real #pause-menu DOM
+   * shape and CSS classes (.pause-view/.texture-button/.slider-row, see
+   * style.css) instead of a bespoke one-view panel, per explicit request to
+   * make it look and behave the same: a "Game Paused" view with Back to
+   * Game/Options/Leave World, and a separate Options view with the sliders,
+   * switched between exactly like pause-menu.ts's own showOptions(). Own
+   * element rather than singleplayer's actual #pause-menu instance for the
+   * same reason as chat/death/overlays: that one is PauseMenu's own DOM and
+   * main.ts's instance lives for the whole page (guarded off for the
+   * duration of this session by setSingleplayerPauseMenuEnabled, same
+   * pattern as the chat "T" guard).
    *
    * Only sliders that actually DO something in this client are here -
    * render distance is deliberately left out: raising it past
@@ -1167,26 +1189,48 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
 
   function makeSlider(label: string, min: number, max: number, value: number, onInput: (v: number) => void): HTMLElement {
     const row = document.createElement('label');
-    row.className = 'mp-options-row';
+    row.className = 'slider-row';
     const text = document.createElement('span');
-    text.textContent = label;
+    const out = document.createElement('output');
+    out.textContent = String(value);
+    text.append(`${label}: `, out);
     const input = document.createElement('input');
     input.type = 'range';
     input.min = String(min);
     input.max = String(max);
     input.value = String(value);
-    const out = document.createElement('output');
-    out.textContent = String(value);
     input.addEventListener('input', () => {
       const v = Number(input.value);
       out.textContent = String(v);
       onInput(v);
     });
-    row.append(text, input, out);
+    row.append(text, input);
     return row;
   }
+  function makeButton(text: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'texture-button';
+    btn.textContent = text;
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
 
-  const sensitivityRow = makeSlider('Sensitivity', 1, 200, mpSettings.sensitivity, (v) => {
+  const pausedViewEl = document.createElement('div');
+  pausedViewEl.className = 'pause-view';
+  const pausedHeading = document.createElement('h1');
+  pausedHeading.textContent = 'Game Paused';
+  const backToGameBtn = makeButton('Back to Game', () => toggleOptionsPanel());
+  const openOptionsBtn = makeButton('Options', () => showOptionsView(true));
+  const leaveBtn = makeButton('Leave World', () => disconnect('Disconnected'));
+  pausedViewEl.append(pausedHeading, backToGameBtn, openOptionsBtn, leaveBtn);
+
+  const optionsViewEl = document.createElement('div');
+  optionsViewEl.className = 'pause-view';
+  optionsViewEl.hidden = true;
+  const optionsHeading = document.createElement('h1');
+  optionsHeading.textContent = 'Options';
+  const sensitivityRow = makeSlider('Mouse Sensitivity', 1, 200, mpSettings.sensitivity, (v) => {
     sensitivityScale = v / 100;
     saveSettings({ sensitivity: v });
   });
@@ -1199,31 +1243,33 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     baseFov = v;
     saveSettings({ fov: v });
   });
-  optionsEl.append(sensitivityRow, fovRow);
-
+  optionsViewEl.append(optionsHeading, fovRow, sensitivityRow);
   // Touch-only controls: meaningless (and disabled in singleplayer's own
   // panel too) on a device with no on-screen buttons or touch-drag look.
   if (isTouchDevice()) {
-    const opacityRow = makeSlider('Button opacity', 10, 100, mpSettings.buttonOpacity, (v) => {
+    const opacityRow = makeSlider('Button Opacity', 10, 100, mpSettings.buttonOpacity, (v) => {
       touchControls?.setButtonOpacity(v);
       saveSettings({ buttonOpacity: v });
     });
-    optionsEl.append(opacityRow);
+    optionsViewEl.appendChild(opacityRow);
   }
+  const optionsBackBtn = makeButton('Back', () => showOptionsView(false));
+  optionsViewEl.appendChild(optionsBackBtn);
 
-  const leaveBtn = document.createElement('button');
-  leaveBtn.type = 'button';
-  leaveBtn.className = 'mc-button';
-  leaveBtn.innerHTML = '<span>Leave World</span>';
-  leaveBtn.addEventListener('click', () => disconnect('Disconnected'));
-  optionsEl.appendChild(leaveBtn);
+  optionsEl.append(pausedViewEl, optionsViewEl);
   document.body.appendChild(optionsEl);
+
+  /** Same showOptions(show) split as pause-menu.ts - swap which of the two views is visible without closing the whole panel. */
+  function showOptionsView(show: boolean): void {
+    pausedViewEl.hidden = show;
+    optionsViewEl.hidden = !show;
+  }
 
   let optionsOpen = false;
   function toggleOptionsPanel(): void {
     optionsOpen = !optionsOpen;
     optionsEl.hidden = !optionsOpen;
-    if (optionsOpen) unlockPointerForGui(); else lockPointer(canvas);
+    if (optionsOpen) { showOptionsView(false); unlockPointerForGui(); } else { lockPointer(canvas); }
   }
 
   /** Decoded once per skin string and cached, since the same data: URL is re-sent to every client and shouldn't be re-decoded per remote avatar. `null` (the default skin) and a load failure both resolve to `null` - createSkinMaterials(null) already falls back to the built-in skin. Declared here (rather than down by playerSkins, where it used to live) because buildLocalPlayerModel below calls loadSkinImage() immediately, not from a deferred callback - it needs skinImageCache to already exist. */
@@ -1480,6 +1526,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       particles?.mine(new THREE.Vector3(mining.x, mining.y, mining.z), target!.normal, mining.id, light);
       const mineSound = getBlockSound(mining.id, 'mine') ?? getBlockSound(mining.id, 'hit');
       if (mineSound) soundManager.playSound(mineSound, 0.5);
+      localPlayerModel?.swingArm(); // repeats every chip, same cadence interaction.ts's own swing-while-mining uses
     }
 
     if (mining.elapsed >= mining.total) {
@@ -1524,6 +1571,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // handler), so this just doesn't send anything for a player target.
       if (entityId === undefined || entityId >= 0) return false;
       client.send({ type: 'attack', targetId: entityId });
+      localPlayerModel?.swingArm(); // same third-person swing cue as a successful mine start below
       return true;
     }
     if (entityId !== undefined || !hit.face) return false;
@@ -1552,6 +1600,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (heldId === null || heldId === undefined) return false;
     const p = hit.point.clone().addScaledVector(normal, 0.5).round();
     client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: heldId, face: 0 });
+    localPlayerModel?.swingArm();
     return true;
   }
 
@@ -1714,7 +1763,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // a translucent background (see .mp-name-tag in style.css) so it reads
       // over any background instead of relying only on a 1px text-shadow.
       mesh: model.group, hitbox, label, labelOffsetY: 0.55, playerModel: model, skinMaterials: materials,
-      lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0, kind: 'player',
+      lastHealth: Infinity, lastYaw: 0, lastPitch: 0, sneaking: false, heldItem: null, moveDeltaX: 0, moveDeltaZ: 0, kind: 'player',
     };
   }
 
@@ -1776,7 +1825,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     labelLayer.appendChild(label);
     return {
       mesh, hitbox, label, labelOffsetY: stats.height + 0.3, mobModel,
-      lastHealth: Infinity, lastYaw: 0, moveDeltaX: 0, moveDeltaZ: 0, kind,
+      lastHealth: Infinity, lastYaw: 0, lastPitch: 0, sneaking: false, heldItem: null, moveDeltaX: 0, moveDeltaZ: 0, kind,
       idleSoundTimer: nextIdleDelay(),
     };
   }
@@ -1840,7 +1889,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
 
     if (!entity.playerModel) return;
     if (moving) entity.playerModel.startWalking(); else entity.playerModel.stopWalking();
-    entity.playerModel.setOrientation(entity.lastYaw, 0, entity.moveDeltaX, entity.moveDeltaZ, delta);
+    entity.playerModel.setOrientation(entity.lastYaw, entity.lastPitch, entity.moveDeltaX, entity.moveDeltaZ, delta);
+    // Same order as main.ts:733-734/localPlayerModel above - before
+    // updateWalkingAnimation so the crouch offset composes with the walk
+    // cycle for other players too, not just this client's own body.
+    entity.playerModel.setSneaking(entity.sneaking);
+    entity.playerModel.updateSneak(delta);
+    entity.playerModel.setHeldItem(entity.heldItem);
     entity.playerModel.updateWalkingAnimation(delta);
   }
 
@@ -1891,6 +1946,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     deathEl.remove();
     fireOverlayEl.remove();
     underwaterOverlayEl.remove();
+    backpackDoll.setActive(false);
     backpackEl.remove();
     tableEl.remove();
     furnaceEl.remove();
@@ -1981,6 +2037,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         op.mesh.position.set(e.pos.x, e.pos.y, e.pos.z);
         if (!op.playerModel) op.mesh.rotation.y = e.yaw; // players: left to updateRemoteAnimation's eased setOrientation() every frame instead
         op.lastYaw = e.yaw;
+        if (op.playerModel) {
+          op.lastPitch = e.pitch ?? 0;
+          op.sneaking = e.sneaking ?? false;
+          op.heldItem = e.heldItem ?? null;
+        }
         if (e.dying && op.dyingFor === undefined) {
           op.dyingFor = 0;
           op.mobModel?.setDying(true); // holds the red tint on for the whole topple instead of letting the hurt flash expire mid-fall
@@ -2164,6 +2225,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       const moving = localMoveDeltaX * localMoveDeltaX + localMoveDeltaZ * localMoveDeltaZ > 0.0001;
       if (moving) localPlayerModel.startWalking(); else localPlayerModel.stopWalking();
       localPlayerModel.setOrientation(yaw, pitch, localMoveDeltaX, localMoveDeltaZ, delta);
+      // Same order as main.ts:733-734 - before updateWalkingAnimation so the
+      // crouch offset composes with the walk cycle instead of being
+      // overwritten by it.
+      localPlayerModel.setSneaking(keys.has('ShiftLeft') || touchSneak);
+      localPlayerModel.updateSneak(delta);
+      localPlayerModel.setHeldItem(selectedItemId());
       localPlayerModel.updateWalkingAnimation(delta);
     }
     sendInput(now);

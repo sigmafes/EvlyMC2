@@ -15,6 +15,7 @@ import { getDrops } from '../../src/drops';
 import { breakTime } from '../../src/block-hardness';
 import { isBlock, maxStackOf, foodValue, ITEMS } from '../../src/item';
 import { BLOCK_CATALOG } from '../../src/creative-palette';
+import { LeavesManager } from '../../src/leaves-manager';
 import type { MobKind } from './game/mob-manager';
 import type { InventorySlot } from '../../src/inventory';
 import { RECIPES, matchRecipe, type Recipe } from '../../src/crafting';
@@ -239,6 +240,8 @@ export class WorldDO implements DurableObject {
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
   private readonly mobs = new ServerMobManager();
+  /** Oak leaf decay - LeavesManager is pure (only a getBlock callback, no THREE/DOM), so it's imported straight from src/ same as breakTime/getDrops, no headless fork needed. */
+  private readonly leaves = new LeavesManager();
   /**
    * Items lying on the ground (game/dropped-items.ts - a headless fork of
    * singleplayer's DroppedItems, same physics constants). Not persisted to DO
@@ -1197,6 +1200,23 @@ export class WorldDO implements DurableObject {
       },
     });
 
+    // Global housekeeping (Fase 21 of PLAN-MULTIPLAYER-BUGFIXES-2.md): a
+    // mob's OWNING player's own spawn slot already force-removes it the
+    // instant it wanders out of that player's active region (game/
+    // mob-spawning.ts's updateSpawnSlot) - but a mob whose owner has since
+    // DISCONNECTED keeps its spawned mobs in the shared world on purpose
+    // (Fase 9's own decision), and nothing else ever revisits them again.
+    // One left far from every remaining player would otherwise sit frozen
+    // (isActiveAt already stops it from thinking, see mobs.update() above)
+    // forever, wasting a slot of MAX_MOBS with nobody around to ever see it.
+    // This is the closest equivalent to singleplayer's "the session ends,
+    // its mobs go with it" for a world that has to keep running after one
+    // player leaves - reusing the exact isActiveAt/forceRemove machinery
+    // that already exists, just applied without requiring a specific owner.
+    for (const mob of this.mobs.snapshots()) {
+      if (!this.activeRegion.isActiveAt(mob.pos.x, mob.pos.z)) this.mobs.forceRemove(mob.id);
+    }
+
     // Each connected player's own 16-slot spawner (Fase 9) - run after the
     // active-region recompute above so a slot's "did my mob leave the active
     // area" check and any fresh spawn attempt both see this tick's real
@@ -1205,6 +1225,13 @@ export class WorldDO implements DurableObject {
     // world around their corpse.
     for (const session of this.sessions.values()) {
       if (!session.dead) session.mobSpawning.update(dt);
+    }
+
+    // Leaf decay (Fase 18 of PLAN-MULTIPLAYER-BUGFIXES-2.md) - same
+    // watch-set/flood-fill as world.ts:397, just applied through setBlock()
+    // so the removal broadcasts and persists like any other edit.
+    for (const [x, y, z] of this.leaves.update((bx, by, bz) => this.getBlockAt(bx, by, bz), dt)) {
+      this.setBlock(x, y, z, BlockId.AIR);
     }
 
     this.droppedItems.update(dt, {
@@ -1289,6 +1316,9 @@ export class WorldDO implements DurableObject {
         onFire: s.onFire,
         dying: false,
         name: s.name,
+        pitch: s.pitch,
+        sneaking: s.intent.sneaking,
+        heldItem: s.inventory[s.selectedSlot]?.id ?? null,
       })),
       ...this.mobs.snapshots(),
     ];
@@ -1598,6 +1628,10 @@ export class WorldDO implements DurableObject {
    * and World.place.
    */
   private setBlock(x: number, y: number, z: number, id: BlockId): void {
+    // Read before the edit overwrites it - leaf decay needs to know what
+    // USED to be here (was it a log?), same as world.ts's remove() capturing
+    // oldBlock before blockStore.removeBlockRaw().
+    const oldId = this.getBlockAt(x, y, z);
     const key = `${x},${y},${z}`;
     this.edits.set(key, id);
     void this.state.storage.put(`edit:${key}`, id);
@@ -1605,6 +1639,16 @@ export class WorldDO implements DurableObject {
     if (id === BlockId.FIRE) this.fire.onFirePlaced(x, y, z);
     else this.fire.onFireRemoved(x, y, z);
     if (id === BlockId.WATER || id === BlockId.LAVA) this.resolveLiquidInteractionAt(x, y, z);
+    // Same split as world.ts's add()/remove(): placing leaves starts
+    // watching them, removing ANY block stops watching it (a no-op if it
+    // wasn't leaves), and removing a log re-checks every leaf that could now
+    // be orphaned within LeavesManager's own RANGE.
+    if (id === BlockId.OAK_LEAVES) {
+      this.leaves.addLeaf(x, y, z);
+    } else if (id === BlockId.AIR) {
+      this.leaves.removeLeaf(x, y, z);
+      if (oldId === BlockId.OAK_LOG) this.leaves.onLogRemoved(x, y, z, (bx, by, bz) => this.getBlockAt(bx, by, bz));
+    }
   }
 
   /**

@@ -101,7 +101,7 @@ vez más cuando la promesa resuelve). No se toca `block-preview.ts` — es
 código compartido sin bugs, el problema es sólo el orden de arranque de
 multiplayer.
 
-## Fase 5 — Sin "doll" (muñeco de vista previa) en el inventario
+## Fase 5 — Sin "doll" (muñeco de vista previa) en el inventario  ✅ HECHO
 **Causa confirmada:** singleplayer tiene `<canvas id="backpack-doll">`
 dentro de `#backpack-panel` (`index.html:186`), estilizado en
 `style.css:182-191`, manejado por la clase `InventoryDoll`
@@ -195,7 +195,7 @@ que singleplayer: Q sólo = 1 ítem, Ctrl+Q = todo el stack), y en
 `handleDropItem` usar `removeFromSlot(slot, all ? Infinity : 1)` en vez del
 `Infinity` fijo actual.
 
-## Fase 10 — Menú de pausa no es visualmente el de singleplayer
+## Fase 10 — Menú de pausa no es visualmente el de singleplayer  ✅ HECHO
 **Causa confirmada:** el `#pause-menu` real de singleplayer
 (`index.html:217-249`) tiene dos vistas intercambiables —
 `#pause-view` (botones "Back to game"/"Options"/"Leave World", clase
@@ -218,7 +218,7 @@ Los sliders que ya se decidió NO incluir (render distance, ver Fase 7 del
 plan anterior) siguen afuera; el resto reusa el layout real en vez del
 propio.
 
-## Fase 11 — Sin animación de agachado ni de swing de mano
+## Fase 11 — Sin animación de agachado ni de swing de mano  ✅ HECHO
 **Causa confirmada:** `PlayerModel` ya expone `swingArm()`
 (`player-model.ts:243-247`) y `setSneaking()`/`updateSneak()`
 (`player-model.ts:483-493`). Singleplayer los llama todos los frames que
@@ -247,7 +247,7 @@ jugadores remotos en `updateRemoteAnimation` (`multiplayer-game.ts:1767-
   de golpe, mandando un pulso de un tick) para que `updateRemoteAnimation`
   pueda llamar `swingArm()`/`setSneaking()` en los otros clientes también.
 
-## Fase 12 — Ítem equipado no se ve en la mano
+## Fase 12 — Ítem equipado no se ve en la mano  ✅ HECHO
 **Causa confirmada:** `PlayerModel.setHeldItem(id)` existe
 (`player-model.ts:428+`, comentario "Show the selected hotbar block/item in
 the model's right fist"). Singleplayer lo llama al cambiar de slot:
@@ -277,7 +277,7 @@ dispara el sonido de dolor) nunca llama `localPlayerModel?.hurt()`.
 `soundManager.playRandom('player/Player_hurt', ...)` existente en ese mismo
 bloque, mismo patrón que Fase 13 usa para jugadores remotos.
 
-## Fase 14 — Cabeza del modelo no sube/baja al mirar arriba/abajo
+## Fase 14 — Cabeza del modelo no sube/baja al mirar arriba/abajo  ✅ HECHO
 **Causa confirmada, alcance = sólo jugadores remotos.** Para el cuerpo
 LOCAL, `multiplayer-game.ts:2101` ya pasa el pitch real:
 `localPlayerModel.setOrientation(yaw, pitch, ...)` — correcto. Para
@@ -360,7 +360,7 @@ existente en `multiplayer-game.ts:312`) sea `true`, aplicada sobre
 (`multiplayer-game.ts:2122`) — mismo número mágico (10) y mismo criterio
 que `pause-menu.ts:213`.
 
-## Fase 18 — Las hojas no desaparecen al talar el tronco
+## Fase 18 — Las hojas no desaparecen al talar el tronco  ✅ HECHO
 **Causa confirmada: no existe ningún puerto server-side.** Singleplayer
 tiene un sistema completo de decay de hojas, `LeavesManager`
 (`src/leaves-manager.ts`, BFS de distancia a un tronco con
@@ -417,7 +417,7 @@ antes de las llamadas de las líneas 1934 y 1945 — la misma condición que ya
 existe dos líneas más arriba para el bark idle, sólo repetida en los dos
 sitios que la omiten.
 
-## Fase 21 — Mobs sueltos en el spawn que no son de nadie
+## Fase 21 — Mobs sueltos en el spawn que no son de nadie  ✅ HECHO
 **Causa confirmada — no es un spawn activo, es estado persistido viejo.**
 `spawnInitialMobs()` ya no existe (confirmado, Fase 9 del plan anterior lo
 eliminó) y el spawner por jugador (`game/mob-spawning.ts`) sólo spawnea
