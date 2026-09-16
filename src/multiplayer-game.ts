@@ -13,7 +13,8 @@ import { ViewBob } from './view-bob';
 import { showHeldItemName } from './held-item-name';
 import { playClick } from './ui-sound';
 import { showTooltip, hideTooltip } from './tooltip';
-import { loadPlayerSkinDataUrl } from './player-skin';
+import { loadPlayerSkinDataUrl, loadPlayerName } from './player-skin';
+import { isCapeAllowed } from './cape';
 import { loadPlayToken } from './access-gate';
 import { setSingleplayerChatEnabled, setSingleplayerPauseMenuEnabled } from './main';
 import { thirdPersonCameraPosition } from './third-person-camera';
@@ -116,6 +117,8 @@ type RemoteEntity = {
   idleSoundTimer?: number;
   /** This player's own skin materials (see createSkinMaterials) - kept so onEntityRemoved/disconnect can dispose them; undefined for a mob. */
   skinMaterials?: PlayerSkinMaterials;
+  /** Only for kind:'player' - display name, kept so rebuildPlayerAvatarSkin (which only gets an id) can re-apply the cape allowlist on the fresh PlayerModel it builds. */
+  name?: string;
   /** Health as of the last `state` tick - a drop since then triggers the model's hurt flash (and, for a mob, its hurt bark). */
   lastHealth: number;
   /** This entity's yaw as of the last `state` tick - updateRemoteAnimation's setOrientation() reads this every render frame (not just on a tick), since it owns and eases group.rotation.y itself once a player has a playerModel. */
@@ -1661,6 +1664,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     localPlayerModel = new PlayerModel(materials);
     localPlayerModel.setVisible(cameraMode !== 0);
     localPlayerModel.setSlimArms(mpSettings.alexSkin);
+    localPlayerModel.setCapeVisible(isCapeAllowed(loadPlayerName()));
     scene.add(localPlayerModel.group);
     localSkinMaterials = materials;
   }
@@ -2187,6 +2191,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   function makePlayerAvatar(id: number, name: string, skinImage: HTMLImageElement | null): RemoteEntity {
     const materials = createSkinMaterials(skinImage);
     const model = new PlayerModel(materials);
+    model.setCapeVisible(isCapeAllowed(name));
     scene.add(model.group);
     const hitbox = buildPlayerHitbox(id);
     model.group.add(hitbox);
@@ -2209,7 +2214,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // Lower than before (was 1.1, above the model's actual head) and with
       // a translucent background (see .mp-name-tag in style.css) so it reads
       // over any background instead of relying only on a 1px text-shadow.
-      mesh: model.group, hitbox, label, labelOffsetY: 0.55, playerModel: model, skinMaterials: materials,
+      mesh: model.group, hitbox, label, labelOffsetY: 0.55, playerModel: model, skinMaterials: materials, name,
       lastHealth: Infinity, lastYaw: 0, lastPitch: 0, sneaking: false, heldItem: null, moveDeltaX: 0, moveDeltaZ: 0, kind: 'player',
     };
   }
@@ -2221,6 +2226,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const oldGroup = entity.mesh;
     const materials = createSkinMaterials(image);
     const model = new PlayerModel(materials);
+    model.setCapeVisible(isCapeAllowed(entity.name ?? ''));
     model.group.position.copy(oldGroup.position);
     model.group.rotation.copy(oldGroup.rotation);
     const hitbox = buildPlayerHitbox(id);
@@ -2768,7 +2774,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       localPlayerModel.updateSneak(delta);
       localPlayerModel.setAdjustments(ZERO_MODEL_ADJUSTMENTS); // legs (and the rest of the crouch shift) never move without this - see its doc comment
       localPlayerModel.setHeldItem(selectedItemId());
-      localPlayerModel.updateWalkingAnimation(delta);
+      localPlayerModel.updateWalkingAnimation(delta, sprintToggled || touchSprint);
       // Same lightEngine.getRawBrightness/15 shading main.ts's own
       // playerModel.setLightLevel call uses - was never wired here, so the
       // local player's third-person body stayed at its construction-time

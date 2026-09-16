@@ -172,6 +172,11 @@ export class PlayerController {
     this.cameraMode = (this.cameraMode + 1) % 3;
   }
 
+  /** Currently sprinting - for anything outside this class that reacts to it (e.g. player-model.ts's cape tilt). */
+  get isSprinting(): boolean {
+    return this.sprinting;
+  }
+
   /** Double-tap-forward sprint (auto-clears when movement stops, like MCPE). */
   setSprint(on: boolean) {
     this.sprinting = on;

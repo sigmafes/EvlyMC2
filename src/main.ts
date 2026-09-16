@@ -7,6 +7,8 @@ import { Diagnostics } from './diagnostics';
 import { BlockInteraction } from './interaction';
 import { PlayerController } from './player';
 import { PlayerModel } from './player-model';
+import { loadPlayerName } from './player-skin';
+import { isCapeAllowed } from './cape';
 import { World } from './world';
 import { DebugOverlay } from './debug';
 import { TerrainNoise } from './terrain-noise';
@@ -188,6 +190,7 @@ player = new PlayerController(
 const SPAWN = world.findSpawnPoint();
 player.setSpawn(SPAWN.x, SPAWN.y, SPAWN.z);
 const playerModel = new PlayerModel();
+playerModel.setCapeVisible(isCapeAllowed(loadPlayerName()));
 scene.add(playerModel.getGroup());
 let viewBobOn = true;
 // touchControls is constructed later (needs `player`/`interaction`/etc.); this
@@ -782,7 +785,7 @@ function animate() {
   } else {
     playerModel.stopWalking();
   }
-  playerModel.updateWalkingAnimation(delta);
+  playerModel.updateWalkingAnimation(delta, player.isSprinting);
 
   // UI and debug updates
   debugOverlay.update();

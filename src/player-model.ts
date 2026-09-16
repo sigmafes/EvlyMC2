@@ -9,6 +9,7 @@ import {
   createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials,
 } from './player-model-geometry';
 import { createFireOverlay } from './fire-overlay';
+import { Cape } from './cape';
 
 export { createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials };
 
@@ -62,6 +63,7 @@ export class PlayerModel {
   private walkCycleTime = 0;
   private returnStartTime = 0;
   private readonly WALK_CYCLE_DURATION = 1.0; // 1 second for full cycle (0.25s per phase)
+  private static readonly SPRINT_CYCLE_SPEEDUP = 1.6; // faster stride, not just faster travel, while sprinting
   private readonly RETURN_DURATION = 0.3; // 0.3 seconds to return to idle
   private returnStartAngleLeft = 0;
   private returnStartAngleRight = 0;
@@ -84,6 +86,8 @@ export class PlayerModel {
   // flame overlay the mob models use (fire-overlay.ts).
   private onFire = false;
   private readonly fireOverlay: THREE.Group;
+  private readonly cape: Cape;
+  private sprinting = false;
   private static readonly FIRE_TINT_STRENGTH = 0.25;
   private static readonly FIRE_ORANGE = new THREE.Color(1, 0.4, 0);
   // Death animation (same treatment as MobModel: topple over Z while
@@ -117,6 +121,21 @@ export class PlayerModel {
     // is what keeps this centred on the body instead of floating above the head.
     this.fireOverlay = createFireOverlay(0.35, 1.8, -1.62);
     this.group.add(this.fireOverlay);
+
+    // Shoulders: torsoGroup pivots at the NECK (y=-0.24, player-model-
+    // geometry.ts), and the torso mesh itself is centred 0.38 further down
+    // from that pivot (so its top edge lands exactly back at the pivot,
+    // y=-0.24+0.38-0.76/2=-0.24) - the shoulder/neck line is -0.24 in the
+    // model's own eye-level-origin space, NOT +0.14 (that was double-
+    // counting the pivot offset and landed the cape inside the head - eyes
+    // sit at y=0.02, head spans roughly -0.255..0.295). Z starts at the
+    // torso's own back face (depth 0.275, half 0.1375) - forward is -Z in
+    // this engine, so +Z is the player's back - then pushed further out
+    // still so the cape doesn't clip/overlap into the torso mesh.
+    this.cape = new Cape();
+    this.cape.group.position.set(0, -0.24, 0.2);
+    this.cape.group.visible = false; // allowlisted cosmetic - see setCapeVisible()
+    this.group.add(this.cape.group);
   }
 
   /** Toggle slim ("Alex") arms. Rebuilds both arm meshes. */
@@ -264,7 +283,8 @@ export class PlayerModel {
   /**
    * Update walking animation (call every frame with delta time in seconds).
    */
-  updateWalkingAnimation(deltaTime: number) {
+  updateWalkingAnimation(deltaTime: number, sprinting = false) {
+    this.sprinting = sprinting;
     const swingOffset = this.updateSwing(deltaTime);
 
     // Handle return to idle pose
@@ -286,6 +306,7 @@ export class PlayerModel {
       if (returnProgress >= 1) {
         this.isReturning = false;
       }
+      this.updateCape(deltaTime, 1 - returnProgress);
       return;
     }
 
@@ -294,10 +315,14 @@ export class PlayerModel {
       // arm to exactly 0 for one extra frame once it finishes, since the arc
       // only asymptotically nears 0 rather than landing on it exactly).
       if (swingOffset !== 0 || this.armRightRotation !== 0) this.setRightArmRotation(swingOffset);
+      this.updateCape(deltaTime, 0);
       return;
     }
 
-    this.walkCycleTime += deltaTime;
+    // Sprinting speeds up the whole arm/leg cycle instead of just moving
+    // faster with the same swing tempo - real running has a quicker stride,
+    // not just a longer one.
+    this.walkCycleTime += deltaTime * (this.sprinting ? PlayerModel.SPRINT_CYCLE_SPEEDUP : 1);
     if (this.walkCycleTime >= this.WALK_CYCLE_DURATION) {
       this.walkCycleTime -= this.WALK_CYCLE_DURATION;
     }
@@ -351,6 +376,15 @@ export class PlayerModel {
     this.setRightArmRotation(rightArmAngle + swingOffset);
     this.setLeftLegRotation(leftLegAngle);
     this.setRightLegRotation(rightLegAngle);
+    this.updateCape(deltaTime, 1);
+  }
+
+  /** `pow` is how much of the walk-flutter term should show (0 idle, ramping via isReturning, 1 full stride) - see cape.ts's Cape.update() doc comment for the rest of the physics. */
+  private updateCape(deltaTime: number, pow: number): void {
+    this.cape.update(
+      deltaTime, this.group.position, this.bodyYaw,
+      this.walkCycleTime / this.WALK_CYCLE_DURATION, pow, this.sneakAmount, this.sprinting,
+    );
   }
 
   /**
@@ -479,6 +513,11 @@ export class PlayerModel {
     this.group.visible = visible;
   }
 
+  /** Capes are an allowlisted cosmetic (see cape.ts's isCapeAllowed) - hidden by default, callers turn it on once they know this model's account name. */
+  setCapeVisible(visible: boolean) {
+    this.cape.group.visible = visible;
+  }
+
   /** Target the crouch pose (MCPE-style: torso leans, arms lift, legs tuck back). */
   setSneaking(sneaking: boolean) {
     this.sneakTarget = sneaking ? 1 : 0;
@@ -533,6 +572,7 @@ export class PlayerModel {
     this.deathTimer = 0;
     this.group.rotation.z = 0;
     this.setVisible(true);
+    this.cape.reset(this.group.position); // don't let it swing in from the death spot across the map on respawn
   }
 
   /**
