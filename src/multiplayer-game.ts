@@ -2426,9 +2426,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     renderer.render(scene, camera);
     // Own depth range on top of the main scene, so the held item never clips
     // into terrain regardless of how close a wall is - same as main.ts's own
-    // renderer.clearDepth() + hand.render() pair.
+    // renderer.autoClear=false + clearDepth() + hand.render() + autoClear=true
+    // sequence. Missing the autoClear toggle here meant hand.render()'s own
+    // renderer.render() call auto-cleared the COLOR buffer too (WebGLRenderer's
+    // default), wiping the just-drawn world to black behind the hand every
+    // frame - invisible only while a panel hid the hand (setVisible(false)
+    // skips rendering it entirely), which is why opening the inventory/pause
+    // screen "fixed" it.
+    renderer.autoClear = false;
     renderer.clearDepth();
     hand.render(renderer);
+    renderer.autoClear = true;
   }
   requestAnimationFrame(frame);
 
