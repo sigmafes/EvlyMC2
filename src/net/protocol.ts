@@ -29,8 +29,17 @@ export const PROTOCOL_VERSION = 2;
 
 export type Vec3 = { x: number; y: number; z: number };
 
-/** One end of a `craftMove`: which slot array, and the index within it. Spelled out rather than encoded as offset index ranges so a stray index can't silently mean "some inventory slot". */
-export type CraftSlotRef = { zone: 'inventory' | 'grid'; index: number };
+/**
+ * One end of an inventory move (`invPickUp`/`invPlace`, and the older
+ * `craftMove`): which slot "array", and the index within it. Spelled out
+ * rather than encoded as offset index ranges so a stray index can't
+ * silently mean "some inventory slot". `furnaceInput`/`furnaceFuel` address
+ * the currently-open furnace's own two placeable slots (see world-do.ts's
+ * Session.openFurnace) - `index` is unused/0 for those, there's only one of
+ * each. The furnace's output slot isn't addressable here at all: it's
+ * take-only, still handled by the older, simpler `furnaceTakeOutput`.
+ */
+export type CraftSlotRef = { zone: 'inventory' | 'grid' | 'furnaceInput' | 'furnaceFuel'; index: number };
 
 /**
  * An item lying on the ground (Fase 1 del plan de porteo): what a broken block

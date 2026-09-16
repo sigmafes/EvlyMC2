@@ -564,6 +564,11 @@ export class WorldDO implements DurableObject {
         this.sendFurnaceState(session);
         break;
       case 'furnaceClose':
+        // Same reasoning as closeCraftGrid's own cancel: whatever's on the
+        // cursor has to go back to its real slot (or the furnace's) before
+        // the furnace stops being addressable, not just rely on the client
+        // having already sent invCancel itself.
+        this.handleInvCancel(session);
         session.openFurnace = null;
         break;
       case 'furnaceInsert':
@@ -914,7 +919,44 @@ export class WorldDO implements DurableObject {
   }
 
   private slotArrayFor(session: Session, ref: CraftSlotRef): InventorySlot[] {
-    return ref.zone === 'grid' ? (session.craft?.inputs ?? []) : session.inventory;
+    if (ref.zone === 'grid') return session.craft?.inputs ?? [];
+    if (ref.zone === 'furnaceInput' || ref.zone === 'furnaceFuel') return this.furnaceSlotArray(session, ref.zone);
+    return session.inventory;
+  }
+
+  /**
+   * A furnace's input/fuel slot, wrapped as a 1-element InventorySlot[] so
+   * handleInvPickUp/Place/Cancel below can treat it exactly like any other
+   * slot array - furnace.ts's own FurnaceState only stores {id,count}
+   * (SlotRef), not the name/texture renderSlot() needs, so describeSlot()
+   * (the same helper session.inventory's own slots already use) fills that
+   * in. Empty when no furnace is open or the block there stopped being one
+   * (walked away, someone broke it) - the caller's own index-in-range check
+   * then naturally no-ops, same as any other out-of-range ref.
+   */
+  private furnaceSlotArray(session: Session, zone: 'furnaceInput' | 'furnaceFuel'): InventorySlot[] {
+    if (!session.openFurnace) return [];
+    const { x, y, z } = session.openFurnace;
+    if (this.getBlockAt(x, y, z) !== BlockId.FURNACE) return [];
+    const furnace = this.getOrCreateFurnace(x, y, z);
+    const ref = zone === 'furnaceInput' ? furnace.input : furnace.fuel;
+    if (ref === null) return [createEmptySlot()];
+    const desc = describeSlot(ref.id);
+    return [{ id: ref.id, name: desc.name, sideTexture: desc.sideTexture, count: ref.count }];
+  }
+
+  /** Writes a furnaceSlotArray() result back into the real FurnaceState after handleInvPickUp/Place/Cancel mutated it - a no-op for any other zone. */
+  private flushIfFurnace(session: Session, ref: CraftSlotRef, arr: InventorySlot[]): void {
+    if (ref.zone !== 'furnaceInput' && ref.zone !== 'furnaceFuel') return;
+    if (!session.openFurnace || arr.length === 0) return;
+    const { x, y, z } = session.openFurnace;
+    if (this.getBlockAt(x, y, z) !== BlockId.FURNACE) return;
+    const furnace = this.getOrCreateFurnace(x, y, z);
+    const slot = arr[0];
+    const patch = slot.id === null ? null : { id: slot.id, count: slot.count ?? 0 };
+    if (ref.zone === 'furnaceInput') furnace.input = patch; else furnace.fuel = patch;
+    this.furnacesDirty = true; // items moving in or out is worth writing straight away, same as handleFurnaceInsert
+    this.sendFurnaceState(session);
   }
 
   private sendHeld(session: Session): void {
@@ -934,6 +976,7 @@ export class WorldDO implements DurableObject {
     session.heldItem = { ...slot, count: take };
     session.heldFrom = from;
     removeFromSlot(slot, take);
+    this.flushIfFurnace(session, from, arr);
     this.sendInventory(session);
     this.sendCraftGrid(session);
     this.sendHeld(session);
@@ -979,11 +1022,13 @@ export class WorldDO implements DurableObject {
       if (from) {
         const fromArr = this.slotArrayFor(session, from);
         if (from.index >= 0 && from.index < fromArr.length) fromArr[from.index] = previous;
+        this.flushIfFurnace(session, from, fromArr);
       }
       session.heldItem = null;
       session.heldFrom = null;
     }
 
+    this.flushIfFurnace(session, to, arr);
     this.sendInventory(session);
     this.sendCraftGrid(session);
     this.sendHeld(session);
@@ -1008,6 +1053,7 @@ export class WorldDO implements DurableObject {
           // restoreHeld() ("A different block sitting there, or overflow, is
           // dropped" - this server has no ground-drop fallback for it here).
         }
+        this.flushIfFurnace(session, from, arr);
       }
     }
     this.sendInventory(session);

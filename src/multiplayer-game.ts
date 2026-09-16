@@ -28,7 +28,8 @@ import { SKELETON_SPEC } from './skeleton-model';
 import { renderSlot, createEmptySlot, HOTBAR_SIZE, TOTAL_SLOTS, type InventorySlot } from './inventory';
 import { Hud } from './hud';
 import { COOK_SECONDS } from './smelting';
-import { foodValue, isBlock, ItemId } from './item';
+import { foodValue, isBlock, ItemId, ITEMS } from './item';
+import { BLOCK_CATALOG } from './creative-palette';
 import { makeStack } from './item-stack';
 import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight, initPreviewAtlases, renderBlockPreview, renderItemIcon } from './block-preview';
 import { breakTime } from './block-hardness';
@@ -1169,11 +1170,16 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   let craftOutput: InventorySlot = createEmptySlot();
 
   /**
-   * Furnace GUI: right-click a placed furnace block to open it. Simplified
-   * from a real drag-and-drop slot grid (same reasoning as the craft menu
-   * above) - "Meter combustible"/"Meter para fundir" take the player's
-   * currently SELECTED hotbar slot's whole stack into that furnace slot
-   * instead of a per-item drag, and clicking the output slot collects it.
+   * Furnace GUI: right-click a placed furnace block to open it. Input/fuel
+   * are real cursor-follows-mouse slots now (same invPickUp/invPlace model
+   * as the backpack/table, see onSlotClick/onSlotRightClick above) instead
+   * of "Meter combustible"/"Meter para fundir" buttons that only ever took
+   * the selected hotbar slot's whole stack - and the player's own inventory
+   * is mirrored into the panel (like singleplayer's #furnace-backpack/
+   * #furnace-hotbar) so it's visible and usable while the furnace is open,
+   * not just the three furnace slots. Output stays its own thing (click to
+   * collect straight into the inventory) - it was never a "place into"
+   * target even in singleplayer (bindExternalSlot's takeOnly).
    */
   const furnaceEl = document.createElement('div');
   furnaceEl.id = 'mp-furnace';
@@ -1185,38 +1191,68 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const furnaceOutputSlot = document.createElement('button');
   furnaceOutputSlot.id = 'mp-furnace-output';
   for (const btn of [furnaceInputSlot, furnaceFuelSlot, furnaceOutputSlot]) { btn.className = 'inventory-slot'; btn.type = 'button'; }
+  const furnaceInputRef: CraftSlotRef = { zone: 'furnaceInput', index: 0 };
+  const furnaceFuelRef: CraftSlotRef = { zone: 'furnaceFuel', index: 0 };
+  slotRefByEl.set(furnaceInputSlot, furnaceInputRef);
+  slotRefByEl.set(furnaceFuelSlot, furnaceFuelRef);
+  furnaceInputSlot.addEventListener('click', () => onSlotClick(furnaceInputRef));
+  furnaceInputSlot.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); onSlotRightClick(furnaceInputRef, furnaceInputSlot); });
+  furnaceFuelSlot.addEventListener('click', () => onSlotClick(furnaceFuelRef));
+  furnaceFuelSlot.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); onSlotRightClick(furnaceFuelRef, furnaceFuelSlot); });
+  furnaceOutputSlot.addEventListener('click', () => {
+    if (furnacePos) client.send({ type: 'furnaceTakeOutput', ...furnacePos });
+  });
   const furnaceFlame = document.createElement('div');
   furnaceFlame.id = 'mp-furnace-flame';
   const furnaceArrow = document.createElement('div');
   furnaceArrow.id = 'mp-furnace-arrow';
-  const furnaceButtonsEl = document.createElement('div');
-  furnaceButtonsEl.id = 'mp-furnace-buttons';
-  const furnaceInsertInputBtn = document.createElement('button');
-  furnaceInsertInputBtn.type = 'button';
-  furnaceInsertInputBtn.className = 'texture-button';
-  furnaceInsertInputBtn.textContent = 'Meter para fundir';
-  const furnaceInsertFuelBtn = document.createElement('button');
-  furnaceInsertFuelBtn.type = 'button';
-  furnaceInsertFuelBtn.className = 'texture-button';
-  furnaceInsertFuelBtn.textContent = 'Meter combustible';
-  furnaceButtonsEl.append(furnaceInsertInputBtn, furnaceInsertFuelBtn);
+  // Mirrored inventory, same coordinates/pattern as the backpack/table's own
+  // grid+hotbar - lets the player see and move items while at the furnace
+  // instead of only being able to act on their blind SELECTED slot.
+  const furnaceBackpackEl = document.createElement('div');
+  furnaceBackpackEl.id = 'mp-furnace-backpack';
+  const furnaceBackpackEls = makeInventorySlotButtons(TOTAL_SLOTS - HOTBAR_SIZE, HOTBAR_SIZE);
+  furnaceBackpackEls.forEach((el) => furnaceBackpackEl.appendChild(el));
+  const furnaceHotbarEl = document.createElement('div');
+  furnaceHotbarEl.id = 'mp-furnace-hotbar';
+  const furnaceHotbarEls = makeInventorySlotButtons(HOTBAR_SIZE, 0);
+  furnaceHotbarEls.forEach((el) => furnaceHotbarEl.appendChild(el));
   const furnacePanel = document.createElement('div');
   furnacePanel.id = 'mp-furnace-panel';
-  furnacePanel.append(furnaceFlame, furnaceArrow, furnaceInputSlot, furnaceFuelSlot, furnaceOutputSlot, furnaceButtonsEl);
+  furnacePanel.append(
+    furnaceFlame, furnaceArrow, furnaceInputSlot, furnaceFuelSlot, furnaceOutputSlot,
+    furnaceBackpackEl, furnaceHotbarEl,
+  );
   furnaceEl.appendChild(furnacePanel);
   document.body.appendChild(furnaceEl);
   let furnacePos: { x: number; y: number; z: number } | null = null;
   let furnaceOpenState = false;
+  /** furnace.ts's FurnaceState only stores {id,count} (SlotRef) - not the name/texture renderSlot() needs - so this fills that in the same way world-do.ts's describeSlot() does for the real inventory. */
+  function furnaceSlotToInventorySlot(ref: { id: number; count: number } | null): InventorySlot {
+    if (!ref) return createEmptySlot();
+    if (isBlock(ref.id)) {
+      const catalogEntry = BLOCK_CATALOG.find((b) => b.id === ref.id);
+      return catalogEntry ? { ...catalogEntry, count: ref.count } : { id: ref.id, name: 'Block', count: ref.count };
+    }
+    const def = ITEMS[ref.id];
+    return { id: ref.id, name: def?.name ?? 'Item', sideTexture: def?.texture, count: ref.count };
+  }
   function renderFurnace(state: { input: { id: number; count: number } | null; fuel: { id: number; count: number } | null; output: { id: number; count: number } | null; cookTime: number; litTime: number; litDuration: number }): void {
-    renderSlot(furnaceInputSlot, state.input ? { id: state.input.id, name: '', count: state.input.count } : createEmptySlot());
-    renderSlot(furnaceFuelSlot, state.fuel ? { id: state.fuel.id, name: '', count: state.fuel.count } : createEmptySlot());
-    renderSlot(furnaceOutputSlot, state.output ? { id: state.output.id, name: '', count: state.output.count } : createEmptySlot());
+    renderSlot(furnaceInputSlot, furnaceSlotToInventorySlot(state.input));
+    renderSlot(furnaceFuelSlot, furnaceSlotToInventorySlot(state.fuel));
+    renderSlot(furnaceOutputSlot, furnaceSlotToInventorySlot(state.output));
     // Same clip-path gauges as singleplayer's #furnace-arrow/#furnace-flame
     // (style.css:297-323) instead of the old width%-based generic bars.
     const cookPct = Math.min(1, state.cookTime / COOK_SECONDS) * 100;
     furnaceArrow.style.clipPath = `inset(0 ${100 - cookPct}% 0 0)`;
     const litPct = state.litDuration > 0 ? (state.litTime / state.litDuration) * 100 : 0;
     furnaceFlame.style.clipPath = `inset(${100 - litPct}% 0 0 0)`;
+    for (let i = 0; i < furnaceBackpackEls.length; i++) {
+      renderSlot(furnaceBackpackEls[i], inventorySlots[HOTBAR_SIZE + i] ?? createEmptySlot());
+    }
+    for (let i = 0; i < furnaceHotbarEls.length; i++) {
+      renderSlot(furnaceHotbarEls[i], inventorySlots[i] ?? createEmptySlot());
+    }
   }
   function setFurnaceOpen(open: boolean, pos?: { x: number; y: number; z: number }): void {
     furnaceOpenState = open;
@@ -1226,20 +1262,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       client.send({ type: 'furnaceOpen', x: pos.x, y: pos.y, z: pos.z });
       unlockPointerForGui();
     } else {
+      if (heldItem) client.send({ type: 'invCancel' });
       if (furnacePos) client.send({ type: 'furnaceClose' });
       furnacePos = null;
       lockPointer(canvas);
     }
   }
-  furnaceInsertInputBtn.addEventListener('click', () => {
-    if (furnacePos) client.send({ type: 'furnaceInsert', ...furnacePos, target: 'input' });
-  });
-  furnaceInsertFuelBtn.addEventListener('click', () => {
-    if (furnacePos) client.send({ type: 'furnaceInsert', ...furnacePos, target: 'fuel' });
-  });
-  furnaceOutputSlot.addEventListener('click', () => {
-    if (furnacePos) client.send({ type: 'furnaceTakeOutput', ...furnacePos });
-  });
 
   let yaw = 0;
   let pitch = 0;
