@@ -2397,6 +2397,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       heldItem = item;
       renderGhost();
     },
+    // Same sound as singleplayer's Inventory.damageSelected() playing it
+    // directly (main.ts:270,401) - the slot itself already went empty via
+    // the inventoryUpdate sent alongside this.
+    onToolBroke: () => soundManager.playOne('player/break', 0.8),
     onFurnaceState: (x, y, z, state) => {
       if (furnacePos && furnacePos.x === x && furnacePos.y === y && furnacePos.z === z) renderFurnace(state);
     },

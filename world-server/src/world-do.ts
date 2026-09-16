@@ -14,6 +14,7 @@ import { createEmptyInventory, createEmptySlot, describeSlot, addToInventory, re
 import { getDrops } from '../../src/drops';
 import { breakTime } from '../../src/block-hardness';
 import { isBlock, maxStackOf, foodValue, ITEMS } from '../../src/item';
+import { isTool, maxDurability } from '../../src/tools';
 import { BLOCK_CATALOG } from '../../src/creative-palette';
 import { LeavesManager } from '../../src/leaves-manager';
 import type { MobKind } from './game/mob-manager';
@@ -644,6 +645,29 @@ export class WorldDO implements DurableObject {
    * enough that a modified client sending breakBlock right after breakStart
    * still gets rejected, loose enough that no legitimate dig ever is.
    */
+  /**
+   * Spends `amount` uses on the player's currently SELECTED tool (a no-op
+   * for anything that isn't a tool - maxDurability() returns 0 for those,
+   * same guard singleplayer's Inventory.damageSelected() has), breaking it
+   * (emptying the slot) once its damage reaches maxDurability(). Mirrors
+   * that same method exactly, just reading/writing session.inventory
+   * instead of a client-local array, and sending `toolBroke` instead of
+   * playing the sound directly (this is server-side, no SoundManager here).
+   */
+  private damageTool(session: Session, amount: number): void {
+    const slot = session.inventory[session.selectedSlot];
+    const uses = maxDurability(slot.id);
+    if (uses <= 0) return;
+    const damage = (slot.damage ?? 0) + amount;
+    if (damage >= uses) {
+      session.inventory[session.selectedSlot] = createEmptySlot();
+      this.send(session.ws, { type: 'toolBroke' });
+    } else {
+      slot.damage = damage;
+    }
+    this.sendInventory(session);
+  }
+
   private handleBreakBlock(session: Session, x: number, y: number, z: number): void {
     const brokenId = this.getBlockAt(x, y, z);
     const mining = session.mining;
@@ -665,6 +689,11 @@ export class WorldDO implements DurableObject {
     for (const drop of getDrops(brokenId, canHarvest)) {
       this.droppedItems.spawn(drop.id, drop.count, new THREE.Vector3(x, y, z));
     }
+    // One use per block actually broken - same as interaction.ts's
+    // finishMining(), which spends it on whatever's SELECTED right now, not
+    // necessarily the item captured at breakStart (mining.itemId) if the
+    // player swapped mid-dig.
+    this.damageTool(session, 1);
   }
 
   /**
@@ -738,7 +767,10 @@ export class WorldDO implements DurableObject {
       ownerId: session.id,
       crit: draw >= 1,
     });
-    this.sendInventory(session);
+    // Same as main.ts's shootBowFn: inventory.damageSelected(1) - the bow is
+    // always a tool (tools.ts's TIER_BOW), so this also covers the
+    // sendInventory() the arrow removal above still needs.
+    this.damageTool(session, 1);
   }
 
   /**
@@ -1650,6 +1682,8 @@ export class WorldDO implements DurableObject {
     if (!mobPos) return; // already dead/gone
     if (attacker.physics.state.position.distanceTo(mobPos) > PLAYER_MELEE_RANGE) return;
     this.mobs.damage(targetId, PLAYER_MELEE_DAMAGE, attacker.physics.state.position);
+    // LCE DiggerItem::hurtEnemy - hitting something costs two uses, not one.
+    this.damageTool(attacker, 2);
   }
 
   /**
@@ -1666,6 +1700,7 @@ export class WorldDO implements DurableObject {
     if (from.distanceTo(to) > PLAYER_MELEE_RANGE) return;
     if (this.inSpawnProtection(from) || this.inSpawnProtection(to)) return;
     this.hurtPlayer(target.id, PLAYER_MELEE_DAMAGE, attacker.name);
+    this.damageTool(attacker, 2);
   }
 
   /**

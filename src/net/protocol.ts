@@ -302,6 +302,8 @@ export type ServerMessage =
   | { type: 'craftGridClosed' }
   /** Echoes `session.heldItem` (see invPickUp/invPlace/invCancel's doc comment) - `null` when nothing is held, so the client's cursor-following ghost knows what to draw and when to hide. */
   | { type: 'invHeld'; item: InventorySlot | null }
+  /** The selected tool just broke from durability (mining/attacking/shooting a bow enough times - see src/tools.ts's maxDurability). Purely a "play the break sound" cue for the client, same as singleplayer's own local Inventory.damageSelected() return value triggering it directly - the slot itself already went empty in the `inventoryUpdate` sent alongside this. */
+  | { type: 'toolBroke' }
   /**
    * You died. The server freezes this player at 0 health - no physics, no
    * input, untargetable - until they send `respawn`, rather than teleporting
@@ -331,7 +333,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
       'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState',
-      'craftGridState', 'craftGridClosed', 'invHeld', 'died', 'chat', 'pong',
+      'craftGridState', 'craftGridClosed', 'invHeld', 'toolBroke', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
 }

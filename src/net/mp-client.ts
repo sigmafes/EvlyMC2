@@ -16,6 +16,7 @@ export type MpClientHandlers = {
   onCraftGridState: (side: 2 | 3, inputs: InventorySlot[], output: InventorySlot) => void;
   onCraftGridClosed: () => void;
   onInvHeld: (item: InventorySlot | null) => void;
+  onToolBroke: () => void;
   onDied: (killedBy?: string) => void;
   onChat: (from: string, text: string) => void;
   /** Round-trip reply to a `ping` this client sent - `clientTimeMs` is its own value echoed back, so `performance.now() - clientTimeMs` is the RTT. */
@@ -65,6 +66,7 @@ export class MpClient {
         case 'craftGridState': handlers.onCraftGridState(msg.side, msg.inputs, msg.output); break;
         case 'craftGridClosed': handlers.onCraftGridClosed(); break;
         case 'invHeld': handlers.onInvHeld(msg.item); break;
+        case 'toolBroke': handlers.onToolBroke(); break;
         case 'died': handlers.onDied(msg.killedBy); break;
         case 'chat': handlers.onChat(msg.from, msg.text); break;
         case 'pong': handlers.onPong(msg.clientTimeMs, msg.serverTimeMs); break;
