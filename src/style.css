@@ -392,7 +392,7 @@ body {
   filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, .6));
   opacity: 0.9;
 }
-/* Above every multiplayer panel (950) but below the cursor (2000) - see
+/* Above every multiplayer panel (970) but below the cursor (2000) - see
    #custom-cursor's own z-index comment. */
 #mp-inventory-ghost { z-index: 1500; }
 
@@ -1447,13 +1447,14 @@ body.touch #crosshair {
 #mp-chat-input[hidden] { display: none; }
 #mp-chat-input:focus { outline: none; }
 
-/* Death screen. Sits above every other multiplayer HUD layer (all z-index
-   901) and, unlike them, DOES take pointer events - the respawn button is the
+/* Death screen. Sits above every other multiplayer HUD layer, #mp-hotbar
+   (960) included - see #mp-options's own comment on the 970 tier - and,
+   unlike most of them, DOES take pointer events - the respawn button is the
    only way out, since the server holds the player dead until it's pressed. */
 #mp-death-screen {
   position: fixed;
   inset: 0;
-  z-index: 950;
+  z-index: 970;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1492,11 +1493,12 @@ body.touch #crosshair {
    alive in the DOM for the whole page - see multiplayer-game.ts's optionsEl
    doc comment for why multiplayer needs a separate element with the same
    look rather than reusing that one directly. Same rule body as #pause-menu,
-   just z-index 950 (multiplayer's own panel layer) instead of 10. */
+   just z-index 970 (multiplayer's own panel layer, above #mp-hotbar's 960 -
+   see #mp-hotbar's own comment) instead of 10. */
 #mp-options {
   position: fixed;
   inset: 0;
-  z-index: 950;
+  z-index: 970;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -1883,9 +1885,9 @@ body.touch #mp-crosshair {
   height: 0;
   transform: translate(-2px, -2px);
   /* Above every multiplayer GUI panel (#mp-backpack/#mp-crafting-table/
-     #mp-options etc. sit at z-index 950 - see multiplayer-game.ts) as well
-     as singleplayer's own #pause-menu (10) - the cursor has to stay on top
-     of whichever mouse-driven panel is open, not just singleplayer's. */
+     #mp-options etc. sit at z-index 970) as well as singleplayer's own
+     #pause-menu (10) - the cursor has to stay on top of whichever
+     mouse-driven panel is open, not just singleplayer's. */
   z-index: 2000;
   pointer-events: none;
   border-style: solid;
@@ -2034,7 +2036,10 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
   /* Above #touch-look/#touch-ui (950/951 on touch, see the override below) -
      otherwise that full-screen look/mine/attack layer sits on top and
      swallows a tap meant for a hotbar slot before it ever reaches the
-     button underneath, so slots couldn't be selected by touch at all. */
+     button underneath, so slots couldn't be selected by touch at all - but
+     BELOW every real GUI panel (#mp-backpack/#mp-crafting-table/#mp-furnace/
+     #mp-options/#mp-death-screen, all bumped to 970 for exactly this), so
+     the hotbar doesn't paint over their dark overlay while one is open. */
   z-index: 960;
   display: flex;
   transform: translateX(-50%);
@@ -2070,7 +2075,7 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
 #mp-crafting-table {
   position: fixed;
   inset: 0;
-  z-index: 950;
+  z-index: 970; /* above #mp-hotbar's 960 - see its own comment */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2186,7 +2191,7 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
 #mp-furnace {
   position: fixed;
   inset: 0;
-  z-index: 950;
+  z-index: 970; /* above #mp-hotbar's 960 - see its own comment */
   display: flex;
   align-items: center;
   justify-content: center;
