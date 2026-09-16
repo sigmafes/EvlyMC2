@@ -1947,6 +1947,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       if (mineSound) soundManager.playSound(mineSound, 0.5);
       localPlayerModel?.swingArm(); // repeats every chip, same cadence interaction.ts's own swing-while-mining uses
       hand.swing(); // first-person view - same onSwing cue main.ts wires into BlockInteraction
+      client.send({ type: 'swing' }); // so every OTHER client plays the same third-person swing (see protocol.ts's doc comment)
     }
 
     if (mining.elapsed >= mining.total) {
@@ -2003,6 +2004,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       client.send({ type: 'attack', targetId: entityId });
       localPlayerModel?.swingArm(); // same third-person swing cue as a successful mine start below
       hand.swing();
+      client.send({ type: 'swing' }); // so every OTHER client plays the same third-person swing (see protocol.ts's doc comment)
       return true;
     }
     if (entityId !== undefined || !hit.face) return false;
@@ -2623,6 +2625,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       const op = remoteEntities.get(id);
       if (op) { removeEntityAvatar(op); remoteEntities.delete(id); }
     },
+    // Someone else's cosmetic swing (see protocol.ts's `swing`/`entitySwing`
+    // doc comments) - only ever a player (mobs animate their own attacks
+    // straight from EntitySnapshot.aiming/state, they don't send this).
+    onEntitySwing: (id) => { remoteEntities.get(id)?.playerModel?.swingArm(); },
     onPlayerSkin: (playerId, skin) => {
       playerSkins.set(playerId, skin);
       if (remoteEntities.has(playerId)) applySkinWhenReady(playerId, skin);

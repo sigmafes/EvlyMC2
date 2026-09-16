@@ -645,6 +645,13 @@ export class WorldDO implements DurableObject {
         if (msg.targetId < 0) this.attackMob(session, msg.targetId);
         else this.attackPlayer(session, msg.targetId);
         break;
+      case 'swing':
+        // Purely cosmetic - see protocol.ts's doc comment. Not gated on
+        // session.dead: a client-side swing already played locally before
+        // this arrives regardless, so dropping it here would just desync
+        // everyone else's view of an animation that already happened.
+        this.broadcast({ type: 'entitySwing', id: session.id }, ws);
+        break;
       case 'respawn':
         this.handleRespawn(session);
         break;

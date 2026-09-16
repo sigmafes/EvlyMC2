@@ -238,6 +238,16 @@ export type ClientMessage =
   | { type: 'furnaceTakeOutput'; x: number; y: number; z: number }
   /** Melee swing at an entity: negative ids are mobs, positive ones other players (PvP - see world-do.ts's spawn-protection check). */
   | { type: 'attack'; targetId: number }
+  /**
+   * Purely cosmetic arm-swing cue (mining chip, or a swing at an entity/thin
+   * air with nothing to hit) - `attack`/`breakBlock` already cover the real
+   * gameplay actions; this exists ONLY so every OTHER client can play the
+   * same third-person swing animation the sender is already playing
+   * locally, since neither of those messages reaches anyone but the server.
+   * Trusted at face value (no reach/cooldown check) - it can't do anything
+   * but animate a model, the same trust level as look direction.
+   */
+  | { type: 'swing' }
   /** Leave the death screen. The server holds a dead player frozen at 0 health until this arrives, rather than respawning them the instant they die. */
   | { type: 'respawn' }
   /** Release the bow: `power` is the draw (0..1) and `dir` the look direction. The server checks the player actually has an arrow, spends it, and spawns a real projectile (see world-do.ts's handleShootBow). */
@@ -297,6 +307,8 @@ export type ServerMessage =
   | { type: 'blockChanged'; x: number; y: number; z: number; blockId: BlockId; waterDistance?: number; silent?: boolean; data?: BlockData }
   | { type: 'inventoryUpdate'; slots: InventorySlot[]; selectedIndex: number }
   | { type: 'entityRemoved'; id: number; reason: 'death' | 'despawn' | 'disconnect' }
+  /** Someone else's cosmetic swing cue (see the `swing` client message) - `id` is a player session id, never a mob's (mobs already animate their own attacks from EntitySnapshot state, they don't send this). Never echoed back to the sender, who already played it locally the instant they sent it. */
+  | { type: 'entitySwing'; id: number }
   /** Another player's skin - sent once when they join (and replayed for every already-connected player right after `welcome`, so a client catches up on everyone already in the world). `skin: null` means the built-in default. */
   | { type: 'playerSkin'; playerId: number; skin: string | null }
   /** Resyncs the client's local day/night clock to the server's authoritative one (day-night-math.ts) - sent whenever the integer skyDarken step changes (so a transition starts on every client at the same moment) and periodically besides, to correct any drift in a client that free-runs the clock locally between corrections (see multiplayer-game.ts). */
@@ -337,7 +349,7 @@ export function isClientMessageType(type: string): type is ClientMessage['type']
       'craftOpen', 'craftClose', 'craftMove', 'craftTakeOutput',
       'invPickUp', 'invPlace', 'invCancel',
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
-      'attack', 'respawn', 'shootBow', 'chat', 'ping',
+      'attack', 'swing', 'respawn', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);
 }
@@ -347,7 +359,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState',
+      'inventoryUpdate', 'entityRemoved', 'entitySwing', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState',
       'craftGridState', 'craftGridClosed', 'invHeld', 'toolBroke', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
