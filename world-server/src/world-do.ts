@@ -96,6 +96,9 @@ const PLAYER_MELEE_RANGE = 4; // matches interaction.ts's own melee reach
 const PLAYER_MELEE_DAMAGE = 4; // a plain fixed "punch" - no tool/weapon damage tiers server-side yet
 /** Matches interaction.ts's ATTACK_COOLDOWN - minimum gap between this player's own accepted melee hits, enforced here since the client-side cooldown alone is trivially bypassable. */
 const PLAYER_ATTACK_COOLDOWN_MS = 300;
+/** Matches main.ts's PLAYER_KNOCKBACK_SPEED/UP - the shove a hostile hit gives the player, applied via PlayerPhysics.applyKnockback (ported but never actually called until now). */
+const PLAYER_KNOCKBACK_SPEED = 5;
+const PLAYER_KNOCKBACK_UP = 4;
 /** Matches player-health.ts's post-hit `invuln` window - how long hurtPlayer() ignores further non-environmental damage after a hit. */
 const PLAYER_HURT_INVULN_MS = 300;
 
@@ -1522,7 +1525,7 @@ export class WorldDO implements DurableObject {
       isActiveAt: (x, z) => this.activeRegion.isActiveAt(x, z),
       getBlockAt: (x, y, z) => this.getBlockAt(x, y, z),
       isDay: () => !this.isNight(),
-      onAttackPlayer: (playerId, damage) => this.hurtPlayer(playerId, damage),
+      onAttackPlayer: (playerId, damage, fromPos) => this.hurtPlayer(playerId, damage, undefined, false, fromPos),
       onShootArrow: (fromPos, targetPos) => this.spawnSkeletonArrow(fromPos, targetPos),
       onDeath: (drops, pos) => {
         for (const drop of drops) this.droppedItems.spawn(drop.id, drop.count, pos);
@@ -1595,7 +1598,7 @@ export class WorldDO implements DurableObject {
       players: this.livePlayers(),
       raycastMobs: (from, dir, maxDist) => this.mobs.raycast(from, dir, maxDist),
       onHitMob: (mobId, damage, fromPos) => this.mobs.damage(mobId, damage, fromPos),
-      onHitPlayer: (playerId, damage) => this.hurtPlayer(playerId, damage),
+      onHitPlayer: (playerId, damage, fromPos) => this.hurtPlayer(playerId, damage, undefined, false, fromPos),
       collect: (playerId) => {
         const session = this.sessionById(playerId);
         if (!session) return false;
@@ -1791,7 +1794,7 @@ export class WorldDO implements DurableObject {
     if (from.distanceTo(to) > PLAYER_MELEE_RANGE) return;
     if (this.inSpawnProtection(from) || this.inSpawnProtection(to)) return;
     attacker.lastAttackAtMs = now;
-    this.hurtPlayer(target.id, PLAYER_MELEE_DAMAGE, attacker.name);
+    this.hurtPlayer(target.id, PLAYER_MELEE_DAMAGE, attacker.name, false, attacker.physics.state.position);
     this.damageTool(attacker, 2);
   }
 
@@ -1828,13 +1831,23 @@ export class WorldDO implements DurableObject {
    * i-frame window a hostile hit just started - same split singleplayer
    * makes at main.ts's own damage() call sites.
    */
-  private hurtPlayer(playerId: number, damage: number, killedBy?: string, ignoreInvuln = false): void {
+  private hurtPlayer(playerId: number, damage: number, killedBy?: string, ignoreInvuln = false, fromPos?: THREE.Vector3): void {
     const session = this.sessionById(playerId);
     if (!session || session.dead) return; // a corpse can't be hurt again
     const now = Date.now();
     if (!ignoreInvuln && now < session.invulnUntilMs) return;
     session.health = Math.max(0, session.health - damage);
     if (!ignoreInvuln) session.invulnUntilMs = now + PLAYER_HURT_INVULN_MS;
+    // Same shove as main.ts's hurtPlayerFromMob - only for a real attack
+    // (fromPos given), never for fall/lava/fire/drown, matching singleplayer.
+    // Applied even on the killing blow, same as singleplayer does.
+    if (fromPos) {
+      const p = session.physics.state.position;
+      const dx = p.x - fromPos.x;
+      const dz = p.z - fromPos.z;
+      const len = Math.hypot(dx, dz) || 1;
+      session.physics.applyKnockback((dx / len) * PLAYER_KNOCKBACK_SPEED, (dz / len) * PLAYER_KNOCKBACK_SPEED, PLAYER_KNOCKBACK_UP);
+    }
     if (session.health > 0) return;
 
     // Stay dead at 0 health instead of respawning on the spot: the client

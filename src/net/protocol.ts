@@ -98,6 +98,8 @@ export type EntitySnapshot = {
   sneaking?: boolean;
   /** Only present for kind:'player' - the selected hotbar slot's item/block id (or null for empty), drives PlayerModel.setHeldItem() for everyone else. */
   heldItem?: number | null;
+  /** Only meaningful for a ranged hostile (skeleton) - sighted+in-range and about to/already shooting, drives BipedMobModel.setAttacking()'s bow-draw pose for everyone else. */
+  aiming?: boolean;
 };
 
 // --- Client -> Server --------------------------------------------------

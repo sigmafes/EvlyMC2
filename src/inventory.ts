@@ -106,6 +106,7 @@ export class Inventory {
   private readonly backpackPanel: HTMLElement;
   private selectedIndex = 0;
   private backpackOpen = false;
+  private dead = false;
   /** Slot+item last announced over the HUD, so a count change doesn't re-flash it. */
   private lastHeldKey: string | null = null;
 
@@ -756,7 +757,14 @@ export class Inventory {
     showHeldItemName(slot.id === null ? null : slot.name);
   }
 
+  /** Blocks opening the backpack over the death screen - there's no inventory to manage from a corpse. Force-closes it if it happened to be open the moment death landed. */
+  setDead(dead: boolean): void {
+    this.dead = dead;
+    if (dead && this.backpackOpen) this.toggleBackpack(false);
+  }
+
   private toggleBackpack(forceOpen?: boolean) {
+    if (this.dead && (forceOpen ?? !this.backpackOpen)) return;
     this.backpackOpen = forceOpen ?? !this.backpackOpen;
     this.backpackPanel.hidden = !this.backpackOpen;
     if (!this.backpackOpen) {

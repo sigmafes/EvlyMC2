@@ -79,7 +79,7 @@ export type ArrowDeps = {
   /** Ray/segment test against mobs for a player-shot arrow - returns the mob it hit, if any. */
   raycastMobs: (from: THREE.Vector3, dir: THREE.Vector3, maxDist: number) => number | null;
   onHitMob: (mobId: number, damage: number, fromPos: THREE.Vector3) => void;
-  onHitPlayer: (playerId: number, damage: number) => void;
+  onHitPlayer: (playerId: number, damage: number, fromPos: THREE.Vector3) => void;
   /** Recover a spent arrow into that player's inventory; returns true if it fit. */
   collect: (playerId: number) => boolean;
 };
@@ -175,7 +175,7 @@ export class ServerArrows {
     for (const player of deps.players) {
       const closest = closestPointOnSegment(from, to, player.pos);
       if (closest.distanceTo(player.pos) > PLAYER_HIT_RADIUS) continue;
-      deps.onHitPlayer(player.id, dmg);
+      deps.onHitPlayer(player.id, dmg, from);
       return true;
     }
     return false;

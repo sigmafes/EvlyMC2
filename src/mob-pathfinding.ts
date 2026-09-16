@@ -102,7 +102,15 @@ export function findPath(
         if (findGroundBlock(isSolid, current.x, current.z + dz, current.groundBlock, maxStepUp, maxStepDown) === null) continue;
       }
 
-      const stepCost = dx !== 0 && dz !== 0 ? Math.SQRT2 : 1;
+      // A diagonal move's true distance is only sqrt(2), but weighting it
+      // that lightly makes A* prefer diagonal shortcuts whenever they save
+      // any distance at all, cutting mobs straight toward block corners even
+      // where corner-cutting IS technically legal (both orthogonal
+      // neighbours walkable, checked above) - a mob's own hitbox is wider
+      // than a single tile, so it still catches on those corners in
+      // practice. A mild extra penalty biases the search toward straight
+      // orthogonal runs, only taking a diagonal when it's a clear win.
+      const stepCost = dx !== 0 && dz !== 0 ? Math.SQRT2 * 1.3 : 1;
       const g = current.g + stepCost;
       const existing = open.get(nk);
       if (existing && existing.g <= g) continue;

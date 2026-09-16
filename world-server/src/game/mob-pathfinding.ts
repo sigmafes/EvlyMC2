@@ -107,7 +107,11 @@ export function findPath(
         if (findGroundBlock(isSolid, current.x, current.z + dz, current.groundBlock, maxStepUp, maxStepDown) === null) continue;
       }
 
-      const stepCost = dx !== 0 && dz !== 0 ? Math.SQRT2 : 1;
+      // See src/mob-pathfinding.ts's matching comment - a mild extra penalty
+      // on diagonal steps biases A* toward straight orthogonal runs instead
+      // of legal-but-corner-hugging diagonal shortcuts, which mobs' own
+      // hitboxes (wider than one tile) still catch on in practice.
+      const stepCost = dx !== 0 && dz !== 0 ? Math.SQRT2 * 1.3 : 1;
       const g = current.g + stepCost;
       const existing = open.get(nk);
       if (existing && existing.g <= g) continue;

@@ -276,7 +276,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
   if (!playerPos) {
     mob.chasing = false;
     mob.rangedSeeTimer = 0;
-    mob.model.setAttacking?.(false);
+    mob.model.setAttacking?.(false); mob.aiming = false;
     return false;
   }
 
@@ -287,7 +287,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
   if (dist > CHASE_RADIUS || Math.abs(dy) > CHASE_RADIUS) {
     mob.chasing = false;
     mob.rangedSeeTimer = 0;
-    mob.model.setAttacking?.(false);
+    mob.model.setAttacking?.(false); mob.aiming = false;
     return false;
   }
   mob.chasing = true;
@@ -298,7 +298,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
 
   if (dist <= RANGED_ATTACK_RADIUS && canSee && mob.rangedSeeTimer >= RANGED_SIGHT_REQUIRED) {
     mob.path = null;
-    mob.model.setAttacking?.(true);
+    mob.model.setAttacking?.(true); mob.aiming = true;
     applyGroundFriction(mob, delta);
     easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
     if (mob.attackTimer <= 0) {
@@ -327,7 +327,7 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
   // in. attackTimer is deliberately left alone (see the top of this
   // function) so the cooldown keeps counting down / persists instead of
   // snapping back to a free shot the instant sight is regained.
-  mob.model.setAttacking?.(false);
+  mob.model.setAttacking?.(false); mob.aiming = false;
   mob.chaseRepathTimer -= delta;
   if (!mob.path || mob.pathIndex >= mob.path.length || mob.chaseRepathTimer <= 0) {
     mob.chaseRepathTimer = CHASE_REPATH_INTERVAL;

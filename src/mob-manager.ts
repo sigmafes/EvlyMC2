@@ -63,8 +63,8 @@ const STEP_INTERVAL = 0.45;
 const IDLE_SOUND_MIN = 4;
 const IDLE_SOUND_MAX = 9;
 const MOB_SOUND_RADIUS = 4; // mob sounds (idle/step/hurt/death) only carry this far
-const KNOCKBACK_SPEED = 5;
-const KNOCKBACK_UP = 4;
+const KNOCKBACK_SPEED = 6.5;
+const KNOCKBACK_UP = 4.5;
 // How long a melee hostile mob's AI holds off re-zeroing horizontal velocity
 // after a hit, so the shove above is actually visible before the anti-hop
 // snap in updateHostileAI() clamps it back down.

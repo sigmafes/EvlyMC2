@@ -10,8 +10,10 @@ import { BlockId, isSolidBlock } from '../../src/block';
 // flee - kept in sync by eye since they're not exported. Small, stable
 // numbers unlikely to drift; if they ever do, singleplayer and multiplayer
 // combat just feel slightly different, nothing breaks.
-const KNOCKBACK_SPEED = 5;
-const KNOCKBACK_UP = 4;
+const KNOCKBACK_SPEED = 6.5;
+const KNOCKBACK_UP = 4.5;
+/** Mirrors mob-manager.ts's own KNOCKBACK_LOCK_DURATION - mob-ai.ts's updateHostileAI zeroes velocity.x/z every tick while chasing UNLESS knockbackTimer > 0 (game/mob-ai.ts's chase branch), so a hit that never set this timer got its shove cancelled the very same/next tick, before the mob could visibly move. Missing here was why hostile knockback looked like it did nothing in multiplayer even though the velocity itself was being set correctly below. */
+const KNOCKBACK_LOCK_DURATION = 0.3;
 const FLEE_DURATION = 3;
 const DEATH_SPIN_DURATION = 0.75; // seconds toppling before vanishing - same as mob-manager.ts's own
 // Sunlight/fire burn tuning, mirroring mob-manager.ts's own private constants (see updateFireAndSun below).
@@ -136,6 +138,7 @@ export class ServerMobManager {
       leapCooldown: 0,
       knockbackTimer: 0,
       rangedSeeTimer: 0,
+      aiming: false,
       onFire: false,
       fireTicksLeft: 0,
       burnTimer: 0,
@@ -277,6 +280,7 @@ export class ServerMobManager {
     mob.velocity.z = pushDir.y * KNOCKBACK_SPEED;
     mob.velocity.y = KNOCKBACK_UP;
     mob.grounded = false;
+    mob.knockbackTimer = KNOCKBACK_LOCK_DURATION;
 
     if (!isHostileKind(mob.kind)) {
       mob.fleeDir.set(pushDir.x, 0, pushDir.y);
@@ -361,6 +365,7 @@ export class ServerMobManager {
       maxHealth: mob.maxHealth,
       onFire: mob.onFire,
       dying: mob.dying,
+      aiming: mob.aiming,
     }));
   }
 }

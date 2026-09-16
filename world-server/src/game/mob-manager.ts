@@ -96,6 +96,12 @@ export type Mob = {
   // Ranged hostile AI (skeleton): seconds of continuous line-of-sight on the
   // target, accumulated toward RANGED_SIGHT_REQUIRED before the first shot.
   rangedSeeTimer: number;
+  // True while sighted+in-range and about to/already shooting - same value
+  // mob-ai.ts already feeds into mob.model.setAttacking?.(), just also kept
+  // as plain data here so it can ride along in a multiplayer EntitySnapshot
+  // (the stub `model` this server gives every mob has no client mesh to
+  // actually pose).
+  aiming: boolean;
   // Fire (sunlight for zombie/skeleton, or lava/fire contact for any mob):
   // ticks damage while exposed AND for fireTicksLeft ticks after losing
   // exposure (the "after-burn"), independent of combat.

@@ -44,6 +44,7 @@ import { createArrowMesh, orientArrowMesh } from './arrow-projectiles';
 import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { ParticleSystem } from './particles';
+import { updateFireOverlayAnimation } from './fire-overlay';
 import { SmokeParticles } from './smoke-particles';
 import { UnderwaterManager } from './underwater-manager';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
@@ -236,11 +237,16 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
 
   const scene = new THREE.Scene();
   scene.background = DAY_SKY_COLOR.clone();
-  // Fog range is shorter than singleplayer's (18-42, tuned to its default
-  // view radius) since multiplayer's own VIEW_RADIUS_CHUNKS (7x7 chunks,
-  // 112 blocks) is smaller - this just needs to hide the chunk-unload edge,
-  // not match singleplayer's exact numbers.
-  const fog = new THREE.Fog(scene.background.clone(), 40, 72);
+  // Same "scale with the actual view distance" formula main.ts's own
+  // applyFogDistanceFor() derives from the (adjustable) renderDistance
+  // setting - multiplayer's VIEW_RADIUS_CHUNKS is fixed rather than a player
+  // setting, but the fog is still tied to it by formula now instead of a
+  // bare literal, so the two numbers can't quietly drift apart again if
+  // VIEW_RADIUS_CHUNKS ever changes. (far = radius*CHUNK_SIZE*1.5, near =
+  // far*40/72 - chosen to reproduce this file's previous tuned 40/72 pair
+  // exactly at the current VIEW_RADIUS_CHUNKS=3, so this is a no-op today.)
+  const MP_FOG_FAR = VIEW_RADIUS_CHUNKS * CHUNK_SIZE * 1.5;
+  const fog = new THREE.Fog(scene.background.clone(), MP_FOG_FAR * (40 / 72), MP_FOG_FAR);
   scene.fog = fog;
   let fogEnabled = true; // set from mpSettings.fog once loaded below (declaration order: mpSettings doesn't exist yet here)
   scene.add(new THREE.AmbientLight(0xffffff, 0.9));
@@ -1041,6 +1047,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
   }
   function setBackpackOpen(open: boolean): void {
+    if (open && isDead) return; // no inventory to manage from the death screen
     backpackOpen = open;
     backpackEl.hidden = !open;
     backpackDoll.setActive(open);
@@ -2166,8 +2173,19 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const hitbox = buildPlayerHitbox(id);
     model.group.add(hitbox);
     const label = document.createElement('div');
-    label.textContent = name;
     label.className = 'mp-name-tag';
+    // One-off cosmetic: sigmafes's own tag reads green -> celeste left to
+    // right instead of the plain white every other player gets. A flat
+    // `color` can't do a gradient, so the text goes on an inner span with a
+    // background gradient clipped to the glyphs themselves instead.
+    if (name === 'sigmafes') {
+      const span = document.createElement('span');
+      span.textContent = name;
+      span.style.cssText = 'background: linear-gradient(90deg, #22c55e, #38bdf8); background-clip: text; -webkit-background-clip: text; color: transparent; -webkit-text-fill-color: transparent;';
+      label.appendChild(span);
+    } else {
+      label.textContent = name;
+    }
     labelLayer.appendChild(label);
     return {
       // Lower than before (was 1.1, above the model's actual head) and with
@@ -2230,10 +2248,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     mesh.add(hitbox);
 
     scene.add(mesh);
+    // Nametags are player-only - never appended to labelLayer (or given any
+    // text), just kept as a real (if inert) element so RemoteEntity's shared
+    // shape (label/labelOffsetY, read generically by updateLabels()/
+    // removeEntityAvatar() for both kinds) doesn't need a kind check at every
+    // call site.
     const label = document.createElement('div');
-    label.textContent = name;
-    label.style.cssText = 'position:absolute;color:#fff;font:12px Tricraft,sans-serif;text-shadow:1px 1px 0 #000;transform:translate(-50%,-100%);white-space:nowrap;';
-    labelLayer.appendChild(label);
     return {
       mesh, hitbox, label, labelOffsetY: stats.height + 0.3, mobModel,
       lastHealth: Infinity, lastYaw: 0, lastPitch: 0, sneaking: false, heldItem: null, moveDeltaX: 0, moveDeltaZ: 0, kind,
@@ -2448,6 +2468,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       if (msg.self.health < lastSelfHealth) {
         soundManager.playRandom('player/Player_hurt', 3, 0.7);
         localPlayerModel?.hurt(); // same cue remote players already get, see makePlayerAvatar/onState's entity loop below
+        hurtImpulse(); // camera roll-kick - main.ts's own player.hurtImpulse(), never ported here at all
       }
       lastSelfHealth = msg.self.health;
       // `full` (bar hidden) once air reads 10 - "on dry land", same threshold
@@ -2496,11 +2517,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         // has to reach either one.
         op.mobModel?.setOnFire(e.onFire);
         op.playerModel?.setOnFire(e.onFire);
+        op.mobModel?.setAttacking?.(e.aiming ?? false); // skeleton's bow-draw pose - server-computed since it has no client mesh of its own to pose (world-server/src/game/mob-ai.ts)
         if (e.health < op.lastHealth) {
           op.playerModel?.hurt();
           op.mobModel?.hurt();
-          if (!op.playerModel && op.mesh.position.distanceTo(camera.position) <= MOB_SOUND_RADIUS) {
-            playMobSound(soundManager, op.kind as MobKind, 'hurt', 0.7);
+          if (op.mesh.position.distanceTo(camera.position) <= MOB_SOUND_RADIUS) {
+            // A remote player landed a hit previously only got the red flash,
+            // no sound at all - this branch used to be mob-only.
+            if (op.playerModel) soundManager.playRandom('player/Player_hurt', 3, 0.7);
+            else playMobSound(soundManager, op.kind as MobKind, 'hurt', 0.7);
           }
         }
         op.lastHealth = e.health;
@@ -2556,6 +2581,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       deathCause.textContent = killedBy ? `Slain by ${killedBy}` : '';
       deathEl.hidden = false;
       document.exitPointerLock();
+      if (backpackOpen) setBackpackOpen(false); // force-close if it happened to be open the moment death landed
     },
     onDayTime: (elapsed) => { clientDayTime = elapsed; },
     onInventoryUpdate: (slots, selectedIndex) => {
@@ -2650,16 +2676,32 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   }
 
   const VIEW_BOB_DEG = Math.PI / 180;
-  /** Same transform as player.ts's applyViewBob() - camera must already be at the eye position/rotation for translateX/Y and rotateZ/X to compose correctly. */
+  // Camera roll-kick on taking damage - player.ts's own hurtImpulse()/
+  // hurtTime/hurtDir, never ported here at all (multiplayer had no damage
+  // animation whatsoever, just the red hurt tint on the model).
+  const HURT_DURATION = 0.4; // matches PlayerController.HURT_DURATION
+  let hurtTime = 0;
+  let hurtDir = 1;
+  function hurtImpulse(): void {
+    hurtTime = HURT_DURATION;
+    hurtDir = Math.random() < 0.5 ? -1 : 1;
+  }
+  /** Same transform as player.ts's applyViewBob() - camera must already be at the eye position/rotation for translateX/Y and rotateZ/X to compose correctly. The hurt shake below is deliberately NOT gated by viewBobOn, same as player.ts - it's a damage cue, not a walking-motion one. */
   function applyViewBob(): void {
-    const b = viewBob.phase;
-    const sinb = Math.sin(b * Math.PI);
-    const cosb = Math.cos(b * Math.PI);
-    const { bob, tilt } = viewBob;
-    camera.translateX(sinb * bob * 0.5);
-    camera.translateY(-Math.abs(cosb * bob));
-    camera.rotateZ(sinb * bob * 3 * VIEW_BOB_DEG);
-    camera.rotateX(Math.abs(Math.cos(b * Math.PI - 0.2) * bob) * 5 * VIEW_BOB_DEG + tilt * VIEW_BOB_DEG);
+    if (viewBobOn) {
+      const b = viewBob.phase;
+      const sinb = Math.sin(b * Math.PI);
+      const cosb = Math.cos(b * Math.PI);
+      const { bob, tilt } = viewBob;
+      camera.translateX(sinb * bob * 0.5);
+      camera.translateY(-Math.abs(cosb * bob));
+      camera.rotateZ(sinb * bob * 3 * VIEW_BOB_DEG);
+      camera.rotateX(Math.abs(Math.cos(b * Math.PI - 0.2) * bob) * 5 * VIEW_BOB_DEG + tilt * VIEW_BOB_DEG);
+    }
+    if (hurtTime > 0) {
+      const h = hurtTime / HURT_DURATION;
+      camera.rotateZ(Math.sin(h * h * h * h * Math.PI) * 14 * VIEW_BOB_DEG * hurtDir);
+    }
   }
 
   let lastFrameTime = 0;
@@ -2672,6 +2714,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // walk-cycle/orientation easing wildly off in one step.
     const delta = lastFrameTime === 0 ? 0 : Math.min((now - lastFrameTime) / 1000, 0.1);
     lastFrameTime = now;
+    if (hurtTime > 0) hurtTime -= delta;
+    // Shared fire texture's scroll - game-loop.ts calls this every frame for
+    // singleplayer, but multiplayer's own frame loop never did, so any
+    // burning mob/player here showed a static (non-scrolling) fire frame.
+    updateFireOverlayAnimation(now / 1000);
     // Position is always the server's last confirmed value (no local
     // prediction yet - see the module doc comment); look direction is local
     // for a responsive camera despite network latency on movement itself.
@@ -2681,7 +2728,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (cameraMode === 0) {
       camera.position.copy(lastServerPos);
       camera.rotation.set(pitch, yaw, 0, 'YXZ');
-      if (viewBobOn) applyViewBob();
+      applyViewBob();
     } else {
       camera.position.copy(thirdPersonCameraPosition(lastServerPos, yaw, pitch, cameraMode === 2, isSolidAtLocal));
       camera.lookAt(lastServerPos);

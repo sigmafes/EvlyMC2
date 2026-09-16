@@ -38,11 +38,13 @@ export class PlayerHealth {
     const before = this.current;
     this.current = Math.max(0, this.current - amount);
     if (!ignoreInvuln) this.invuln = 0.3;
+    // Hurt sound plays for ANY landed hit, including the killing blow - it
+    // was previously gated in the same branch as "still alive", so the hit
+    // that actually brought health to 0 played no sound at all.
+    if (this.current < before) this.onHurt(opts.cause ?? 'generic');
     if (this.current <= 0) {
       this.dead = true;
       this.onDeath();
-    } else if (this.current < before) {
-      this.onHurt(opts.cause ?? 'generic');
     }
   }
 

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { BlockId, createBlockMaterials, isSolidBlock } from './block';
+import { CHUNK_SIZE } from './worldgen/constants';
 import { initPreviewAtlases } from './block-preview';
 import { Diagnostics } from './diagnostics';
 import { BlockInteraction } from './interaction';
@@ -101,6 +102,21 @@ const fog = new THREE.Fog(skyColor, 18, 42);
 scene.background = skyColor;
 scene.fog = fog;
 
+/**
+ * Push the fog out as render distance grows, so a higher render distance
+ * actually shows further before the world fades - it was previously fixed
+ * at (18, 42) regardless of render distance, meaning a render distance of
+ * 20 chunks looked exactly as foggy as one of 3. `far` stops one chunk
+ * short of the real view edge (same margin the old fixed numbers left at
+ * the default render distance) so pop-in at the fog line is hidden by fog
+ * rather than by nothing.
+ */
+function applyFogDistanceFor(renderDistanceChunks: number): void {
+  const far = Math.max(24, renderDistanceChunks * CHUNK_SIZE - CHUNK_SIZE);
+  fog.near = far * 0.5;
+  fog.far = far;
+}
+
 // far plane pushed out so the sky dome (sun/moon/stars/clouds) is never clipped;
 // terrain still fades well before it via THREE.Fog.
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 2000);
@@ -183,7 +199,7 @@ const pauseMenu = new PauseMenu(
   fog,
   (enabled) => world.setSmoothLighting(enabled),
   (slim) => { playerModel.setSlimArms(slim); inventoryDoll.setSlim(slim); hand.setSlim(slim); },
-  (chunks) => world.setViewRadius(chunks),
+  (chunks) => { world.setViewRadius(chunks); applyFogDistanceFor(chunks); },
   () => { void leaveWorld(); },
   (on) => { viewBobOn = on; player.setViewBobEnabled(on); },
   (percent) => applyButtonOpacity?.(percent),
@@ -206,6 +222,7 @@ const menuSettings = loadSettings();
 camera.fov = menuSettings.fov;
 camera.updateProjectionMatrix();
 world.setViewRadius(menuSettings.renderDistance);
+applyFogDistanceFor(menuSettings.renderDistance);
 world.setSmoothLighting(menuSettings.smoothLighting);
 playerModel.setSlimArms(menuSettings.alexSkin);
 if (!menuSettings.fog) scene.fog = null;
@@ -428,6 +445,7 @@ const playerHealth = new PlayerHealth(
     playerModel.startDeath();
     playerModel.setVisible(true); // forced third-person needs the body visible, even if it was hidden (first person) the instant before
     hand.setVisible(false); // the dead branch below never re-runs the normal first/third-person visibility toggle
+    inventory.setDead(true); // no inventory to manage from a corpse - also force-closes it if it happened to be open
   },
   (cause) => {
     player.hurtImpulse();
@@ -481,6 +499,7 @@ function respawn() {
   playerFireTickTimer = 0;
   playerOnFire = false;
   playerModel.setOnFire(false);
+  inventory.setDead(false);
 }
 
 document.querySelector<HTMLButtonElement>('#death-respawn')!.addEventListener('click', () => {
