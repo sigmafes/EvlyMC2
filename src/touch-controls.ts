@@ -224,6 +224,18 @@ export class TouchControls {
     jump.addEventListener('pointerup', jumpUp);
     jump.addEventListener('pointercancel', jumpUp);
     jump.addEventListener('pointerleave', jumpUp);
+    // Best-effort hardening for a reported (but not yet reproduced/pinned
+    // down in code) Android bug: jump sometimes not responding, or a very
+    // long wait before it works again. `pointerleave` normally shouldn't
+    // even fire once `setPointerCapture` above is in effect, but if some
+    // WebView silently drops capture without ever delivering pointerup/
+    // pointercancel/pointerleave either, `touchJump` would stay stuck true
+    // forever with nothing left to un-stick it. `lostpointercapture` is a
+    // separate, more reliably-delivered event on capture loss for exactly
+    // this failure mode - wired as one more safety net, not a fix for a
+    // confirmed root cause (still unclear from code alone; needs a real
+    // device repro to say more).
+    jump.addEventListener('lostpointercapture', jumpUp);
 
     const sneak = this.root.querySelector<HTMLButtonElement>('.tc-sneak')!;
     this.sneakButton = sneak;

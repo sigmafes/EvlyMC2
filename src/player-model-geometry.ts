@@ -202,6 +202,9 @@ export const SKIN_UV_OVERLAY = {
 };
 
 // --- Slim ("Alex") arms: 3 px wide instead of 4. Depth (px/nx faces) is unchanged. ---
+/** Where the neck sits in the model's own eye-level-origin space - the torso's own pivot (it leans forward from here when sneaking) and, as of the head-rotation fix below, also the head's rotation pivot (was rotating around the head's own centre instead of the neck it actually swivels on). */
+export const NECK_PIVOT_Y = -0.24;
+
 export const ARM_WIDTH = 0.275;
 export const ARM_WIDTH_SLIM = 0.20625; // 3/4 of classic
 // Keep the inner edge (toward the torso) fixed when switching to slim.
@@ -315,7 +318,8 @@ export function buildArmMesh(group: THREE.Group, side: 'left' | 'right', slim: b
 }
 
 export type PlayerModelParts = {
-  head: THREE.Mesh;
+  /** The head's rotation PIVOT (at the neck, NECK_PIVOT_Y) - not the mesh itself, see buildPlayerModelParts's own doc comment. */
+  head: THREE.Group;
   torsoGroup: THREE.Group;
   torso: THREE.Mesh;
   armLeftGroup: THREE.Group;
@@ -340,17 +344,29 @@ export function buildPlayerModelParts(group: THREE.Group, materials?: PlayerSkin
   const overlay = materials?.overlay;
   // Eyes are at y=0 (player.state.position), feet are at y=-1.62 (eye height)
   // Head (0.55 x 0.55 x 0.55) - 10% larger - eyes approximately in upper middle of head
-  const head = new THREE.Mesh(createHeadGeometry(), atlas);
-  head.position.y = 0.02; // Positioned so eyes are near center
-  head.castShadow = true;
-  head.receiveShadow = true;
+  //
+  // Lives in its own pivot group at the neck (NECK_PIVOT_Y, same line the
+  // torso pivots from) instead of rotating the mesh directly about its own
+  // centre - a head looking up/down or turning was visibly swivelling
+  // around the middle of the skull rather than the neck it actually
+  // hinges on. The mesh's own local offset below is just what keeps its
+  // WORLD position identical to before (0.02 unchanged) now that its
+  // parent group sits higher, at the neck.
+  const head = new THREE.Group();
+  head.position.y = NECK_PIVOT_Y;
   group.add(head);
-  addOverlay(head, 0.55, 0.55, 0.55, SKIN_UV_OVERLAY.hat, undefined, overlay);
+
+  const headMesh = new THREE.Mesh(createHeadGeometry(), atlas);
+  headMesh.position.y = 0.02 - NECK_PIVOT_Y;
+  headMesh.castShadow = true;
+  headMesh.receiveShadow = true;
+  head.add(headMesh);
+  addOverlay(headMesh, 0.55, 0.55, 0.55, SKIN_UV_OVERLAY.hat, undefined, overlay);
 
   // Torso/Body (0.55 x 0.76 x 0.275) - 10% larger + elongated
-  // Torso lives in a pivot group at the neck (y=-0.24) so it can lean forward when sneaking.
+  // Torso lives in a pivot group at the neck (NECK_PIVOT_Y) so it can lean forward when sneaking.
   const torsoGroup = new THREE.Group();
-  torsoGroup.position.y = -0.24;
+  torsoGroup.position.y = NECK_PIVOT_Y;
   group.add(torsoGroup);
 
   const torso = new THREE.Mesh(createTorsoGeometry(), atlas);

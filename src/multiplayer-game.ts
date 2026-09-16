@@ -145,6 +145,8 @@ type RemoteEntity = {
   kind: string;
   /** Seconds this entity has been toppling (server `dying`), driving the death spin. The server keeps a dying mob in the snapshot for DEATH_SPIN_DURATION precisely so this animation has time to play before the entity disappears. */
   dyingFor?: number;
+  /** Only for kind:'player' - true once their topple finished and the body was hidden (see updateRemoteAnimation's dyingFor branch). Reset on respawn. */
+  corpseHidden?: boolean;
 };
 
 /**
@@ -2353,6 +2355,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         // setLightLevel() runs (see its own doc comment on this branch).
         const p = entity.mesh.position;
         entity.playerModel.setLightLevel(lightEngine.getRawBrightness(Math.round(p.x), Math.round(p.y), Math.round(p.z)) / 15, delta);
+        // A dying MOB is removed by the server the instant its own topple
+        // finishes (entityRemoved) - a dying PLAYER isn't (they stay in the
+        // snapshot, dying:true, until they respawn), so nothing here ever
+        // made their body go away once the topple ended; it just sat there
+        // face-down forever. Once, right as the topple completes: hide the
+        // body and puff the same smoke burst a mob's own removal gets.
+        if (t >= 1 && !entity.corpseHidden) {
+          entity.corpseHidden = true;
+          entity.playerModel.setVisible(false);
+          smokeParticles.burst(new THREE.Vector3(p.x, p.y + 0.9, p.z));
+        }
       }
       return; // a corpse doesn't walk
     }
@@ -2564,8 +2577,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         // here instead of waiting for an entityRemoved that never comes.
         if (!e.dying && op.dyingFor !== undefined) {
           op.dyingFor = undefined;
+          op.corpseHidden = false;
           op.mesh.rotation.z = 0;
-          op.playerModel?.resetDeath();
+          op.playerModel?.resetDeath(); // also restores visibility - see its own doc comment
         }
         if (e.dying && op.dyingFor === undefined) {
           op.dyingFor = 0;

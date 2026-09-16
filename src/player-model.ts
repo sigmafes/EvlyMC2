@@ -6,7 +6,7 @@ import { ITEMS, isBlock } from './item';
 import {
   getAtlasMaterial, getOverlayMaterial, getSkinAtlasMaterial, applySkinTexture, resetSkinTexture,
   buildArmGeometry, buildArmMesh, buildPlayerModelParts, type PlayerModelParts,
-  createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials,
+  createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials, NECK_PIVOT_Y,
 } from './player-model-geometry';
 import { createFireOverlay } from './fire-overlay';
 import { Cape } from './cape';
@@ -161,7 +161,10 @@ export class PlayerModel {
     const s = this.sneakAmount;
     const { head, torsoGroup, armLeftGroup, armRightGroup, legLeftGroup, legRightGroup } = this.parts;
     head.position.x = adjustments.head.x;
-    head.position.y = 0.02 + adjustments.head.y + SNEAK_HEAD_DY * s;
+    // head is now the NECK-PIVOT group (see player-model-geometry.ts's own
+    // doc comment on the head-rotation fix), not the head mesh itself - its
+    // resting Y is NECK_PIVOT_Y, not the mesh's old 0.02.
+    head.position.y = NECK_PIVOT_Y + adjustments.head.y + SNEAK_HEAD_DY * s;
     head.position.z = adjustments.head.z + SNEAK_HEAD_DZ * s;
     // Whole-body crouch shift (head excluded).
     const bodyDy = SNEAK_BODY_DY * s;
