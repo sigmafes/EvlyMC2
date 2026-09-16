@@ -581,7 +581,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
   }
 
-  function applyBlockChange(x: number, y: number, z: number, id: BlockId, waterDistance?: number): void {
+  function applyBlockChange(x: number, y: number, z: number, id: BlockId, waterDistance?: number, silent?: boolean): void {
     // Recorded even when the block id itself doesn't change below (a
     // flowing cell can stay WATER/LAVA while its distance settles to a
     // different value) - same limitation singleplayer's own World.setBlock
@@ -614,7 +614,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // anything deeper into the flow (an actual liquid, not this specific
     // spread step) skips the place sound below.
     const isFlowingLiquidStep = (id === BlockId.WATER || id === BlockId.LAVA) && waterDistance !== 0;
-    if (performance.now() - joinedAtMs > 500 && !isFlowingLiquidStep) {
+    if (performance.now() - joinedAtMs > 500 && !isFlowingLiquidStep && !silent) {
       const sound = id === BlockId.AIR
         ? getBlockSound(previousId, 'dig')
         : getBlockSound(id, 'place') ?? getBlockSound(id, 'dig');
@@ -2237,7 +2237,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         removeGroundItem(entityId);
       }
     },
-    onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId, msg.waterDistance),
+    onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId, msg.waterDistance, msg.silent),
     onEntityRemoved: (id) => {
       const op = remoteEntities.get(id);
       if (op) { removeEntityAvatar(op); remoteEntities.delete(id); }

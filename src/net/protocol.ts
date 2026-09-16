@@ -251,8 +251,26 @@ export type ServerMessage =
     }
   /** Sparse block edits for one chunk - same [localIndex, blockId] shape chunk-edits.ts already persists, just shipped instead of read from IndexedDB. */
   | { type: 'chunkData'; cx: number; cz: number; edits: [index: number, blockId: BlockId][] }
-  /** `waterDistance` is only meaningful (and only ever sent non-undefined) when `blockId` is WATER or LAVA - the server's own WaterEngine/LavaEngine's MCPE-style spread distance (0 = source) at this cell, mirroring src/water-engine.ts's `WaterNode.distance`. The client has no simulation of its own (the server owns it - see world-do.ts's fluidWorld doc comment), so without this every liquid cell would mesh as a flat full block instead of getting the sloped "menisco" corner heights singleplayer's own World.getLiquidDistance() feeds its chunk mesher. */
-  | { type: 'blockChanged'; x: number; y: number; z: number; blockId: BlockId; waterDistance?: number }
+  /**
+   * `waterDistance` is only meaningful (and only ever sent non-undefined)
+   * when `blockId` is WATER or LAVA - the server's own WaterEngine/
+   * LavaEngine's MCPE-style spread distance (0 = source) at this cell,
+   * mirroring src/water-engine.ts's `WaterNode.distance`. The client has no
+   * simulation of its own (the server owns it - see world-do.ts's
+   * fluidWorld doc comment), so without this every liquid cell would mesh
+   * as a flat full block instead of getting the sloped "menisco" corner
+   * heights singleplayer's own World.getLiquidDistance() feeds its chunk
+   * mesher.
+   *
+   * `silent`, when true, tells the client to skip the dig/place sound and
+   * break-particle puff it would otherwise play for this change - for a
+   * change that was never a player action (leaf decay - singleplayer's own
+   * decay, driven from world.ts's tick loop, was never wired to a sound
+   * either) or that's catch-up history rather than something happening
+   * right now (the backlog of edits replayed on join). Absent/false plays
+   * the sound normally, same as before this field existed.
+   */
+  | { type: 'blockChanged'; x: number; y: number; z: number; blockId: BlockId; waterDistance?: number; silent?: boolean }
   | { type: 'inventoryUpdate'; slots: InventorySlot[]; selectedIndex: number }
   | { type: 'entityRemoved'; id: number; reason: 'death' | 'despawn' | 'disconnect' }
   /** Another player's skin - sent once when they join (and replayed for every already-connected player right after `welcome`, so a client catches up on everyone already in the world). `skin: null` means the built-in default. */

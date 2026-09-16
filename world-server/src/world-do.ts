@@ -252,6 +252,24 @@ export class WorldDO implements DurableObject {
   /** Oak leaf decay - LeavesManager is pure (only a getBlock callback, no THREE/DOM), so it's imported straight from src/ same as breakTime/getDrops, no headless fork needed. */
   private readonly leaves = new LeavesManager();
   /**
+   * LeavesManager.update() walks its ENTIRE watched set and, for each leaf,
+   * runs a 9x9x9 flood fill (connectedToLog()) to check it's still attached
+   * to a log - real work, not a cheap poll. Running that at the tick's full
+   * 20Hz (as a first pass did) meant a freshly-chopped forest (onLogRemoved
+   * can add well over a thousand candidate cells per log) re-ran that flood
+   * fill for every one of them 20 times a SECOND, a genuine CPU spike -
+   * exactly the "lag pico + bloques rompiéndose solos" symptom reported,
+   * and severe enough to risk the Durable Object being killed mid-tick
+   * before its fire-and-forget storage.put() for an already-broadcast
+   * decay had actually persisted (a decayed leaf silently reappearing the
+   * next session, since nothing durable ever recorded it left). Throttled
+   * to once a second instead - decay's own chance-per-second math
+   * (DECAY_RATE_PER_SECOND * delta) is exactly as accurate fed 1.0 once a
+   * second as 0.05 twenty times, so this changes nothing about how fast
+   * a canopy clears, only how often the expensive check runs.
+   */
+  private leavesTickAccum = 0;
+  /**
    * Items lying on the ground (game/dropped-items.ts - a headless fork of
    * singleplayer's DroppedItems, same physics constants). Not persisted to DO
    * storage yet: an item that's been on the ground longer than its 60s despawn
@@ -1191,7 +1209,10 @@ export class WorldDO implements DurableObject {
     // blockChanged is simple and correct at this world's current tiny scale.
     for (const [key, id2] of this.edits) {
       const [x, y, z] = key.split(',').map(Number);
-      this.send(ws, { type: 'blockChanged', x, y, z, blockId: id2, waterDistance: this.waterDistanceFor(id2, x, y, z) });
+      // silent: true - this is catch-up history, not a live change; without
+      // it a big backlog (e.g. a forest's worth of accumulated leaf decay)
+      // played its dig sound/break-puff for every single entry on join.
+      this.send(ws, { type: 'blockChanged', x, y, z, blockId: id2, waterDistance: this.waterDistanceFor(id2, x, y, z), silent: true });
     }
     // Catch this client up on every already-connected player's skin, then
     // tell everyone else about this new player's - same backlog-replay
@@ -1367,9 +1388,21 @@ export class WorldDO implements DurableObject {
 
     // Leaf decay (Fase 18 of PLAN-MULTIPLAYER-BUGFIXES-2.md) - same
     // watch-set/flood-fill as world.ts:397, just applied through setBlock()
-    // so the removal broadcasts and persists like any other edit.
-    for (const [x, y, z] of this.leaves.update((bx, by, bz) => this.getBlockAt(bx, by, bz), dt)) {
-      this.setBlock(x, y, z, BlockId.AIR);
+    // so the removal broadcasts and persists like any other edit. Throttled
+    // to once a second - see leavesTickAccum's doc comment for why running
+    // it at the full tick rate was a real CPU/lag problem.
+    this.leavesTickAccum += dt;
+    if (this.leavesTickAccum >= 1) {
+      const decayDelta = this.leavesTickAccum;
+      this.leavesTickAccum = 0;
+      for (const [x, y, z] of this.leaves.update((bx, by, bz) => this.getBlockAt(bx, by, bz), decayDelta)) {
+        // Silent: decay is never a player action, so - same as singleplayer,
+        // where it's driven from world.ts's own tick loop with no sound/drop
+        // tied to it at all, unlike an actual mined block - it must never
+        // play the generic break sound/particle puff every OTHER setBlock()
+        // broadcast gets (see applyBlockChange's `silent` check client-side).
+        this.setBlock(x, y, z, BlockId.AIR, true);
+      }
     }
 
     this.droppedItems.update(dt, {
@@ -1772,7 +1805,7 @@ export class WorldDO implements DurableObject {
    * instead. This is the same split singleplayer keeps between World.setBlock
    * and World.place.
    */
-  private setBlock(x: number, y: number, z: number, id: BlockId): void {
+  private setBlock(x: number, y: number, z: number, id: BlockId, silent = false): void {
     // Read before the edit overwrites it - leaf decay needs to know what
     // USED to be here (was it a log?), same as world.ts's remove() capturing
     // oldBlock before blockStore.removeBlockRaw().
@@ -1780,7 +1813,7 @@ export class WorldDO implements DurableObject {
     const key = `${x},${y},${z}`;
     this.edits.set(key, id);
     void this.state.storage.put(`edit:${key}`, id);
-    this.broadcast({ type: 'blockChanged', x, y, z, blockId: id, waterDistance: this.waterDistanceFor(id, x, y, z) });
+    this.broadcast({ type: 'blockChanged', x, y, z, blockId: id, waterDistance: this.waterDistanceFor(id, x, y, z), silent });
     if (id === BlockId.FIRE) this.fire.onFirePlaced(x, y, z);
     else this.fire.onFireRemoved(x, y, z);
     if (id === BlockId.WATER || id === BlockId.LAVA) this.resolveLiquidInteractionAt(x, y, z);
