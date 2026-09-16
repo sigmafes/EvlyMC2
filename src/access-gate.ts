@@ -3,11 +3,11 @@ import { savePlayerName } from './player-skin';
 // sessionStorage, not localStorage: a login should only stick for the current
 // tab/session, not forever. The old localStorage flag (a previous version of
 // this gate) let anyone who had EVER logged in bypass the gate permanently,
-// even after being removed from the server-side whitelist, since it was
-// never re-checked - a fresh key name here throws away every such stale
-// flag on this deploy, and sessionStorage stops new ones from outliving the
-// tab. A closed/reopened browser (or a new tab) always re-logs-in, so a
-// whitelist removal actually takes effect.
+// since it was never re-checked - a fresh key name here throws away every
+// such stale flag on this deploy, and sessionStorage stops new ones from
+// outliving the tab. A closed/reopened browser (or a new tab) always
+// re-logs-in, so a password change or account removal actually takes effect
+// on the next visit instead of never.
 const UNLOCK_KEY = 'evlymc-account-session';
 const ACCOUNT_NAME_KEY = 'evlymc-account-name';
 /**
@@ -197,9 +197,8 @@ export function waitForAccessGate(): Promise<void> {
           return;
         }
         // Registration never unlocks the gate by itself - only a successful
-        // /login does, and that's where the whitelist is actually enforced.
-        // Without this, anyone could create an account and walk straight in
-        // regardless of whether their name is invited.
+        // /login does, so the account they just made is confirmed to work
+        // (right name, right password) before they're let in.
         showLogin();
         loginUsername.value = result.username;
         setMessage('Account created - log in to continue', false);

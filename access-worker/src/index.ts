@@ -64,20 +64,6 @@ function clientIp(request: Request): string {
   return request.headers.get('CF-Connecting-IP') ?? 'unknown';
 }
 
-const WHITELIST_KEY = 'whitelist';
-
-/**
- * Closed-beta gate on top of accounts: only names in this list can register
- * OR log in, regardless of whether the account already exists. An empty/
- * missing list blocks everyone. Managed directly in KV (see access-worker's
- * README) - no game-side UI for it, intentionally, since it's an operator
- * tool, not a player-facing setting.
- */
-async function isWhitelisted(env: Env, username: string): Promise<boolean> {
-  const list = (await env.ACCESS_KV.get<string[]>(WHITELIST_KEY, 'json')) ?? [];
-  return list.includes(username.toLowerCase());
-}
-
 function toBase64(bytes: Uint8Array): string {
   let binary = '';
   for (const b of bytes) binary += String.fromCharCode(b);
@@ -132,11 +118,6 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   if (!isValidPassword(password)) {
     return json({ ok: false, error: `Password must be ${PASSWORD_MIN}-${PASSWORD_MAX} characters` }, 400, request, env);
   }
-  // Registration itself stays open (anyone can create an account, up to the
-  // per-IP cap below) - the whitelist gate is enforced at login only, see
-  // handleLogin(). That way people can claim their name/account ahead of
-  // time; actually getting into the game is what needs an invite.
-
   const accountKey = `account:${username.toLowerCase()}`;
   if (await env.ACCESS_KV.get(accountKey)) {
     return json({ ok: false, error: 'That name is already taken' }, 409, request, env);
@@ -170,9 +151,6 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   const { username, password } = await readBody(request);
   if (!username || !password) {
     return json({ ok: false, error: 'Enter your name and password' }, 400, request, env);
-  }
-  if (!(await isWhitelisted(env, username))) {
-    return json({ ok: false, error: 'This name does not have access to the beta' }, 403, request, env);
   }
 
   const account = await env.ACCESS_KV.get<Account>(`account:${username.toLowerCase()}`, 'json');
