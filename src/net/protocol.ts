@@ -150,12 +150,16 @@ export type ClientMessage =
    * it fixed for the whole dig (switching hotbar slots mid-swing doesn't
    * speed up or slow down an already-started dig, matching singleplayer's
    * own interaction.ts, which only reads the selected item once in
-   * startMining()). Re-sending this for a new position retargets; there's no
-   * separate cancel message because an abandoned dig that's never completed
-   * with `breakBlock` just sits unused until overwritten or the block itself
-   * changes - nothing to clean up.
+   * startMining()). Re-sending this for a new position retargets. Server-
+   * side there's still nothing to clean up on an abandoned dig (it just sits
+   * unused until overwritten or the block changes) - but it now also
+   * broadcasts `entityBreakStart` to everyone else, purely so their client
+   * can show the same crack overlay/chip sound on this block that only the
+   * digging player themself saw before.
    */
   | { type: 'breakStart'; x: number; y: number; z: number }
+  /** Gave up on the current dig without finishing it (released the mouse/let go early) - `breakStart` alone left every OTHER client's crack overlay on this block stuck forever, since only a completed `breakBlock` (via the resulting `blockChanged`) ever cleared it otherwise. Purely cosmetic, see `entityBreakCancel`. */
+  | { type: 'breakCancel' }
   /**
    * Player finished the dig animation client-side and wants it applied.
    * `x/y/z` must match the position from the most recent `breakStart`, and
@@ -309,6 +313,10 @@ export type ServerMessage =
   | { type: 'entityRemoved'; id: number; reason: 'death' | 'despawn' | 'disconnect' }
   /** Someone else's cosmetic swing cue (see the `swing` client message) - `id` is a player session id, never a mob's (mobs already animate their own attacks from EntitySnapshot state, they don't send this). Never echoed back to the sender, who already played it locally the instant they sent it. */
   | { type: 'entitySwing'; id: number }
+  /** Someone else started mining this block (`swing`'s sibling for the crack overlay/chip sound instead of the arm) - `totalMs` is the server-derived real dig duration (breakTime()), so the bystander's overlay tracks the same pace as the real dig instead of guessing one. Never echoed back to the sender, who already ran this locally. */
+  | { type: 'entityBreakStart'; id: number; x: number; y: number; z: number; totalMs: number }
+  /** Someone else's dig from the last `entityBreakStart` was abandoned before finishing - clear their crack overlay. A dig that actually COMPLETES doesn't need this: the resulting `blockChanged` already removes the block, and the bystander's own overlay timer runs out around the same moment regardless. */
+  | { type: 'entityBreakCancel'; id: number }
   /** Another player's skin - sent once when they join (and replayed for every already-connected player right after `welcome`, so a client catches up on everyone already in the world). `skin: null` means the built-in default. */
   | { type: 'playerSkin'; playerId: number; skin: string | null }
   /** Resyncs the client's local day/night clock to the server's authoritative one (day-night-math.ts) - sent whenever the integer skyDarken step changes (so a transition starts on every client at the same moment) and periodically besides, to correct any drift in a client that free-runs the clock locally between corrections (see multiplayer-game.ts). */
@@ -349,7 +357,7 @@ export function isClientMessageType(type: string): type is ClientMessage['type']
       'craftOpen', 'craftClose', 'craftMove', 'craftTakeOutput',
       'invPickUp', 'invPlace', 'invCancel',
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
-      'attack', 'swing', 'respawn', 'shootBow', 'chat', 'ping',
+      'attack', 'swing', 'breakCancel', 'respawn', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);
 }
@@ -359,7 +367,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'entitySwing', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState',
+      'inventoryUpdate', 'entityRemoved', 'entitySwing', 'entityBreakStart', 'entityBreakCancel', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState',
       'craftGridState', 'craftGridClosed', 'invHeld', 'toolBroke', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);

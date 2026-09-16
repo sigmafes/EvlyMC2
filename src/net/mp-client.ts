@@ -9,6 +9,8 @@ export type MpClientHandlers = {
   onBlockChanged: (msg: Extract<ServerMessage, { type: 'blockChanged' }>) => void;
   onEntityRemoved: (id: number) => void;
   onEntitySwing: (id: number) => void;
+  onEntityBreakStart: (id: number, x: number, y: number, z: number, totalMs: number) => void;
+  onEntityBreakCancel: (id: number) => void;
   onPlayerSkin: (playerId: number, skin: string | null) => void;
   onDayTime: (elapsed: number) => void;
   onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number) => void;
@@ -60,6 +62,8 @@ export class MpClient {
         case 'blockChanged': handlers.onBlockChanged(msg); break;
         case 'entityRemoved': handlers.onEntityRemoved(msg.id); break;
         case 'entitySwing': handlers.onEntitySwing(msg.id); break;
+        case 'entityBreakStart': handlers.onEntityBreakStart(msg.id, msg.x, msg.y, msg.z, msg.totalMs); break;
+        case 'entityBreakCancel': handlers.onEntityBreakCancel(msg.id); break;
         case 'playerSkin': handlers.onPlayerSkin(msg.playerId, msg.skin); break;
         case 'dayTime': handlers.onDayTime(msg.elapsed); break;
         case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex); break;

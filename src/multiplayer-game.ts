@@ -1864,6 +1864,20 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   let touchMiningHeld = false; // touch: the hold-to-break gesture is active (onBreakStart/onBreakEnd below)
   const breakOverlay = new BreakOverlay();
   breakOverlay.attachToScene(scene);
+  /**
+   * Bystanders only ever saw the crack overlay/chip sound for their OWN
+   * dig (updateMining() below is entirely local) - a remote player's
+   * `entityBreakStart`/`entityBreakCancel` broadcast drives one of these
+   * per digging player instead, same shared BreakOverlay class as the
+   * local one, just a whole map of them since several other players could
+   * be mining different blocks at once. `totalMs` is the server's own
+   * breakTime()-derived duration, so the pace matches the real dig instead
+   * of guessing; the entry is auto-cleared once it runs out, same moment
+   * the real block roughly finishes breaking - no need to correlate this
+   * against the resulting blockChanged.
+   */
+  type RemoteMining = { overlay: BreakOverlay; x: number; y: number; z: number; elapsedMs: number; totalMs: number };
+  const remoteMining = new Map<number, RemoteMining>();
   // Black wireframe outline on whatever block the player is aiming at - was
   // never ported at all (BlockHighlight, imported below, wasn't even
   // referenced in this file). shapeBoxesFor's readData now reads the same
@@ -1893,6 +1907,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   function cancelMining(): void {
     mining = null;
     breakOverlay.hide();
+    client.send({ type: 'breakCancel' }); // lets bystanders clear this dig's crack overlay instead of it sitting there forever
   }
 
   function startMining(target: { x: number; y: number; z: number; id: BlockId }): void {
@@ -2624,11 +2639,27 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onEntityRemoved: (id) => {
       const op = remoteEntities.get(id);
       if (op) { removeEntityAvatar(op); remoteEntities.delete(id); }
+      // A mining player who disconnects/dies mid-dig would otherwise leave
+      // their crack overlay frozen on screen forever - nothing else ever
+      // clears it once they're gone.
+      remoteMining.get(id)?.overlay.hide();
+      remoteMining.delete(id);
     },
     // Someone else's cosmetic swing (see protocol.ts's `swing`/`entitySwing`
     // doc comments) - only ever a player (mobs animate their own attacks
     // straight from EntitySnapshot.aiming/state, they don't send this).
     onEntitySwing: (id) => { remoteEntities.get(id)?.playerModel?.swingArm(); },
+    onEntityBreakStart: (id, x, y, z, totalMs) => {
+      let entry = remoteMining.get(id);
+      if (!entry) {
+        entry = { overlay: new BreakOverlay(), x, y, z, elapsedMs: 0, totalMs };
+        entry.overlay.attachToScene(scene);
+        remoteMining.set(id, entry);
+      } else {
+        entry.x = x; entry.y = y; entry.z = z; entry.elapsedMs = 0; entry.totalMs = totalMs;
+      }
+    },
+    onEntityBreakCancel: (id) => { remoteMining.get(id)?.overlay.hide(); remoteMining.delete(id); },
     onPlayerSkin: (playerId, skin) => {
       playerSkins.set(playerId, skin);
       if (remoteEntities.has(playerId)) applySkinWhenReady(playerId, skin);
@@ -2841,6 +2872,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     } : null);
     sendInput(now);
     updateMining(delta);
+    for (const [id, entry] of remoteMining) {
+      entry.elapsedMs += delta * 1000;
+      if (entry.elapsedMs >= entry.totalMs) {
+        entry.overlay.hide();
+        remoteMining.delete(id);
+        continue;
+      }
+      entry.overlay.setProgress(new THREE.Vector3(entry.x, entry.y, entry.z), entry.elapsedMs / entry.totalMs);
+    }
     updateBlockHighlight();
     updateStreaming();
     updateLabels();

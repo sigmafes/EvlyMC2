@@ -561,6 +561,13 @@ export class WorldDO implements DurableObject {
       case 'breakBlock':
         this.handleBreakBlock(session, msg.x, msg.y, msg.z);
         break;
+      case 'breakCancel':
+        // Purely cosmetic, same trust level as `swing` - a bystander's break
+        // overlay clears a little early or late at worst, it can't affect
+        // real block state (only breakBlock, re-validated server-side
+        // against session.mining, actually breaks anything).
+        this.broadcast({ type: 'entityBreakCancel', id: session.id }, ws);
+        break;
       case 'placeBlock':
         this.handlePlaceBlock(session, msg.x, msg.y, msg.z, msg.normal, msg.clickY, msg.yaw);
         break;
@@ -687,8 +694,16 @@ export class WorldDO implements DurableObject {
     // as singleplayer, whose raycast only skips water, not lava.
     if (id === BlockId.WATER) return;
     const itemId = session.inventory[session.selectedSlot].id;
-    if (!Number.isFinite(breakTime(id, itemId).time)) return;
+    const { time } = breakTime(id, itemId);
+    if (!Number.isFinite(time)) return;
     session.mining = { x, y, z, itemId, startedAtMs: Date.now() };
+    // Bystanders only ever saw the OWN player's crack overlay/chip sound/
+    // mine sound (local-only in multiplayer-game.ts's updateMining()) -
+    // this is what lets every other client run the same overlay animation
+    // for someone else's dig instead of the block just silently vanishing
+    // once it's actually broken, with nothing shown while it was in
+    // progress.
+    this.broadcast({ type: 'entityBreakStart', id: session.id, x, y, z, totalMs: Math.round(time * 1000) }, session.ws);
   }
 
   /**
@@ -727,6 +742,18 @@ export class WorldDO implements DurableObject {
     this.sendInventory(session);
   }
 
+  /** Same 6-neighbor check as src/world.ts's own private hasWaterNeighbor(). */
+  private hasWaterNeighbor(x: number, y: number, z: number): boolean {
+    return (
+      this.getBlockAt(x + 1, y, z) === BlockId.WATER ||
+      this.getBlockAt(x - 1, y, z) === BlockId.WATER ||
+      this.getBlockAt(x, y + 1, z) === BlockId.WATER ||
+      this.getBlockAt(x, y - 1, z) === BlockId.WATER ||
+      this.getBlockAt(x, y, z + 1) === BlockId.WATER ||
+      this.getBlockAt(x, y, z - 1) === BlockId.WATER
+    );
+  }
+
   private handleBreakBlock(session: Session, x: number, y: number, z: number): void {
     const brokenId = this.getBlockAt(x, y, z);
     const mining = session.mining;
@@ -738,7 +765,15 @@ export class WorldDO implements DurableObject {
     const elapsedSeconds = (Date.now() - mining.startedAtMs) / 1000;
     if (elapsedSeconds < time * 0.8) return;
 
-    this.setBlockFromPlayer(x, y, z, BlockId.AIR);
+    // Surgical fix ported from src/world.ts's World.remove() - procedurally-
+    // generated ocean/river water is never registered as a source with
+    // WaterEngine (only player-placed/reloaded-from-edits water is), so the
+    // sim has no idea a hole just opened up next to it. Rather than
+    // simulating the whole ocean server-side, immediately fill this one
+    // cell with water (as a real, now-tracked source) whenever it borders
+    // existing water, instead of leaving it AIR forever.
+    const newId = brokenId !== BlockId.WATER && this.hasWaterNeighbor(x, y, z) ? BlockId.WATER : BlockId.AIR;
+    this.setBlockFromPlayer(x, y, z, newId);
     // The drop lands as a real ground entity at the block's centre (matching
     // singleplayer, whose interaction.ts routes every drop through
     // DroppedItems.spawn) rather than teleporting straight into the
