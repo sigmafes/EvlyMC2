@@ -1297,6 +1297,15 @@ export class WorldDO implements DurableObject {
       ws.close();
       return;
     }
+    // One connection per account name at a time - a second tab/device
+    // logging in as the same name would otherwise get its own session
+    // (same inventory record, since playerSaves is keyed by name) fighting
+    // the first one over the same saved state every tick.
+    if (this.sessionByName(verifiedName)) {
+      this.send(ws, { type: 'rejected', reason: `${verifiedName} is already playing in this world` });
+      ws.close();
+      return;
+    }
 
     const id = this.nextId++;
     // Real terrain now (ServerTerrain, seeded from the worldId) - spawn point
