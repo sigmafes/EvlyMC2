@@ -1439,7 +1439,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
    */
   let sprintToggled = false;
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.code === 'KeyT' && !chatOpen) { openChat(); return; } // opens even over another panel, same as singleplayer's own T
+    if (e.code === 'KeyT' && !chatOpen) {
+      // Without this, the same keydown that opens the input (focusing it
+      // synchronously below) still runs its default browser behavior -
+      // typing a literal "t" into the now-focused field the instant it opens.
+      e.preventDefault();
+      openChat();
+      return;
+    } // opens even over another panel, same as singleplayer's own T
     keys.add(e.code);
     if (e.code === 'Escape') disconnect('Disconnected');
     if (e.code === 'ControlLeft' && !e.repeat && (keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || touchMoveX !== 0 || touchMoveZ !== 0)) {
