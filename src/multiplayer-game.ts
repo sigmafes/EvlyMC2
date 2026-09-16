@@ -48,6 +48,7 @@ import { SmokeParticles } from './smoke-particles';
 import { UnderwaterManager } from './underwater-manager';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot, DroppedItemSnapshot, ArrowSnapshot, CraftSlotRef } from './net/protocol';
+import type { BlockData } from './block-data';
 
 /**
  * Fase 6 of the multiplayer migration plan: the client side of the world
@@ -340,6 +341,19 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
    * mirroring world.ts's own wiring).
    */
   const waterDistances = new Map<string, number>();
+  /**
+   * Orientation (facing/half/axis) for every placed block that needs it,
+   * from blockChanged's optional `data` (see protocol.ts's doc comment) -
+   * the client-side counterpart of singleplayer's World/BlockDataStore, but
+   * server-pushed and in-memory only (the server, not IndexedDB, is the
+   * source of truth here). Fed to Chunk.setBlockDataReader below so the
+   * mesher orients stairs/slabs/logs/torches/furnaces the same way
+   * singleplayer's own World.getBlockData wiring does.
+   */
+  const blockOrientation = new Map<string, BlockData>();
+  function getBlockDataAt(x: number, y: number, z: number): BlockData | undefined {
+    return blockOrientation.get(`${x},${y},${z}`);
+  }
   const loadQueue: string[] = [];
   const queuedKeys = new Set<string>();
   let lastPlayerChunkKey = '';
@@ -462,6 +476,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // corner heights instead of the mesher's flat default (see
     // waterDistances/getLiquidDistance's doc comments).
     chunk.setWaterDistanceReader(getLiquidDistance);
+    chunk.setBlockDataReader(getBlockDataAt);
     lightEngine.initializeChunk(chunk);
     chunk.rebuildDirty();
     // Whichever neighbors were already loaded meshed their shared boundary
@@ -614,7 +629,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
   }
 
-  function applyBlockChange(x: number, y: number, z: number, id: BlockId, waterDistance?: number, silent?: boolean): void {
+  function applyBlockChange(x: number, y: number, z: number, id: BlockId, waterDistance?: number, silent?: boolean, data?: BlockData): void {
     // Recorded even when the block id itself doesn't change below (a
     // flowing cell can stay WATER/LAVA while its distance settles to a
     // different value) - same limitation singleplayer's own World.setBlock
@@ -626,6 +641,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const key = `${x},${y},${z}`;
     if (waterDistance === undefined) waterDistances.delete(key);
     else waterDistances.set(key, waterDistance);
+    if (data === undefined) blockOrientation.delete(key);
+    else blockOrientation.set(key, data);
 
     const previousId = getBlock(x, y, z);
     // Captured BEFORE the edit, same as world.ts's setBlock/place - queueing
@@ -1707,13 +1724,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   breakOverlay.attachToScene(scene);
   // Black wireframe outline on whatever block the player is aiming at - was
   // never ported at all (BlockHighlight, imported below, wasn't even
-  // referenced in this file). shapeBoxesFor's readData is a bare `() =>
-  // undefined`, same as this client's own chunk mesher: multiplayer doesn't
-  // track per-block orientation data yet (Fase 5 of
-  // PLAN-MULTIPLAYER-MISSING-FEATURES.md), so stairs/slabs render at their
-  // default shape both in the world mesh AND here - consistent with each
-  // other today, and both will pick up the real orientation together once
-  // that fase lands.
+  // referenced in this file). shapeBoxesFor's readData now reads the same
+  // blockOrientation map the chunk mesher does (Fase 5 of
+  // PLAN-MULTIPLAYER-MISSING-FEATURES.md), so the highlight matches whatever
+  // shape a stair/slab actually rendered as.
   const blockHighlight = new BlockHighlight();
   blockHighlight.attachToScene(scene);
   function updateBlockHighlight(): void {
@@ -1721,7 +1735,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const target = ndc ? raycastBlockTarget(ndc) : null;
     if (!target) { blockHighlight.hideTarget(); return; }
     const pos = new THREE.Vector3(target.x, target.y, target.z);
-    const shape = shapeBoxesFor(target.id, target.x, target.y, target.z, getBlock, () => undefined);
+    const shape = shapeBoxesFor(target.id, target.x, target.y, target.z, getBlock, getBlockDataAt);
     blockHighlight.updateTarget(pos, target.id, shape);
   }
 
@@ -1866,15 +1880,24 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       setTableOpen(true, { x: existing.x, y: existing.y, z: existing.z });
       return true;
     }
-    // The server ignores this blockId and places whatever is actually in
-    // the player's selected inventory slot (world-do.ts's handlePlaceBlock
-    // doc comment) - sent here only because the protocol message still
-    // needs some number in that field. No-op silently if the slot's empty
-    // or holds a non-block item.
+    // The server ignores this blockId for ordinary placement and places
+    // whatever is actually in the player's selected inventory slot
+    // (world-do.ts's handlePlaceBlock doc comment) - it's only read there
+    // for the flint-and-steel special case (isBlock(heldId) is false for
+    // it, so the generic placement path never touches it either way). No-op
+    // silently if the slot's empty.
     const heldId = inventorySlots[selectedSlotIndex]?.id;
     if (heldId === null || heldId === undefined) return false;
     const p = hit.point.clone().addScaledVector(normal, 0.5).round();
-    client.send({ type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: heldId, face: 0 });
+    // clickY: fractional height of the click point within the EXISTING
+    // block's cell (0 = bottom face, 1 = top face) - same value
+    // block-placement-rules.ts's placedHalfIsTop derives from a RaycastHit,
+    // needed server-side to orient a stair/slab the way singleplayer does.
+    const clickY = hit.point.y - (existing.y - 0.5);
+    client.send({
+      type: 'placeBlock', x: p.x, y: p.y, z: p.z, blockId: heldId,
+      normal: { x: normal.x, y: normal.y, z: normal.z }, clickY, yaw,
+    });
     hand.bump(); // same onPlace cue main.ts wires (dip-and-spring, not a swing - singleplayer doesn't swing the arm on a successful place either)
     return true;
   }
@@ -2405,7 +2428,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         removeGroundItem(entityId);
       }
     },
-    onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId, msg.waterDistance, msg.silent),
+    onBlockChanged: (msg) => applyBlockChange(msg.x, msg.y, msg.z, msg.blockId, msg.waterDistance, msg.silent, msg.data),
     onEntityRemoved: (id) => {
       const op = remoteEntities.get(id);
       if (op) { removeEntityAvatar(op); remoteEntities.delete(id); }

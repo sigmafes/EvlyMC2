@@ -5,7 +5,7 @@ import type {
   ClientMessage, ServerMessage, EntitySnapshot, Vec3, CraftSlotRef,
 } from '../../src/net/protocol';
 import { PROTOCOL_VERSION, isClientMessageType } from '../../src/net/protocol';
-import { BlockId, blockLightProperties, isSolidBlock } from '../../src/block';
+import { BlockId, blockLightProperties, isSolidBlock, isOrientable } from '../../src/block';
 import { ServerTerrain } from './terrain';
 import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
@@ -21,7 +21,8 @@ import type { MobKind } from './game/mob-manager';
 import type { InventorySlot } from '../../src/inventory';
 import { RECIPES, matchRecipe, type Recipe } from '../../src/crafting';
 import { FurnaceManager } from '../../src/furnace';
-import { emptyFurnace, type FurnaceState } from '../../src/block-data';
+import { emptyFurnace, facingTowardPlayer, type FurnaceState, type BlockData } from '../../src/block-data';
+import { isStairs, isSlab } from '../../src/block-shapes';
 import { ServerDroppedItems } from './game/dropped-items';
 import { ServerArrows, powerToSpeed } from './game/arrow-projectiles';
 import { ActiveRegion, chunkCoordOf } from './game/active-region';
@@ -246,6 +247,17 @@ export class WorldDO implements DurableObject {
   /** Sparse block edits, "x,y,z" -> BlockId (BlockId.AIR for a broken block). Persisted to DO storage under the same key. */
   private readonly edits = new Map<string, BlockId>();
   private editsLoaded = false;
+  /**
+   * Orientation (facing/half/axis) for a placed block that needs it - the
+   * server-side counterpart of singleplayer's World/BlockDataStore, minus
+   * the furnace/lit fields (those already have their own dedicated
+   * `furnaceState`/FurnaceManager plumbing). Persisted under the
+   * `blockdata:` prefix, loaded alongside `edits` in fetch(). A cell is
+   * only ever present here while the block currently occupying it actually
+   * needs orientation - overwritten or removed like any other edit, see
+   * setBlock()'s handling below.
+   */
+  private readonly blockData = new Map<string, BlockData>();
   /** Real terrain (same deterministic Chunk/TerrainNoise generator the client uses) - see terrain.ts. Seeded once, from the first request's worldId. */
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
@@ -372,6 +384,8 @@ export class WorldDO implements DurableObject {
     if (!this.editsLoaded) {
       const stored = await this.state.storage.list<BlockId>({ prefix: 'edit:' });
       for (const [key, value] of stored) this.edits.set(key.slice('edit:'.length), value);
+      const storedData = await this.state.storage.list<BlockData>({ prefix: 'blockdata:' });
+      for (const [key, value] of storedData) this.blockData.set(key.slice('blockdata:'.length), value);
       this.editsLoaded = true;
       // Adopt any FIRE block that outlived the engine that lit it. Engine
       // state is in-memory, so a DO that gets evicted mid-blaze wakes up with
@@ -513,7 +527,7 @@ export class WorldDO implements DurableObject {
         this.handleBreakBlock(session, msg.x, msg.y, msg.z);
         break;
       case 'placeBlock':
-        this.handlePlaceBlock(session, msg.x, msg.y, msg.z);
+        this.handlePlaceBlock(session, msg.x, msg.y, msg.z, msg.normal, msg.clickY, msg.yaw);
         break;
       case 'selectSlot':
         if (msg.index >= 0 && msg.index < session.inventory.length) {
@@ -697,14 +711,53 @@ export class WorldDO implements DurableObject {
   }
 
   /**
+   * Server-side port of src/block-placement-rules.ts's PLACEMENT_SETUP_RULES
+   * - same categories, same math, just fed the wire-friendly (normal,
+   * clickY, yaw) inputs placeBlock's protocol doc comment describes instead
+   * of a THREE-based RaycastHit/PlayerController. `placedHalfIsTop` folds
+   * in here too since nothing else needs it standalone.
+   */
+  private computePlacementData(id: BlockId, normal: Vec3, clickY: number, yaw: number): BlockData | undefined {
+    if (isOrientable(id)) {
+      return { facing: facingTowardPlayer(yaw) };
+    }
+    if (isStairs(id) || isSlab(id)) {
+      const half: 'top' | 'bottom' = normal.y > 0.5 ? 'bottom' : normal.y < -0.5 ? 'top' : clickY > 0.5 ? 'top' : 'bottom';
+      if (isStairs(id)) {
+        const away = facingTowardPlayer(yaw);
+        return { facing: ((away + 2) & 3) as 0 | 1 | 2 | 3, half };
+      }
+      return { half };
+    }
+    if (id === BlockId.OAK_LOG) {
+      const axis = Math.abs(normal.x) > 0.5 ? 'x' : Math.abs(normal.z) > 0.5 ? 'z' : 'y';
+      return { axis };
+    }
+    if (id === BlockId.TORCH && Math.abs(normal.y) < 0.5) {
+      const facing = normal.x > 0.5 ? 1 : normal.x < -0.5 ? 3 : normal.z > 0.5 ? 0 : 2;
+      return { facing: facing as 0 | 1 | 2 | 3 };
+    }
+    return undefined;
+  }
+
+  /**
    * Places whatever block is in the player's currently SELECTED slot,
    * ignoring any blockId the client's placeBlock message claims - the
    * inventory (server-held) is what's actually authoritative on what a
    * player has to place, not a value a modified client could just lie
-   * about. No-op (silently) if the slot is empty or not a block.
+   * about. No-op (silently) if the slot is empty or not a block - except
+   * flint and steel, ported from block-placement-rules.ts's USE_HANDLERS:
+   * it ignites the target air cell instead of placing anything.
    */
-  private handlePlaceBlock(session: Session, x: number, y: number, z: number): void {
+  private handlePlaceBlock(session: Session, x: number, y: number, z: number, normal: Vec3, clickY: number, yaw: number): void {
     const slot = session.inventory[session.selectedSlot];
+    if (slot.id === ItemId.FLINT_AND_STEEL) {
+      if (this.getBlockAt(x, y, z) === BlockId.AIR) {
+        this.setBlock(x, y, z, BlockId.FIRE);
+        this.damageTool(session, 1);
+      }
+      return;
+    }
     if (slot.id === null || !isBlock(slot.id)) return;
     // Same self-collision guard as singleplayer's BlockPlacer.placeBlock()
     // (block-placer.ts:38, via player.intersectsBlock - player-physics.ts's
@@ -716,7 +769,7 @@ export class WorldDO implements DurableObject {
     // into (e.g. flooding the ground under their own feet) isn't blocked.
     const isLiquid = slot.id === BlockId.WATER || slot.id === BlockId.LAVA;
     if (!isLiquid && session.physics.intersectsBlock(x, y, z)) return;
-    this.setBlockFromPlayer(x, y, z, slot.id);
+    this.setBlockFromPlayer(x, y, z, slot.id, this.computePlacementData(slot.id, normal, clickY, yaw));
     removeFromSlot(slot, 1);
     this.sendInventory(session);
   }
@@ -1297,7 +1350,7 @@ export class WorldDO implements DurableObject {
       // silent: true - this is catch-up history, not a live change; without
       // it a big backlog (e.g. a forest's worth of accumulated leaf decay)
       // played its dig sound/break-puff for every single entry on join.
-      this.send(ws, { type: 'blockChanged', x, y, z, blockId: id2, waterDistance: this.waterDistanceFor(id2, x, y, z), silent: true });
+      this.send(ws, { type: 'blockChanged', x, y, z, blockId: id2, waterDistance: this.waterDistanceFor(id2, x, y, z), silent: true, data: this.blockData.get(key) });
     }
     // Catch this client up on every already-connected player's skin, then
     // tell everyone else about this new player's - same backlog-replay
@@ -1893,7 +1946,7 @@ export class WorldDO implements DurableObject {
    * instead. This is the same split singleplayer keeps between World.setBlock
    * and World.place.
    */
-  private setBlock(x: number, y: number, z: number, id: BlockId, silent = false): void {
+  private setBlock(x: number, y: number, z: number, id: BlockId, silent = false, data?: BlockData): void {
     // Read before the edit overwrites it - leaf decay needs to know what
     // USED to be here (was it a log?), same as world.ts's remove() capturing
     // oldBlock before blockStore.removeBlockRaw().
@@ -1901,7 +1954,19 @@ export class WorldDO implements DurableObject {
     const key = `${x},${y},${z}`;
     this.edits.set(key, id);
     void this.state.storage.put(`edit:${key}`, id);
-    this.broadcast({ type: 'blockChanged', x, y, z, blockId: id, waterDistance: this.waterDistanceFor(id, x, y, z), silent });
+    // Same split as world.ts's setBlockData/remove: a block that needs
+    // orientation gets a fresh entry, anything else (including a plain
+    // re-placement over a cell that USED to be oriented, e.g. a stair
+    // getting mined and replaced by dirt) drops whatever was there before -
+    // never carry stale facing/half/axis data into an unrelated block.
+    if (data) {
+      this.blockData.set(key, data);
+      void this.state.storage.put(`blockdata:${key}`, data);
+    } else if (this.blockData.has(key)) {
+      this.blockData.delete(key);
+      void this.state.storage.delete(`blockdata:${key}`);
+    }
+    this.broadcast({ type: 'blockChanged', x, y, z, blockId: id, waterDistance: this.waterDistanceFor(id, x, y, z), silent, data });
     if (id === BlockId.FIRE) this.fire.onFirePlaced(x, y, z);
     else this.fire.onFireRemoved(x, y, z);
     if (id === BlockId.WATER || id === BlockId.LAVA) this.resolveLiquidInteractionAt(x, y, z);
@@ -1944,8 +2009,8 @@ export class WorldDO implements DurableObject {
   }
 
   /** A block a PLAYER placed or broke: same write as setBlock, plus telling the fluid engines a source appeared or disappeared here. */
-  private setBlockFromPlayer(x: number, y: number, z: number, id: BlockId): void {
-    this.setBlock(x, y, z, id);
+  private setBlockFromPlayer(x: number, y: number, z: number, id: BlockId, data?: BlockData): void {
+    this.setBlock(x, y, z, id, false, data);
     if (id === BlockId.AIR) {
       this.water.onBlockRemoved(x, y, z);
       this.lava.onBlockRemoved(x, y, z);

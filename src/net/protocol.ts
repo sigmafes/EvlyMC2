@@ -1,7 +1,7 @@
 import type { BlockId } from '../block';
 import type { InventorySlot } from '../inventory';
 import type { MobKind } from '../mob-manager';
-import type { FurnaceState } from '../block-data';
+import type { FurnaceState, BlockData } from '../block-data';
 
 /**
  * Fase 4 of the multiplayer migration plan: the wire contract between a
@@ -164,7 +164,19 @@ export type ClientMessage =
    * `breakStart` at all.
    */
   | { type: 'breakBlock'; x: number; y: number; z: number }
-  | { type: 'placeBlock'; x: number; y: number; z: number; blockId: BlockId; face: number }
+  /**
+   * `normal` is the clicked face's world-space normal (one of the 6
+   * axis-aligned unit vectors), `clickY` is the click point's fractional
+   * height within that face's cell (`point.y - (existingBlockY - 0.5)`, same
+   * value src/block-placement-rules.ts's placedHalfIsTop derives from
+   * RaycastHit), and `yaw` is the player's look yaw at the moment of the
+   * click - together the exact inputs block-placement-rules.ts needs to
+   * orient a stair/slab/log/torch/furnace the same way singleplayer does.
+   * `blockId` is only ever used for the flint-and-steel special case
+   * (world-do.ts's handlePlaceBlock always places whatever is actually in
+   * the player's selected slot otherwise).
+   */
+  | { type: 'placeBlock'; x: number; y: number; z: number; blockId: BlockId; normal: Vec3; clickY: number; yaw: number }
   | { type: 'selectSlot'; index: number }
   | { type: 'useItem'; slotIndex: number }
   /** Q - throws the selected hotbar slot's item(s) out in front of the player as a real ground entity (DroppedItemSnapshot), same as singleplayer's own Q. `dir` is the player's look direction, used for the throw arc; the server clamps/normalises it itself. `all` mirrors singleplayer's interaction.ts onDropSelected(ctrlKey): false (plain Q) drops a single item, true (Ctrl+Q) drops the whole stack. */
@@ -279,7 +291,8 @@ export type ServerMessage =
    * right now (the backlog of edits replayed on join). Absent/false plays
    * the sound normally, same as before this field existed.
    */
-  | { type: 'blockChanged'; x: number; y: number; z: number; blockId: BlockId; waterDistance?: number; silent?: boolean }
+  /** `data` carries orientation (facing/half/axis, see block-data.ts's BlockData) for a block that needs it - a placed stair/slab/log/torch/furnace, or unset for anything that renders the same regardless of orientation. Omitted (not just undefined) whenever there's nothing to say, to keep the common case's payload small. */
+  | { type: 'blockChanged'; x: number; y: number; z: number; blockId: BlockId; waterDistance?: number; silent?: boolean; data?: BlockData }
   | { type: 'inventoryUpdate'; slots: InventorySlot[]; selectedIndex: number }
   | { type: 'entityRemoved'; id: number; reason: 'death' | 'despawn' | 'disconnect' }
   /** Another player's skin - sent once when they join (and replayed for every already-connected player right after `welcome`, so a client catches up on everyone already in the world). `skin: null` means the built-in default. */
