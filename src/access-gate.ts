@@ -154,6 +154,17 @@ export function waitForAccessGate(): Promise<void> {
         setMessage('Enter your name and password', true);
         return;
       }
+      // Dev-only offline bypass: `npm run dev` has no access-worker to talk
+      // to (it's a deployed Cloudflare Worker, not part of the local dev
+      // server), so logging in at all was impossible without a real network
+      // path to it. import.meta.env.DEV is Vite's own build-mode flag - this
+      // branch is stripped out of `npm run build`'s production bundle
+      // entirely, so it can't reach a real deploy.
+      if (import.meta.env.DEV && username === 'Steve' && password === 'Steve') {
+        succeed(username, null);
+        return;
+      }
+
       busy = true;
       setMessage('Checking...', false);
       void callApi('/login', username, password).then((result) => {
