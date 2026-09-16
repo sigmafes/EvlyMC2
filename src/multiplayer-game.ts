@@ -10,6 +10,9 @@ import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkin
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
 import { ViewBob } from './view-bob';
+import { showHeldItemName } from './held-item-name';
+import { playClick } from './ui-sound';
+import { showTooltip, hideTooltip } from './tooltip';
 import { loadPlayerSkinDataUrl } from './player-skin';
 import { loadPlayToken } from './access-gate';
 import { setSingleplayerChatEnabled, setSingleplayerPauseMenuEnabled } from './main';
@@ -801,6 +804,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   document.body.appendChild(hotbarEl);
   let inventorySlots: InventorySlot[] = Array.from({ length: TOTAL_SLOTS }, createEmptySlot);
   let selectedSlotIndex = 0;
+  /** Same key scheme as singleplayer's Inventory.announceHeld - `index:id`, so a stack-count-only change (mining, placing) doesn't re-flash the name. */
+  let lastHeldKey: string | null = null;
+  function announceHeldIfChanged(): void {
+    const slot = inventorySlots[selectedSlotIndex] ?? createEmptySlot();
+    const key = `${selectedSlotIndex}:${slot.id ?? ''}`;
+    const first = lastHeldKey === null;
+    const changed = key !== lastHeldKey;
+    lastHeldKey = key;
+    if (first || !changed || backpackOpen) return;
+    showHeldItemName(slot.id === null ? null : slot.name);
+  }
   function renderHotbar(): void {
     for (let i = 0; i < HOTBAR_SIZE; i++) {
       renderSlot(hotbarSlotEls[i], inventorySlots[i] ?? createEmptySlot());
@@ -848,6 +862,16 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   document.addEventListener('mousemove', (e) => {
     ghostEl.style.left = `${e.clientX}px`;
     ghostEl.style.top = `${e.clientY}px`;
+  });
+  // Hover tooltip with the item's name, same as singleplayer's Inventory -
+  // every slot button already carries its name in aria-label via renderSlot,
+  // so this one delegated listener covers the hotbar, backpack, table and
+  // furnace panels without needing to resolve each CraftSlotRef back to a value.
+  document.addEventListener('mousemove', (e) => {
+    const el = (e.target as HTMLElement | null)?.closest<HTMLElement>('.inventory-slot');
+    const name = el?.getAttribute('aria-label');
+    if (el && name && !heldItem) showTooltip(name, e.clientX, e.clientY);
+    else hideTooltip();
   });
 
   /** Every slot button this file creates, so the paint-drag gesture below can look up which one the cursor is currently over. */
@@ -953,6 +977,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   backpackPanelEl.append(backpackDollEl, backpackCraftEl, backpackCraftResultEl, backpackGridEl, backpackHotbarEl);
   backpackEl.appendChild(backpackPanelEl);
   document.body.appendChild(backpackEl);
+  // Same delegated UI click as pause-menu.ts's own root listener.
+  backpackEl.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('button')) playClick();
+  });
   // Right-click on empty space (not a recognised slot, which stops this via
   // stopPropagation) while holding something puts it back - same as
   // singleplayer's document-level cancelHeld() only ever reached when the
@@ -984,6 +1012,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     } else {
       client.send({ type: 'craftClose' });
       lockPointer(canvas);
+      hideTooltip();
     }
   }
 
@@ -1019,6 +1048,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   tableEl.appendChild(tablePanelEl);
   document.body.appendChild(tableEl);
   tableEl.addEventListener('contextmenu', (e) => { e.preventDefault(); if (heldItem) client.send({ type: 'invCancel' }); });
+  tableEl.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('button')) playClick();
+  });
 
   let tableOpen = false;
   function renderTable(): void {
@@ -1042,6 +1074,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     } else {
       client.send({ type: 'craftClose' });
       lockPointer(canvas);
+      hideTooltip();
     }
   }
 
@@ -1228,6 +1261,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   );
   furnaceEl.appendChild(furnacePanel);
   document.body.appendChild(furnaceEl);
+  furnaceEl.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('button')) playClick();
+  });
   let furnacePos: { x: number; y: number; z: number } | null = null;
   let furnaceOpenState = false;
   /** furnace.ts's FurnaceState only stores {id,count} (SlotRef) - not the name/texture renderSlot() needs - so this fills that in the same way world-do.ts's describeSlot() does for the real inventory. */
@@ -1269,6 +1305,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       if (furnacePos) client.send({ type: 'furnaceClose' });
       furnacePos = null;
       lockPointer(canvas);
+      hideTooltip();
     }
   }
 
@@ -1437,6 +1474,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
 
   optionsEl.append(pausedViewEl, optionsViewEl);
   document.body.appendChild(optionsEl);
+  optionsEl.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('button')) playClick();
+  });
 
   /** Same showOptions(show) split as pause-menu.ts - swap which of the two views is visible without closing the whole panel. */
   function showOptionsView(show: boolean): void {
@@ -2386,6 +2426,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onInventoryUpdate: (slots, selectedIndex) => {
       inventorySlots = slots;
       selectedSlotIndex = selectedIndex;
+      announceHeldIfChanged();
       // Wait for the block/item atlas (see terrainReady's doc comment) so a
       // slot never renders before it can show its real texture.
       void (terrainReady ?? Promise.resolve()).then(() => {
