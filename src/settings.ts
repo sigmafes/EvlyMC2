@@ -14,6 +14,8 @@ export type GameSettings = {
 };
 
 const KEY = 'evlymc-settings';
+/** Multiplayer keeps its own copy under a separate key - same shape, but the two modes' values (render distance especially: multiplayer's is capped 2-4 by the server's SIMULATION_RADIUS_CHUNKS, singleplayer's isn't) shouldn't overwrite each other just because someone tuned one mode's options. */
+const KEY_MP = 'evlymc-settings-mp';
 
 export const DEFAULT_SETTINGS: GameSettings = {
   fov: 70,
@@ -25,6 +27,12 @@ export const DEFAULT_SETTINGS: GameSettings = {
   fog: true,
   alexSkin: false,
   viewBob: true,
+};
+
+/** Multiplayer's own defaults - identical except renderDistance, which starts at the middle of its 2-4 range instead of singleplayer's 5. */
+export const DEFAULT_MP_SETTINGS: GameSettings = {
+  ...DEFAULT_SETTINGS,
+  renderDistance: 3,
 };
 
 export function loadSettings(): GameSettings {
@@ -39,6 +47,23 @@ export function loadSettings(): GameSettings {
 export function saveSettings(patch: Partial<GameSettings>) {
   try {
     localStorage.setItem(KEY, JSON.stringify({ ...loadSettings(), ...patch }));
+  } catch {
+    /* private mode */
+  }
+}
+
+export function loadMpSettings(): GameSettings {
+  try {
+    const raw = localStorage.getItem(KEY_MP);
+    return raw ? { ...DEFAULT_MP_SETTINGS, ...(JSON.parse(raw) as Partial<GameSettings>) } : { ...DEFAULT_MP_SETTINGS };
+  } catch {
+    return { ...DEFAULT_MP_SETTINGS };
+  }
+}
+
+export function saveMpSettings(patch: Partial<GameSettings>) {
+  try {
+    localStorage.setItem(KEY_MP, JSON.stringify({ ...loadMpSettings(), ...patch }));
   } catch {
     /* private mode */
   }

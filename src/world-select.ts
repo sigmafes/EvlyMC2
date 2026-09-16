@@ -10,6 +10,7 @@ import {
   activateWorld,
   formatStamp,
   isWorldCompatible,
+  EVLYMC_VERSION,
 } from './worlds';
 
 type WorldSelectHandlers = {
@@ -181,7 +182,7 @@ export class WorldSelect {
       const sub2 = document.createElement('div');
       sub2.className = 'world-row-sub';
       sub2.textContent = `${world.mode} Mode, ${world.cheats ? 'Cheats, ' : ''}Version: ${world.version}`
-        + (compatible ? '' : ' (incompatible with A0.c)');
+        + (compatible ? '' : ` (incompatible with ${EVLYMC_VERSION})`);
       if (!compatible) sub2.classList.add('world-row-incompatible');
 
       text.append(title, sub1, sub2);

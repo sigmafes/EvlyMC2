@@ -3,7 +3,7 @@ import { BlockDataStore } from './block-data';
 import { DroppedItemsStore } from './dropped-items-store';
 import { deletePlayerSave } from './player-store';
 
-export const EVLYMC_VERSION = 'A0.c';
+export const EVLYMC_VERSION = 'A0.d';
 
 /**
  * Worlds are only playable/editable on the version that created them - there

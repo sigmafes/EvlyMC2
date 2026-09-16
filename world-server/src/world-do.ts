@@ -1414,6 +1414,13 @@ export class WorldDO implements DurableObject {
     // Save AFTER returning the grid's contents, so what was staged in it is
     // part of the inventory that gets written rather than lost.
     this.savePlayer(session);
+    // Each player has their own animal/hostile spawner (mobSpawning), so
+    // leaving its mobs behind on every disconnect only ever grows the
+    // world's population over a session, eventually starving everyone still
+    // connected once ServerMobManager's MAX_MOBS cap is hit - a
+    // disconnecting player's mobs leave with them instead.
+    for (const mobId of session.mobSpawning.ownedMobIds()) this.mobs.forceRemove(mobId);
+    this.mobsDirty = true;
     this.sessions.delete(ws);
     this.broadcast({ type: 'entityRemoved', id: session.id, reason: 'disconnect' });
     this.broadcast({ type: 'chat', from: 'server', text: `${session.name} left` });
@@ -1871,16 +1878,20 @@ export class WorldDO implements DurableObject {
   /**
    * Reduced port of src/chat-commands.ts's /summon, /give, /time, /seed and
    * /fly (Fase 6/7 of PLAN-MULTIPLAYER-BUGFIXES.md /
-   * PLAN-MULTIPLAYER-MISSING-FEATURES.md) - /panorama and /mobstatus stay
-   * singleplayer-only (purely client-side capture, or a debug readout of
-   * client-only spawning state that doesn't exist the same way server-side).
-   * The result is echoed back to the caller ONLY, as a `from: 'server'` chat
-   * line - never broadcast, same as a real Minecraft server's command output.
+   * PLAN-MULTIPLAYER-MISSING-FEATURES.md), plus a multiplayer-only /clean
+   * <inv|mobs> with no singleplayer equivalent (a single-player world has
+   * no reason to nuke every mob at once, or clear an inventory it's just as
+   * easy to empty by hand). /panorama and /mobstatus stay singleplayer-only
+   * (purely client-side capture, or a debug readout of client-only spawning
+   * state that doesn't exist the same way server-side). The result is
+   * echoed back to the caller ONLY, as a `from: 'server'` chat line - never
+   * broadcast, same as a real Minecraft server's command output.
    *
-   * /time, /seed and /fly are gated to ADMIN_NAMES - unlike /summon and
-   * /give (which only affect the caller's own inventory/immediate
-   * surroundings), these change or reveal something for every player in the
-   * world, so an arbitrary joiner shouldn't get them for free.
+   * /time, /seed, /fly and /clean mobs are gated to ADMIN_NAMES - unlike
+   * /summon, /give and /clean inv (which only affect the caller's own
+   * inventory/immediate surroundings), these change or reveal something for
+   * every player in the world, so an arbitrary joiner shouldn't get them
+   * for free.
    */
   private handleChatCommand(session: Session, raw: string): void {
     const args = raw.trim().split(/\s+/).filter(Boolean);
@@ -1917,6 +1928,31 @@ export class WorldDO implements DurableObject {
       session.physics.setCanFly(enabled);
       if (enabled) session.physics.setFlying(true);
       reply(enabled ? 'Flight enabled.' : 'Flight disabled.');
+      return;
+    }
+
+    if (cmd === 'clean') {
+      const target = (args[0] ?? '').toLowerCase();
+      if (target === 'inv') {
+        // Self-only (same as /give), so no admin gate - only affects the
+        // caller's own inventory.
+        for (let i = 0; i < session.inventory.length; i++) session.inventory[i] = createEmptySlot();
+        this.sendInventory(session);
+        reply('Inventory cleared.');
+        return;
+      }
+      if (target === 'mobs') {
+        // World-wide (every player's animals AND hostiles), so admin-gated
+        // like /time - one player shouldn't be able to wipe everyone else's
+        // spawned mobs on a whim.
+        if (!isAdmin) { reply('You do not have permission to use /clean mobs.'); return; }
+        const ids = this.mobs.snapshots().map((s) => s.id);
+        for (const id of ids) this.mobs.forceRemove(id);
+        this.mobsDirty = true;
+        reply(`Removed ${ids.length} mob${ids.length === 1 ? '' : 's'}.`);
+        return;
+      }
+      reply('Usage: /clean inv|mobs');
       return;
     }
 

@@ -2031,7 +2031,11 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
   position: fixed;
   bottom: 18px;
   left: 50%;
-  z-index: 901;
+  /* Above #touch-look/#touch-ui (950/951 on touch, see the override below) -
+     otherwise that full-screen look/mine/attack layer sits on top and
+     swallows a tap meant for a hotbar slot before it ever reaches the
+     button underneath, so slots couldn't be selected by touch at all. */
+  z-index: 960;
   display: flex;
   transform: translateX(-50%);
   filter: drop-shadow(3px 3px 0 rgba(0, 0, 0, .55));

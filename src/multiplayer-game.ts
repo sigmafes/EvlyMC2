@@ -4,7 +4,7 @@ import { BlockId, blockLightProperties, createBlockMaterials, isSolidBlock, FURN
 import { Chunk, CHUNK_SIZE, CHUNK_HEIGHT } from './chunk';
 import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui, isTouchDevice } from './is-touch';
-import { loadSettings, saveSettings } from './settings';
+import { loadMpSettings, saveMpSettings } from './settings';
 import { TouchControls } from './touch-controls';
 import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials, type ModelAdjustments } from './player-model';
 import { InventoryDoll } from './inventory-doll';
@@ -93,7 +93,11 @@ const TICK_HZ = 20;
 const SEND_INTERVAL_MS = 1000 / TICK_HZ;
 const MOUSE_SENSITIVITY_BASE = 0.0022; // matches player.ts's own base look constant exactly
 const REACH = 5;
-const VIEW_RADIUS_CHUNKS = 3; // 7x7 chunks (112x112 blocks) around the player, kept loaded
+const MIN_VIEW_RADIUS_CHUNKS = 2;
+/** Same SIMULATION_RADIUS_CHUNKS the server's active-region.ts uses (game/active-region.ts) - the server never simulates fluids/mobs/fire past this radius from a player, so letting the client render further would show frozen terrain edges again (the exact problem render distance was originally excluded from this panel to avoid, see PLAN-MULTIPLAYER-BUGFIXES.md's Fase 7). Capping the slider here instead keeps the two numbers from being able to drift apart. */
+const MAX_VIEW_RADIUS_CHUNKS = 4;
+/** Mutable now - adjustable via the options panel (Fase 6+ follow-up), clamped to [MIN_VIEW_RADIUS_CHUNKS, MAX_VIEW_RADIUS_CHUNKS] wherever it's set. Default 3 chunks (7x7, 112x112 blocks) around the player, kept loaded. */
+let viewRadiusChunks = 3;
 const UNLOAD_MARGIN_CHUNKS = 1; // a chunk isn't unloaded until it's this far PAST the view radius, so walking back and forth right at the edge doesn't thrash load/unload every frame
 const CHUNKS_PER_FRAME = 1; // generation+meshing is real CPU work - spread across frames like singleplayer's own FrameBudget, not all at once
 
@@ -239,31 +243,36 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   scene.background = DAY_SKY_COLOR.clone();
   // Same "scale with the actual view distance" formula main.ts's own
   // applyFogDistanceFor() derives from the (adjustable) renderDistance
-  // setting - multiplayer's VIEW_RADIUS_CHUNKS is fixed rather than a player
-  // setting, but the fog is still tied to it by formula now instead of a
-  // bare literal, so the two numbers can't quietly drift apart again if
-  // VIEW_RADIUS_CHUNKS ever changes. (far = radius*CHUNK_SIZE*1.5, near =
-  // far*40/72 - chosen to reproduce this file's previous tuned 40/72 pair
-  // exactly at the current VIEW_RADIUS_CHUNKS=3, so this is a no-op today.)
-  const MP_FOG_FAR = VIEW_RADIUS_CHUNKS * CHUNK_SIZE * 1.5;
-  const fog = new THREE.Fog(scene.background.clone(), MP_FOG_FAR * (40 / 72), MP_FOG_FAR);
+  // setting - render distance is now adjustable in multiplayer too (2-4,
+  // capped by the server's SIMULATION_RADIUS_CHUNKS), so this is recomputed
+  // whenever it changes instead of being a one-off literal. (far =
+  // radius*CHUNK_SIZE*1.5, near = far*40/72 - chosen to reproduce this
+  // file's previous tuned 40/72 pair exactly at the old fixed radius of 3.)
+  const fog = new THREE.Fog(scene.background.clone(), 40, 72);
   scene.fog = fog;
+  function applyMpFogDistance(radiusChunks: number): void {
+    const far = radiusChunks * CHUNK_SIZE * 1.5;
+    fog.near = far * (40 / 72);
+    fog.far = far;
+  }
   let fogEnabled = true; // set from mpSettings.fog once loaded below (declaration order: mpSettings doesn't exist yet here)
   scene.add(new THREE.AmbientLight(0xffffff, 0.9));
   const sun = new THREE.DirectionalLight(0xffffff, 0.6);
   sun.position.set(3, 10, 2);
   scene.add(sun);
 
-  // Seeded from the same persisted settings singleplayer's own PauseMenu
-  // reads/writes (localStorage, per origin) - a sensitivity or FOV set in
-  // one mode carries over to the other, since it's the same person at the
-  // same device either way.
-  const mpSettings = loadSettings();
+  // Multiplayer's own persisted settings (a separate localStorage key from
+  // singleplayer's - see settings.ts's doc comment) so tuning one mode's
+  // options, render distance especially, never bleeds into the other.
+  const mpSettings = loadMpSettings();
   fogEnabled = mpSettings.fog;
   scene.fog = fogEnabled ? fog : null;
+  viewRadiusChunks = THREE.MathUtils.clamp(mpSettings.renderDistance, MIN_VIEW_RADIUS_CHUNKS, MAX_VIEW_RADIUS_CHUNKS);
+  applyMpFogDistance(viewRadiusChunks);
   const camera = new THREE.PerspectiveCamera(mpSettings.fov, window.innerWidth / window.innerHeight, 0.05, 500);
   // Same formula interaction.ts's onMouseMove applies to pauseMenu.mouseSensitivity: the 0-100 slider value divided by 100, scaling the base look constant. Mutable so the options panel's slider takes effect immediately.
   let sensitivityScale = mpSettings.sensitivity / 100;
+  let touchSensitivityScale = mpSettings.touchSensitivity / 100;
   let viewBobOn = mpSettings.viewBob;
   let smoothLightingOn = mpSettings.smoothLighting;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -525,13 +534,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const playerKey = `${pcx},${pcz}`;
     if (playerKey !== lastPlayerChunkKey) {
       lastPlayerChunkKey = playerKey;
-      for (let dx = -VIEW_RADIUS_CHUNKS; dx <= VIEW_RADIUS_CHUNKS; dx++) {
-        for (let dz = -VIEW_RADIUS_CHUNKS; dz <= VIEW_RADIUS_CHUNKS; dz++) {
+      for (let dx = -viewRadiusChunks; dx <= viewRadiusChunks; dx++) {
+        for (let dz = -viewRadiusChunks; dz <= viewRadiusChunks; dz++) {
           const k = `${pcx + dx},${pcz + dz}`;
           if (!chunks.has(k) && !queuedKeys.has(k)) { loadQueue.push(k); queuedKeys.add(k); }
         }
       }
-      const unloadRadius = VIEW_RADIUS_CHUNKS + UNLOAD_MARGIN_CHUNKS;
+      const unloadRadius = viewRadiusChunks + UNLOAD_MARGIN_CHUNKS;
       for (const k of [...chunks.keys()]) {
         const [cx, cz] = k.split(',').map(Number);
         if (Math.abs(cx - pcx) > unloadRadius || Math.abs(cz - pcz) > unloadRadius) unloadChunk(k);
@@ -539,7 +548,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // Drop anything still queued that fell out of range before its turn came up.
       for (let i = loadQueue.length - 1; i >= 0; i--) {
         const [cx, cz] = loadQueue[i].split(',').map(Number);
-        if (Math.abs(cx - pcx) > VIEW_RADIUS_CHUNKS || Math.abs(cz - pcz) > VIEW_RADIUS_CHUNKS) {
+        if (Math.abs(cx - pcx) > viewRadiusChunks || Math.abs(cz - pcz) > viewRadiusChunks) {
           queuedKeys.delete(loadQueue[i]);
           loadQueue.splice(i, 1);
         }
@@ -1540,7 +1549,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   optionsHeading.textContent = 'Options';
   const sensitivityRow = makeSlider('Mouse Sensitivity', 1, 200, mpSettings.sensitivity, (v) => {
     sensitivityScale = v / 100;
-    saveSettings({ sensitivity: v });
+    saveMpSettings({ sensitivity: v });
   });
   // Kept separate from camera.fov itself (mirrors pause-menu.ts's own
   // fovSlider vs camera.fov split) because the underwater dip below needs
@@ -1550,34 +1559,44 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const AIM_FOV_REDUCTION = 20; // matches player.ts's PlayerController.AIM_FOV_REDUCTION
   const fovRow = makeSlider('FOV', 30, 110, mpSettings.fov, (v) => {
     baseFov = v;
-    saveSettings({ fov: v });
+    saveMpSettings({ fov: v });
+  });
+  const renderDistanceRow = makeSlider('Render Distance', MIN_VIEW_RADIUS_CHUNKS, MAX_VIEW_RADIUS_CHUNKS, viewRadiusChunks, (v) => {
+    viewRadiusChunks = v;
+    lastPlayerChunkKey = ''; // forces updateStreaming() to re-evaluate load/unload against the new radius on its very next call
+    applyMpFogDistance(v);
+    saveMpSettings({ renderDistance: v });
   });
   const fogToggle = makeToggle('Fog', mpSettings.fog, (enabled) => {
     fogEnabled = enabled;
     scene.fog = fogEnabled ? fog : null;
-    saveSettings({ fog: enabled });
+    saveMpSettings({ fog: enabled });
   });
   const smoothLightingToggle = makeToggle('Smooth Lighting', mpSettings.smoothLighting, (enabled) => {
     setSmoothLighting(enabled);
-    saveSettings({ smoothLighting: enabled });
+    saveMpSettings({ smoothLighting: enabled });
   });
   const viewBobToggle = makeToggle('View Bobbing', mpSettings.viewBob, (enabled) => {
     viewBobOn = enabled;
-    saveSettings({ viewBob: enabled });
+    saveMpSettings({ viewBob: enabled });
   });
   const skinTypeToggle = makeToggle('Skin Type', mpSettings.alexSkin, (enabled) => {
     setAlexSkin(enabled);
-    saveSettings({ alexSkin: enabled });
+    saveMpSettings({ alexSkin: enabled });
   }, 'Slim', 'Classic');
-  optionsViewEl.append(optionsHeading, fovRow, sensitivityRow, fogToggle, smoothLightingToggle, viewBobToggle, skinTypeToggle);
+  optionsViewEl.append(optionsHeading, fovRow, sensitivityRow, renderDistanceRow, fogToggle, smoothLightingToggle, viewBobToggle, skinTypeToggle);
   // Touch-only controls: meaningless (and disabled in singleplayer's own
   // panel too) on a device with no on-screen buttons or touch-drag look.
   if (isTouchDevice()) {
+    const touchSensitivityRow = makeSlider('Touch Sensitivity', 1, 200, mpSettings.touchSensitivity, (v) => {
+      touchSensitivityScale = v / 100;
+      saveMpSettings({ touchSensitivity: v });
+    });
     const opacityRow = makeSlider('Button Opacity', 10, 100, mpSettings.buttonOpacity, (v) => {
       touchControls?.setButtonOpacity(v);
-      saveSettings({ buttonOpacity: v });
+      saveMpSettings({ buttonOpacity: v });
     });
-    optionsViewEl.appendChild(opacityRow);
+    optionsViewEl.append(touchSensitivityRow, opacityRow);
   }
   const optionsBackBtn = makeButton('Back', () => showOptionsView(false));
   optionsViewEl.appendChild(optionsBackBtn);
@@ -2085,13 +2104,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         onSneak: (on) => { touchSneak = on; },
         onSprint: (on) => { touchSprint = on; },
         onLook: (dx, dy) => {
-          // Singleplayer's own touchSensitivity setting isn't actually wired
-          // to anything there either (its slider persists a value nothing
-          // reads) - reusing the desktop sensitivity here isn't a regression
-          // against a working feature, it's the same gap singleplayer has,
-          // just not silently ignoring the shared slider like that one does.
-          yaw -= dx * MOUSE_SENSITIVITY_BASE * sensitivityScale;
-          pitch -= dy * MOUSE_SENSITIVITY_BASE * sensitivityScale;
+          yaw -= dx * MOUSE_SENSITIVITY_BASE * touchSensitivityScale;
+          pitch -= dy * MOUSE_SENSITIVITY_BASE * touchSensitivityScale;
           pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
         },
         onTapPlace: () => { if (touchAimNdc) performInteraction(touchAimNdc, 'place'); },
@@ -2111,8 +2125,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         // Same E-key logic as onKeyDown below: don't open the backpack over
         // the furnace GUI, and close the table first if it's up.
         onInventory: () => {
-          if (furnaceOpenState) return;
-          if (tableOpen) setTableOpen(false);
+          // Matches onKeyDown's real KeyE behaviour (close whichever panel
+          // is already open, one at a time) - this comment previously
+          // claimed the same but the code didn't: it just no-op'd over an
+          // open furnace instead of closing it.
+          if (tableOpen) { setTableOpen(false); return; }
+          if (furnaceOpenState) { setFurnaceOpen(false); return; }
           setBackpackOpen(!backpackOpen);
         },
         onThirdPerson: () => cycleCameraMode(),
@@ -2646,10 +2664,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (keys.has('KeyD')) moveX += 1;
     moveX = THREE.MathUtils.clamp(moveX, -1, 1);
     moveZ = THREE.MathUtils.clamp(moveZ, -1, 1);
-    // Same auto-clear as player.ts's own update(): stopping cancels sprint,
-    // same as touchSprint's on-screen toggle button being its own separate
-    // (still held-style) signal.
-    if (moveX === 0 && moveZ === 0) sprintToggled = false;
+    // Same auto-clear as player.ts's own update() (`if (!isMoving) this.
+    // sprinting = false`) - singleplayer runs ONE sprinting flag through
+    // that same check regardless of source (keyboard toggle or the touch
+    // double-tap), but this file split it into two separate flags and only
+    // ever cleared sprintToggled here, so touchSprint (set true by
+    // TouchControls' double-tap-forward gesture, with nothing that ever
+    // sets it back false on its own) kept sprint on forever once triggered,
+    // even after fully stopping.
+    if (moveX === 0 && moveZ === 0) { sprintToggled = false; touchSprint = false; }
     client.send({
       type: 'input',
       seq: ++seq,

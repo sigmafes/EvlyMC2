@@ -62,21 +62,29 @@ export type MobSpawningDeps = {
   mobs: SpawnableMobManager;
 };
 
-export type MobSpawning = { update(delta: number): void };
+/** `ownedMobIds` is every slot's currently-spawned mob (animal + surface hostile + cave hostile), for world-do.ts to force-remove on disconnect - see the class doc comment below. */
+export type MobSpawning = { update(delta: number): void; ownedMobIds(): number[] };
 
 /**
  * One of these per connected player (created on join, discarded on
- * disconnect - see world-do.ts) - each keeps its own 16 slots and cooldowns,
+ * disconnect - see world-do.ts) - each keeps its own slots and cooldowns,
  * evaluated against that player's own position. Mobs it spawns all land in
  * the ONE shared ServerMobManager roster (ids are already globally unique
- * there), so combat/persistence/everyone-sees-everyone's-mobs works exactly
- * as before - only WHO decides when/where a new one appears changes.
+ * there), so combat/everyone-sees-everyone's-mobs works exactly as before -
+ * only WHO decides when/where a new one appears changes.
+ *
+ * A disconnecting player's mobs are force-removed with them (world-do.ts's
+ * onClose calls ownedMobIds() before dropping this spawner) rather than
+ * left to wander the shared world - each player keeps their own animal/
+ * hostile population, so leaving them all behind on every disconnect would
+ * only ever grow the world's mob count over a session, eventually hitting
+ * ServerMobManager's MAX_MOBS cap and starving everyone still connected.
  */
 export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
   const { getPlayerPos, isSolidAt, getBlockAt, surfaceHeight, isActiveAt, isNight, approxBrightnessAt, mobs } = deps;
 
-  const animalSlots: SpawnSlot[] = Array.from({ length: 6 }, () => ({ mobId: null, cooldown: 0 }));
-  const surfaceHostileSlots: SpawnSlot[] = Array.from({ length: 6 }, () => ({ mobId: null, cooldown: 0 }));
+  const animalSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
+  const surfaceHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
   const caveHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
 
   function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
@@ -189,5 +197,13 @@ export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
     for (const slot of caveHostileSlots) updateSpawnSlot(slot, delta, true, trySpawnCaveHostile);
   }
 
-  return { update };
+  function ownedMobIds(): number[] {
+    const ids: number[] = [];
+    for (const slot of [...animalSlots, ...surfaceHostileSlots, ...caveHostileSlots]) {
+      if (slot.mobId !== null) ids.push(slot.mobId);
+    }
+    return ids;
+  }
+
+  return { update, ownedMobIds };
 }
