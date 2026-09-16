@@ -242,6 +242,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   // not match singleplayer's exact numbers.
   const fog = new THREE.Fog(scene.background.clone(), 40, 72);
   scene.fog = fog;
+  let fogEnabled = true; // set from mpSettings.fog once loaded below (declaration order: mpSettings doesn't exist yet here)
   scene.add(new THREE.AmbientLight(0xffffff, 0.9));
   const sun = new THREE.DirectionalLight(0xffffff, 0.6);
   sun.position.set(3, 10, 2);
@@ -252,9 +253,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   // one mode carries over to the other, since it's the same person at the
   // same device either way.
   const mpSettings = loadSettings();
+  fogEnabled = mpSettings.fog;
+  scene.fog = fogEnabled ? fog : null;
   const camera = new THREE.PerspectiveCamera(mpSettings.fov, window.innerWidth / window.innerHeight, 0.05, 500);
   // Same formula interaction.ts's onMouseMove applies to pauseMenu.mouseSensitivity: the 0-100 slider value divided by 100, scaling the base look constant. Mutable so the options panel's slider takes effect immediately.
   let sensitivityScale = mpSettings.sensitivity / 100;
+  let viewBobOn = mpSettings.viewBob;
+  let smoothLightingOn = mpSettings.smoothLighting;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -477,6 +482,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // waterDistances/getLiquidDistance's doc comments).
     chunk.setWaterDistanceReader(getLiquidDistance);
     chunk.setBlockDataReader(getBlockDataAt);
+    chunk.setSmoothLighting(smoothLightingOn);
     lightEngine.initializeChunk(chunk);
     chunk.rebuildDirty();
     // Whichever neighbors were already loaded meshed their shared boundary
@@ -1374,6 +1380,18 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   function renderDiagnostics(): void {
     if (!diagnosticsOpen) return;
     const p = lastServerPos;
+    // Same renderer.info/performance.memory fields src/diagnostics.ts reads
+    // for singleplayer - this client has no World/ChunkManager to ask, so
+    // totalBlocks/visibleSubchunks/dirtySubchunks are summed straight from
+    // the `chunks` Map's own Chunk instances instead (same getters either
+    // way: Chunk.totalBlocks/visibleCount/pendingDirtySubchunks).
+    let totalBlocks = 0, visibleSubchunks = 0, dirtySubchunks = 0;
+    for (const chunk of chunks.values()) {
+      totalBlocks += chunk.totalBlocks;
+      visibleSubchunks += chunk.visibleCount;
+      dirtySubchunks += chunk.pendingDirtySubchunks;
+    }
+    const memory = (performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
     diagnosticsEl.textContent = [
       `FPS: ${fps.toFixed(0)}`,
       `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
@@ -1383,6 +1401,16 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       `Camera mode: ${cameraMode === 0 ? 'first-person' : cameraMode === 1 ? 'third-person' : 'third-person-front'}`,
       `Day time: ${clientDayTime.toFixed(0)}s`,
       `Ping: ${pingMs === null ? '...' : `${pingMs.toFixed(0)}ms`}`,
+      `Draw calls: ${renderer.info.render.calls}`,
+      `Triangles: ${renderer.info.render.triangles.toLocaleString()}`,
+      `Geometries: ${renderer.info.memory.geometries}`,
+      `Textures: ${renderer.info.memory.textures}`,
+      `Programs: ${renderer.info.programs?.length ?? 0}`,
+      `Blocks: ${totalBlocks.toLocaleString()}`,
+      `Visible subchunks: ${visibleSubchunks.toLocaleString()}`,
+      `Dirty subchunks: ${dirtySubchunks}`,
+      `Light queue: ${lightEngine.pendingUpdates} pending / ${lightEngine.processedUpdates} processed`,
+      `JS memory: ${memory ? `${(memory.usedJSHeapSize / 1048576).toFixed(1)} / ${(memory.jsHeapSizeLimit / 1048576).toFixed(1)} MB` : 'unavailable'}`,
     ].join('\n');
   }
 
@@ -1394,6 +1422,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (now - lastPingSentAt < PING_INTERVAL_MS) return;
     lastPingSentAt = now;
     client.send({ type: 'ping', clientTimeMs: now });
+  }
+
+  /** Same world.ts's setSmoothLighting(): flip every loaded chunk's flag, then re-mesh through the existing throttled relightQueue instead of a big-frame hitch (same trick the day/night skyDarken step and onState's catch-up relight already use). */
+  function setSmoothLighting(enabled: boolean): void {
+    if (smoothLightingOn === enabled) return;
+    smoothLightingOn = enabled;
+    for (const chunk of chunks.values()) chunk.setSmoothLighting(enabled);
+    relightQueue.length = 0;
+    for (const key of chunks.keys()) relightQueue.push(key);
   }
 
   /**
@@ -1448,6 +1485,20 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     btn.addEventListener('click', onClick);
     return btn;
   }
+  /** Same `.option-toggle`/`.toggle-label` markup and ON/OFF (or custom on/off word) convention as index.html's #pause-menu toggles - pause-menu.ts's own updateToggle(). */
+  function makeToggle(label: string, initial: boolean, onChange: (enabled: boolean) => void, onWord = 'ON', offWord = 'OFF'): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'option-toggle';
+    const span = document.createElement('span');
+    span.className = 'toggle-label';
+    btn.appendChild(span);
+    let enabled = initial;
+    const render = () => { span.textContent = `${label}: ${enabled ? onWord : offWord}`; btn.dataset.enabled = String(enabled); };
+    render();
+    btn.addEventListener('click', () => { enabled = !enabled; render(); onChange(enabled); });
+    return btn;
+  }
 
   const pausedViewEl = document.createElement('div');
   pausedViewEl.className = 'pause-view';
@@ -1476,7 +1527,24 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     baseFov = v;
     saveSettings({ fov: v });
   });
-  optionsViewEl.append(optionsHeading, fovRow, sensitivityRow);
+  const fogToggle = makeToggle('Fog', mpSettings.fog, (enabled) => {
+    fogEnabled = enabled;
+    scene.fog = fogEnabled ? fog : null;
+    saveSettings({ fog: enabled });
+  });
+  const smoothLightingToggle = makeToggle('Smooth Lighting', mpSettings.smoothLighting, (enabled) => {
+    setSmoothLighting(enabled);
+    saveSettings({ smoothLighting: enabled });
+  });
+  const viewBobToggle = makeToggle('View Bobbing', mpSettings.viewBob, (enabled) => {
+    viewBobOn = enabled;
+    saveSettings({ viewBob: enabled });
+  });
+  const skinTypeToggle = makeToggle('Skin Type', mpSettings.alexSkin, (enabled) => {
+    setAlexSkin(enabled);
+    saveSettings({ alexSkin: enabled });
+  }, 'Slim', 'Classic');
+  optionsViewEl.append(optionsHeading, fovRow, sensitivityRow, fogToggle, smoothLightingToggle, viewBobToggle, skinTypeToggle);
   // Touch-only controls: meaningless (and disabled in singleplayer's own
   // panel too) on a device with no on-screen buttons or touch-drag look.
   if (isTouchDevice()) {
@@ -1548,10 +1616,18 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
     localPlayerModel = new PlayerModel(materials);
     localPlayerModel.setVisible(cameraMode !== 0);
+    localPlayerModel.setSlimArms(mpSettings.alexSkin);
     scene.add(localPlayerModel.group);
     localSkinMaterials = materials;
   }
   void loadSkinImage(loadPlayerSkinDataUrl()).then((img) => buildLocalPlayerModel(createSkinMaterials(img)));
+  hand.setSlim(mpSettings.alexSkin);
+  /** Same three setSlim/setSlimArms calls main.ts's own alexSkin toggle makes. */
+  function setAlexSkin(slim: boolean): void {
+    localPlayerModel?.setSlimArms(slim);
+    hand.setSlim(slim);
+    backpackDoll.setSlim(slim);
+  }
 
   function cycleCameraMode(): void {
     cameraMode = ((cameraMode + 1) % 3) as 0 | 1 | 2;
@@ -2569,7 +2645,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (cameraMode === 0) {
       camera.position.copy(lastServerPos);
       camera.rotation.set(pitch, yaw, 0, 'YXZ');
-      applyViewBob();
+      if (viewBobOn) applyViewBob();
     } else {
       camera.position.copy(thirdPersonCameraPosition(lastServerPos, yaw, pitch, cameraMode === 2, isSolidAtLocal));
       camera.lookAt(lastServerPos);
@@ -2594,14 +2670,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // takes the pointer.
     hand.setVisible(cameraMode === 0 && !backpackOpen && !tableOpen && !furnaceOpenState && !optionsOpen && !chatOpen && !isDead);
     hand.setLightLevel(lightEngine.getRawBrightness(Math.round(lastServerPos.x), Math.round(lastServerPos.y), Math.round(lastServerPos.z)) / 15);
-    hand.update(delta, {
+    hand.update(delta, viewBobOn ? {
       phase: viewBob.phase,
       bob: viewBob.bob,
       tilt: viewBob.tilt,
       yaw, pitch,
       yawLag: viewBob.yawBob,
       pitchLag: viewBob.pitchBob,
-    });
+    } : null);
     sendInput(now);
     updateMining(delta);
     updateBlockHighlight();
