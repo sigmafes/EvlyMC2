@@ -9,7 +9,7 @@ import { BlockId, blockLightProperties, isSolidBlock, isOrientable } from '../..
 import { ServerTerrain } from './terrain';
 import { WATER_LEVEL } from '../../src/chunk';
 import { ServerMobManager } from './mobs';
-import { DAY_LENGTH, NIGHT_SKY_DARKEN, computeDayNightState, resolveCycleTime } from './game/day-night-math';
+import { DAY_LENGTH, NIGHT_SKY_DARKEN, computeDayNightState, resolveCycleTime, cycleTimeFor, type TimePhase } from './game/day-night-math';
 import { createEmptyInventory, createEmptySlot, describeSlot, addToInventory, removeFromSlot, removeItemsAnywhere, countInInventory, moveOrMergeSlot, moveOrMergeBetween, TOTAL_SLOTS } from './game/inventory';
 import { getDrops } from '../../src/drops';
 import { breakTime } from '../../src/block-hardness';
@@ -94,6 +94,10 @@ const MAX_DT_S = 0.1; // same spiral-of-death cap main.ts uses on the client
 const PLAYER_MAX_HEALTH = 20; // LCE/singleplayer's 10 hearts x2 - see player-health.ts
 const PLAYER_MELEE_RANGE = 4; // matches interaction.ts's own melee reach
 const PLAYER_MELEE_DAMAGE = 4; // a plain fixed "punch" - no tool/weapon damage tiers server-side yet
+/** Matches interaction.ts's ATTACK_COOLDOWN - minimum gap between this player's own accepted melee hits, enforced here since the client-side cooldown alone is trivially bypassable. */
+const PLAYER_ATTACK_COOLDOWN_MS = 300;
+/** Matches player-health.ts's post-hit `invuln` window - how long hurtPlayer() ignores further non-environmental damage after a hit. */
+const PLAYER_HURT_INVULN_MS = 300;
 
 // Environmental damage, mirroring singleplayer's own main.ts loop so falling,
 // drowning and burning cost the same in both modes.
@@ -106,7 +110,7 @@ const DROWN_DAMAGE = 2;
 /** Seconds to finish a bite - LCE's 32 ticks, same as singleplayer's interaction.ts. */
 const EAT_DURATION = 1.6;
 /** A skeleton's arrow hits for a flat amount, independent of its shot speed - same value singleplayer's own spawn call passes. */
-const SKELETON_ARROW_DAMAGE = 4;
+const SKELETON_ARROW_DAMAGE = 2;
 /** Side of the square of chunks around the world spawn where players can't hurt each other. Odd so it centres on the spawn chunk. */
 const SPAWN_PROTECTION_CHUNKS = 3;
 /** After leaving the flames a player keeps burning for this many 1-damage ticks, one second apart - same pattern as a mob's onFire. */
@@ -115,6 +119,12 @@ const PLAYER_FIRE_TICK_INTERVAL = 1;
 
 /** Every mob /summon can spawn - mirrors mob-manager.ts's MobKind union, listed out because that type itself can't be iterated at runtime. */
 const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep', 'zombie', 'skeleton'];
+
+/** Same list src/chat-commands.ts's /time validates against. */
+const TIME_PHASES = ['day', 'night', 'sunset', 'sunrise'] as const;
+
+/** Usernames allowed to run the world-affecting admin commands (/time, /seed, /fly) - everyone else gets a "no permission" reply. Lowercased for a case-insensitive match against session.name. */
+const ADMIN_NAMES = new Set(['sigmafes', 'dummy']);
 
 /** Same normalisation as src/chat-commands.ts's /give, duplicated (not imported) because that file pulls in THREE/Chat/DOM-adjacent types this headless server doesn't have. */
 function slugifyItemName(s: string): string {
@@ -182,6 +192,10 @@ type Session = {
   mining: { x: number; y: number; z: number; itemId: number | null; startedAtMs: number } | null;
   /** This player's own 16-slot animal/hostile-surface/hostile-cave spawner (game/mob-spawning.ts, Fase 9) - independent ids/spawn-rolls/cooldowns per player, all writing into the one shared ServerMobManager roster. Created on join, discarded on disconnect. */
   mobSpawning: MobSpawning;
+  /** `Date.now()` of this session's last accepted melee attack - server-side rate limit for attackMob/attackPlayer, since the client's own attackCooldown (interaction.ts) is trivially bypassable by a modified client sending 'attack' messages directly. */
+  lastAttackAtMs: number;
+  /** `Date.now()` until which hurtPlayer() ignores non-environmental damage - the server-side mirror of player-health.ts's `invuln` i-frames, which singleplayer had but this server never enforced at all. */
+  invulnUntilMs: number;
 };
 
 /**
@@ -337,10 +351,19 @@ export class WorldDO implements DurableObject {
       const key = `${x},${y},${z}`;
       if (s) this.furnaces.set(key, s); else this.furnaces.delete(key);
     },
-    // The lit/unlit texture swap is purely visual (client-side block state)
-    // and there's no protocol field for it yet - a real follow-up, not
-    // load-bearing for the furnace actually smelting correctly.
-    setBlockData: () => {},
+    // Merges into the same `blockData` map/persistence/broadcast a placed
+    // stair/slab/etc uses (Fase 5) - a furnace's `lit` flag is real
+    // BlockData now, not a purely-cosmetic value with nowhere to go.
+    setBlockData: (x, y, z, patch) => {
+      const key = `${x},${y},${z}`;
+      const merged: BlockData = { ...this.blockData.get(key), ...patch };
+      this.blockData.set(key, merged);
+      void this.state.storage.put(`blockdata:${key}`, merged);
+      // silent: true - a furnace flipping its flame on/off isn't a player
+      // action and shouldn't replay a place/dig sound, same reasoning as
+      // every other non-player-initiated setBlock() broadcast in this file.
+      this.broadcast({ type: 'blockChanged', x, y, z, blockId: this.getBlockAt(x, y, z), silent: true, data: merged });
+    },
   });
   private mobsSpawned = false;
   /**
@@ -1309,7 +1332,7 @@ export class WorldDO implements DurableObject {
       inventory: saved ? saved.slots.map((s) => ({ ...s })) : createEmptyInventory(),
       selectedSlot: saved?.selectedIndex ?? 0,
       openFurnace: null,
-      air: new PlayerAir(() => this.hurtPlayer(id, DROWN_DAMAGE)),
+      air: new PlayerAir(() => this.hurtPlayer(id, DROWN_DAMAGE, undefined, true)),
       lavaTimer: 0,
       fireTimer: 0,
       fireTicksLeft: 0,
@@ -1321,6 +1344,8 @@ export class WorldDO implements DurableObject {
       heldFrom: null,
       eating: null,
       mining: null,
+      lastAttackAtMs: 0,
+      invulnUntilMs: 0,
       // References `physics` (declared with `let` above and assigned just
       // before this) rather than `spawn`/`session.physics` - it has to track
       // wherever this player actually IS as they move, not the fixed point
@@ -1329,7 +1354,13 @@ export class WorldDO implements DurableObject {
         getPlayerPos: () => physics.state.position,
         isSolidAt: (x, y, z) => this.isSolidAt(x, y, z),
         getBlockAt: (x, y, z) => this.getBlockAt(x, y, z),
-        surfaceHeight: (x, z) => this.terrain!.surfaceHeight(x, z),
+        // ServerTerrain.surfaceHeight() is the raw (unrounded) noise sample -
+        // chunk.ts's own generation floors it before placing the actual
+        // GRASS block (see its `surfaceY = Math.floor(getTerrainHeight(...))`),
+        // so passing the float straight through here made every animal/
+        // hostile-surface column check read the wrong y (never GRASS) and
+        // silently fail forever. Floor it the same way generation does.
+        surfaceHeight: (x, z) => Math.floor(this.terrain!.surfaceHeight(x, z)),
         isActiveAt: (x, z) => this.activeRegion.isActiveAt(x, z),
         isNight: () => this.isNight(),
         approxBrightnessAt: (x, y, z) => this.approxBrightnessAt(x, y, z),
@@ -1489,6 +1520,8 @@ export class WorldDO implements DurableObject {
       isWater: (x, y, z) => this.isWaterAt(x, y, z),
       players: this.livePlayers(),
       isActiveAt: (x, z) => this.activeRegion.isActiveAt(x, z),
+      getBlockAt: (x, y, z) => this.getBlockAt(x, y, z),
+      isDay: () => !this.isNight(),
       onAttackPlayer: (playerId, damage) => this.hurtPlayer(playerId, damage),
       onShootArrow: (fromPos, targetPos) => this.spawnSkeletonArrow(fromPos, targetPos),
       onDeath: (drops, pos) => {
@@ -1690,7 +1723,7 @@ export class WorldDO implements DurableObject {
       session.lavaTimer += dt;
       if (session.lavaTimer >= LAVA_TICK_INTERVAL) {
         session.lavaTimer -= LAVA_TICK_INTERVAL;
-        this.hurtPlayer(session.id, LAVA_TICK_DAMAGE);
+        this.hurtPlayer(session.id, LAVA_TICK_DAMAGE, undefined, true);
       }
     } else {
       session.lavaTimer = 0;
@@ -1701,7 +1734,7 @@ export class WorldDO implements DurableObject {
       session.fireTimer += dt;
       if (session.fireTimer >= FIRE_TICK_INTERVAL) {
         session.fireTimer -= FIRE_TICK_INTERVAL;
-        this.hurtPlayer(session.id, FIRE_TICK_DAMAGE);
+        this.hurtPlayer(session.id, FIRE_TICK_DAMAGE, undefined, true);
       }
     } else {
       session.fireTimer = 0;
@@ -1716,7 +1749,7 @@ export class WorldDO implements DurableObject {
       if (session.fireTickTimer >= PLAYER_FIRE_TICK_INTERVAL) {
         session.fireTickTimer -= PLAYER_FIRE_TICK_INTERVAL;
         session.fireTicksLeft -= 1;
-        this.hurtPlayer(session.id, 1);
+        this.hurtPlayer(session.id, 1, undefined, true);
       }
     } else {
       session.fireTickTimer = 0;
@@ -1729,11 +1762,14 @@ export class WorldDO implements DurableObject {
     session.air.update(dt, this.isWaterAt(bx, Math.round(pos.y), bz));
   }
 
-  /** Player melee attack on a mob - checked server-side (reach), never trusted from the client. */
+  /** Player melee attack on a mob - checked server-side (reach + attack-rate), never trusted from the client. */
   private attackMob(attacker: Session, targetId: number): void {
+    const now = Date.now();
+    if (now - attacker.lastAttackAtMs < PLAYER_ATTACK_COOLDOWN_MS) return;
     const mobPos = this.mobs.getPos(targetId);
     if (!mobPos) return; // already dead/gone
     if (attacker.physics.state.position.distanceTo(mobPos) > PLAYER_MELEE_RANGE) return;
+    attacker.lastAttackAtMs = now;
     this.mobs.damage(targetId, PLAYER_MELEE_DAMAGE, attacker.physics.state.position);
     // LCE DiggerItem::hurtEnemy - hitting something costs two uses, not one.
     this.damageTool(attacker, 2);
@@ -1746,12 +1782,15 @@ export class WorldDO implements DurableObject {
    * inside the zone and picking off everyone walking past its edge.
    */
   private attackPlayer(attacker: Session, targetId: number): void {
+    const now = Date.now();
+    if (now - attacker.lastAttackAtMs < PLAYER_ATTACK_COOLDOWN_MS) return;
     const target = this.sessionById(targetId);
     if (!target || target === attacker || target.dead) return;
     const from = attacker.physics.state.position;
     const to = target.physics.state.position;
     if (from.distanceTo(to) > PLAYER_MELEE_RANGE) return;
     if (this.inSpawnProtection(from) || this.inSpawnProtection(to)) return;
+    attacker.lastAttackAtMs = now;
     this.hurtPlayer(target.id, PLAYER_MELEE_DAMAGE, attacker.name);
     this.damageTool(attacker, 2);
   }
@@ -1783,10 +1822,19 @@ export class WorldDO implements DurableObject {
    * to spawn immediately (no death screen/animation - purely a position +
    * health reset, see the class doc comment for what's still missing).
    */
-  private hurtPlayer(playerId: number, damage: number, killedBy?: string): void {
+  /**
+   * `ignoreInvuln` mirrors player-health.ts's damage() flag: environmental
+   * damage (drowning, lava/fire ticks) passes true so it isn't blocked by the
+   * i-frame window a hostile hit just started - same split singleplayer
+   * makes at main.ts's own damage() call sites.
+   */
+  private hurtPlayer(playerId: number, damage: number, killedBy?: string, ignoreInvuln = false): void {
     const session = this.sessionById(playerId);
     if (!session || session.dead) return; // a corpse can't be hurt again
+    const now = Date.now();
+    if (!ignoreInvuln && now < session.invulnUntilMs) return;
     session.health = Math.max(0, session.health - damage);
+    if (!ignoreInvuln) session.invulnUntilMs = now + PLAYER_HURT_INVULN_MS;
     if (session.health > 0) return;
 
     // Stay dead at 0 health instead of respawning on the spot: the client
@@ -1808,17 +1856,56 @@ export class WorldDO implements DurableObject {
    * burning would kill them again on dry land.
    */
   /**
-   * Reduced port of src/chat-commands.ts's /summon and /give (Fase 6 of
-   * PLAN-MULTIPLAYER-BUGFIXES.md) - the rest of that file (time/seed/panorama/
-   * fly/mobstatus) is either purely client-side or not something an untrusted
-   * player should be able to flip for everyone, so it stays singleplayer-only.
+   * Reduced port of src/chat-commands.ts's /summon, /give, /time, /seed and
+   * /fly (Fase 6/7 of PLAN-MULTIPLAYER-BUGFIXES.md /
+   * PLAN-MULTIPLAYER-MISSING-FEATURES.md) - /panorama and /mobstatus stay
+   * singleplayer-only (purely client-side capture, or a debug readout of
+   * client-only spawning state that doesn't exist the same way server-side).
    * The result is echoed back to the caller ONLY, as a `from: 'server'` chat
    * line - never broadcast, same as a real Minecraft server's command output.
+   *
+   * /time, /seed and /fly are gated to ADMIN_NAMES - unlike /summon and
+   * /give (which only affect the caller's own inventory/immediate
+   * surroundings), these change or reveal something for every player in the
+   * world, so an arbitrary joiner shouldn't get them for free.
    */
   private handleChatCommand(session: Session, raw: string): void {
     const args = raw.trim().split(/\s+/).filter(Boolean);
     const cmd = (args.shift() ?? '').toLowerCase();
     const reply = (text: string) => this.send(session.ws, { type: 'chat', from: 'server', text });
+    const isAdmin = ADMIN_NAMES.has(session.name.toLowerCase());
+
+    if (cmd === 'time') {
+      if (!isAdmin) { reply('You do not have permission to use /time.'); return; }
+      if (args[0] === 'set' && (TIME_PHASES as readonly string[]).includes(args[1])) {
+        this.dayNightElapsed = cycleTimeFor(args[1] as TimePhase);
+        this.lastDayTimeBroadcast = -Infinity; // force the next tick() to push the new time out immediately instead of waiting on its usual throttle
+        reply(`Set the time to ${args[1]}`);
+        return;
+      }
+      reply('Usage: /time set day|night|sunset|sunrise');
+      return;
+    }
+
+    if (cmd === 'seed') {
+      if (!isAdmin) { reply('You do not have permission to use /seed.'); return; }
+      reply(`World seed: ${this.worldSeed}`);
+      return;
+    }
+
+    if (cmd === 'fly') {
+      if (!isAdmin) { reply('You do not have permission to use /fly.'); return; }
+      // No double-tap-jump detection server-side (input is just a held
+      // wantJump boolean, see Session.intent) - unlike singleplayer's
+      // toggle-a-permission-then-double-tap flow, this both grants the
+      // permission AND engages flight immediately (hold Space to ascend,
+      // sneak to descend, same as singleplayer once flying).
+      const enabled = !session.physics.flyEnabled;
+      session.physics.setCanFly(enabled);
+      if (enabled) session.physics.setFlying(true);
+      reply(enabled ? 'Flight enabled.' : 'Flight disabled.');
+      return;
+    }
 
     if (cmd === 'summon') {
       const kind = (args[0] ?? '').toLowerCase() as MobKind;

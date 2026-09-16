@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MpClient } from './net/mp-client';
-import { BlockId, blockLightProperties, createBlockMaterials, isSolidBlock, type BlockMaterials } from './block';
+import { BlockId, blockLightProperties, createBlockMaterials, isSolidBlock, FURNACE_LIT_LIGHT, type BlockMaterials } from './block';
 import { Chunk, CHUNK_SIZE, CHUNK_HEIGHT } from './chunk';
 import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui, isTouchDevice } from './is-touch';
@@ -327,7 +327,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       chunk.setLight(channel, x, y, z, level);
       return true;
     },
-    emissionAt: (id) => blockLightProperties[id].emission,
+    // Same dynamic override world.ts's own emissionAt makes for FURNACE - lit
+    // is the one piece of block state that changes what a block emits
+    // without changing its id, so the static blockLightProperties table
+    // alone isn't enough.
+    emissionAt: (id, x, y, z) => {
+      if (id === BlockId.FURNACE) return getBlockDataAt(x, y, z)?.lit ? FURNACE_LIT_LIGHT : 0;
+      return blockLightProperties[id].emission;
+    },
   };
   const lightEngine = new LightEngine(lightWorld);
   /** Every currently-loaded chunk queued for a re-mesh after a skyDarken step - drained a few per frame (relightQueue below), same reasoning as CHUNKS_PER_FRAME: remeshing all ~49 loaded chunks in one frame on every step would be a visible hitch. */
@@ -647,8 +654,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const key = `${x},${y},${z}`;
     if (waterDistance === undefined) waterDistances.delete(key);
     else waterDistances.set(key, waterDistance);
+    // Captured before the write below - a furnace's `lit` flag is the one
+    // piece of BlockData that changes what a block LOOKS/emits like without
+    // the blockId itself changing, so chunk.setBlock()'s own no-op guard
+    // (same id in, same id out) would otherwise silently skip its remesh -
+    // same edge case world.ts's own setBlockData() special-cases.
+    const litBefore = !!blockOrientation.get(key)?.lit;
     if (data === undefined) blockOrientation.delete(key);
     else blockOrientation.set(key, data);
+    const litAfter = !!data?.lit;
 
     const previousId = getBlock(x, y, z);
     // Captured BEFORE the edit, same as world.ts's setBlock/place - queueing
@@ -695,7 +709,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       chunk.setBlockData(x, y, z, id);
       return;
     }
-    if (!chunk.setBlock(x, y, z, id)) return;
+    if (!chunk.setBlock(x, y, z, id)) {
+      if (litBefore === litAfter) return; // truly nothing changed here
+      chunk.markAllDirty(); // lit-only change: setBlock() no-op'd since the blockId itself didn't move
+    }
 
     // Light was only ever computed ONCE, at chunk generation - nothing here
     // told it a block changed, so a broken block kept the darkness of
@@ -1523,6 +1540,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   // its own baseline to subtract from every frame, not the last value it
   // itself wrote.
   let baseFov = mpSettings.fov;
+  const AIM_FOV_REDUCTION = 20; // matches player.ts's PlayerController.AIM_FOV_REDUCTION
   const fovRow = makeSlider('FOV', 30, 110, mpSettings.fov, (v) => {
     baseFov = v;
     saveSettings({ fov: v });
@@ -1746,13 +1764,31 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     chewTickTimer = 0;
   }
   function updateChewing(delta: number): void {
-    if (chewLeft <= 0) return;
+    if (chewLeft <= 0) {
+      hand.setEatProgress(0);
+      return;
+    }
     chewLeft -= delta;
+    hand.setEatProgress(1 - chewLeft / EAT_DURATION);
     chewTickTimer += delta;
     if (chewTickTimer >= EAT_TICK) {
       chewTickTimer -= EAT_TICK;
       soundManager.playRandom('player/Eat', 3, 0.7);
+      // Same first-person-only gate as interaction.ts's updateEating - the
+      // camera sits behind/above the character in third person, so the
+      // crumb burst would spawn floating out in space instead of at the
+      // model's mouth.
+      if (cameraMode === 0) {
+        const mouth = camera.getWorldPosition(new THREE.Vector3());
+        const down = new THREE.Vector3(0, -1, 0);
+        camera.getWorldDirection(down);
+        down.y -= 0.6;
+        down.normalize();
+        mouth.addScaledVector(down, 0.35);
+        particles?.eat(mouth, down, selectedItemId() ?? 0, lightEngine.getRawBrightness(Math.round(mouth.x), Math.round(mouth.y), Math.round(mouth.z)) / 15);
+      }
     }
+    if (chewLeft <= 0) hand.setEatProgress(0);
   }
 
   /**
@@ -2663,12 +2699,26 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       localPlayerModel.setAdjustments(ZERO_MODEL_ADJUSTMENTS); // legs (and the rest of the crouch shift) never move without this - see its doc comment
       localPlayerModel.setHeldItem(selectedItemId());
       localPlayerModel.updateWalkingAnimation(delta);
+      // Same lightEngine.getRawBrightness/15 shading main.ts's own
+      // playerModel.setLightLevel call uses - was never wired here, so the
+      // local player's third-person body stayed at its construction-time
+      // default brightness regardless of where they stood.
+      localPlayerModel.setLightLevel(lightEngine.getRawBrightness(Math.round(lastServerPos.x), Math.round(lastServerPos.y), Math.round(lastServerPos.z)) / 15, delta);
     }
     hand.setSlotById(selectedItemId());
     // Same visibility gate as main.ts's cameraDistance<=0.5 check - first
     // person only, and hidden behind any full-screen panel that already
     // takes the pointer.
     hand.setVisible(cameraMode === 0 && !backpackOpen && !tableOpen && !furnaceOpenState && !optionsOpen && !chatOpen && !isDead);
+    // Same main.ts:591-595 gate (touchControls.setGameplayVisible/
+    // interaction.setTouchActive) - was never ported here at all, so the
+    // dpad/look/mine/attack touch layer kept accepting input (and sat on top
+    // of the pause menu's own buttons, same z-index) underneath any open
+    // panel: backpack/table/furnace couldn't be used with a finger (nothing
+    // stopped the world from being mined/moved through instead), and the
+    // pause menu's buttons were unreachable because #touch-look intercepted
+    // the tap first.
+    touchControls?.setGameplayVisible(!(backpackOpen || tableOpen || furnaceOpenState || optionsOpen || chatOpen || isDead));
     hand.setLightLevel(lightEngine.getRawBrightness(Math.round(lastServerPos.x), Math.round(lastServerPos.y), Math.round(lastServerPos.z)) / 15);
     hand.update(delta, viewBobOn ? {
       phase: viewBob.phase,
@@ -2698,11 +2748,16 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // time of day rather than a fixed daytime blue - and so `submerged` is
     // fresh for the next frame's applyDayNightState guard.
     submerged = underwater.update(currentSkyColor).isUnderwater;
-    // Same -10 FOV dip singleplayer's PauseMenu.setUnderwater()/updateFov()
-    // apply while submerged (pause-menu.ts:206-215) - UnderwaterManager
-    // itself only handles the sky/fog/overlay tint, not FOV, in either client.
-    const targetFov = baseFov - (submerged ? 10 : 0);
-    if (camera.fov !== targetFov) { camera.fov = targetFov; camera.updateProjectionMatrix(); }
+    // Same sprint bump / bow-draw zoom / underwater dip as player.ts's own
+    // updateCamera() (main.ts's singleplayer FOV) - was only ever the
+    // underwater dip here, so sprinting or drawing a bow never changed FOV
+    // in multiplayer at all.
+    const sprintingNow = sprintToggled || touchSprint;
+    const aimProgress = bowDrawStart === null ? 0 : THREE.MathUtils.clamp((performance.now() - bowDrawStart) / 1000, 0, 1);
+    const unaimedFov = baseFov + (sprintingNow ? 8 : 0) - (submerged ? 10 : 0);
+    const targetFov = unaimedFov - AIM_FOV_REDUCTION * aimProgress;
+    camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 8, delta);
+    camera.updateProjectionMatrix();
     for (let i = 0; i < RELIGHT_CHUNKS_PER_FRAME && relightQueue.length > 0; i++) {
       // rebuildDirty() alone only re-rebuilds subchunks already flagged dirty
       // by an actual block edit (chunk.ts:292-306) - a day/night skyDarken

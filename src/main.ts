@@ -375,7 +375,7 @@ const mobManager = new MobManager(
     dir.normalize().multiplyScalar(powerToSpeed(SKELETON_SHOT_POWER));
     // Fixed damage, independent of the shot's (buffed) speed - see
     // ArrowSpawnOptions.fixedDamage's doc comment.
-    arrowProjectiles.spawn(fromPos, dir, { fromPlayer: false, fixedDamage: 4 });
+    arrowProjectiles.spawn(fromPos, dir, { fromPlayer: false, fixedDamage: 2 });
   },
 );
 hitTestMob = (origin, dir, maxDist) => mobManager.raycastMobs(origin, dir, maxDist);

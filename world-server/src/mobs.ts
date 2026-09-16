@@ -4,6 +4,7 @@ import { updateAI, type MobAiDeps } from './game/mob-ai';
 import { tryEscapeStuck, updatePhysics } from './game/mob-physics';
 import { rollDrops, type DropStack } from '../../src/mob-drops';
 import type { EntitySnapshot } from '../../src/net/protocol';
+import { BlockId, isSolidBlock } from '../../src/block';
 
 // Mirrors mob-manager.ts's own (private) tuning constants for damage/knockback/
 // flee - kept in sync by eye since they're not exported. Small, stable
@@ -13,6 +14,10 @@ const KNOCKBACK_SPEED = 5;
 const KNOCKBACK_UP = 4;
 const FLEE_DURATION = 3;
 const DEATH_SPIN_DURATION = 0.75; // seconds toppling before vanishing - same as mob-manager.ts's own
+// Sunlight/fire burn tuning, mirroring mob-manager.ts's own private constants (see updateFireAndSun below).
+const BURN_DAMAGE_INTERVAL = 1;
+const BURN_DAMAGE = 1;
+const FIRE_AFTERBURN_TICKS = 8;
 /**
  * Global safety net, not a gameplay rule: singleplayer's 16-slot cap only
  * ever needed to bound ONE player's population. Fase 9 runs one independent
@@ -40,6 +45,10 @@ export type MobCombatDeps = {
   onDeath: (drops: DropStack[], pos: THREE.Vector3) => void;
   /** False for a mob standing in a chunk nobody is near - it's frozen this tick (see game/active-region.ts). */
   isActiveAt: (x: number, z: number) => boolean;
+  /** The world block at this column - used only for sunlight exposure (is there open sky above?) and fire/lava contact, see updateFireAndSun below. */
+  getBlockAt: (x: number, y: number, z: number) => BlockId;
+  /** True while it's currently daytime server-side - this DO has no real skylight/voxel light engine (see mob-spawning.ts's approxBrightnessAt doc comment), so sunlight exposure here is approximated as "is it day AND is there no solid block directly overhead", not a real 0..15 skylight falloff like singleplayer's getSkyExposure. */
+  isDay: () => boolean;
 };
 
 /**
@@ -161,7 +170,54 @@ export class ServerMobManager {
       tryEscapeStuck(mob, ctx.isSolid);
       updateAI(mob, delta, deps);
       updatePhysics(mob, delta, ctx.isSolid, ctx.isWater);
+      this.updateFireAndSun(mob, delta, ctx);
     }
+  }
+
+  /**
+   * Port of mob-manager.ts's own updateFire() - hostile mobs (zombie/
+   * skeleton) burn in daylight the same way singleplayer's do, and any mob
+   * standing in fire/lava burns regardless of kind. Approximated sunlight
+   * exposure (see MobCombatDeps.isDay's doc comment) instead of a real
+   * skylight value, since this server has none; the "solid block directly
+   * overhead blocks the sun" and "water douses it" and "after-burn ticks
+   * once exposure ends" behaviour is otherwise unchanged.
+   */
+  private updateFireAndSun(mob: Mob, delta: number, ctx: MobCombatDeps): void {
+    const p = mob.pos;
+    const sunBurning = isHostileKind(mob.kind) && ctx.isDay() && !mob.inWater && !this.hasSolidCoverAbove(mob, ctx.getBlockAt);
+    const touchingFire = !mob.inWater && this.touchesFireOrLava(mob, ctx.getBlockAt);
+
+    if (sunBurning || touchingFire) mob.fireTicksLeft = FIRE_AFTERBURN_TICKS;
+
+    mob.onFire = mob.fireTicksLeft > 0;
+    if (!mob.onFire) { mob.burnTimer = 0; return; }
+
+    mob.burnTimer -= delta;
+    if (mob.burnTimer <= 0) {
+      mob.burnTimer = BURN_DAMAGE_INTERVAL;
+      mob.fireTicksLeft -= 1;
+      this.damage(mob.id, BURN_DAMAGE, p, false);
+    }
+  }
+
+  /** True if any solid block sits directly above this mob's own column, up to build height - blocks the sun outright regardless of lateral sky exposure. Mirrors mob-manager.ts's own hasSolidCoverAbove. */
+  private hasSolidCoverAbove(mob: Mob, getBlockAt: MobCombatDeps['getBlockAt']): boolean {
+    const x = Math.round(mob.pos.x);
+    const z = Math.round(mob.pos.z);
+    for (let y = Math.ceil(mob.pos.y + mob.height); y < 256; y++) {
+      if (isSolidBlock(getBlockAt(x, y, z))) return true;
+    }
+    return false;
+  }
+
+  /** True if the mob's feet or chest cell is FIRE/LAVA - mirrors mob-manager.ts's own touchesFireOrLava (same two sample heights as the player's own environment-damage check). */
+  private touchesFireOrLava(mob: Mob, getBlockAt: MobCombatDeps['getBlockAt']): boolean {
+    const x = Math.round(mob.pos.x);
+    const z = Math.round(mob.pos.z);
+    const feet = getBlockAt(x, Math.round(mob.pos.y), z);
+    const chest = getBlockAt(x, Math.round(mob.pos.y + mob.height * 0.6), z);
+    return feet === BlockId.FIRE || feet === BlockId.LAVA || chest === BlockId.FIRE || chest === BlockId.LAVA;
   }
 
   /**
@@ -203,7 +259,7 @@ export class ServerMobManager {
    * trigger for non-hostiles, health<=0 = dead) without the sound/hurt-flash
    * calls, which are purely visual and meaningless without a client mesh here.
    */
-  damage(id: number, amount: number, fromPos: THREE.Vector3): boolean {
+  damage(id: number, amount: number, fromPos: THREE.Vector3, knockback = true): boolean {
     const mob = this.mobs.find((m) => m.id === id);
     if (!mob || mob.dying) return false;
     mob.health -= amount;
@@ -212,6 +268,7 @@ export class ServerMobManager {
       mob.deathTimer = DEATH_SPIN_DURATION;
       return true;
     }
+    if (!knockback) return true;
 
     const pushDir = new THREE.Vector2(mob.pos.x - fromPos.x, mob.pos.z - fromPos.z);
     if (pushDir.lengthSq() < 1e-6) pushDir.set(Math.random() - 0.5, Math.random() - 0.5);

@@ -24,7 +24,7 @@ const LEAP_MAX_HEIGHT_DIFF = 2.7;
 const LEAP_UP_FORCE = 11;        // higher arc than JUMP_FORCE (8) - clears ~2.5 blocks instead of ~1.3
 const LEAP_COOLDOWN = 1.5;       // seconds before another leap can be attempted after landing
 const ATTACK_INTERVAL = 1;       // seconds between hits while in range
-const ZOMBIE_ATTACK_DAMAGE = 3;  // LCE zombie base melee damage
+const ZOMBIE_ATTACK_DAMAGE = 1;  // LCE zombie base melee damage
 const ZOMBIE_STEP_UP = 1;        // jump height is physical (JUMP_FORCE/GRAVITY), same as animals - widening this would plan climbs it can't execute
 const ZOMBIE_STEP_DOWN = 3;      // a zombie will drop off a 3-block ledge chasing the player; gravity handles the descent, no jump needed
 

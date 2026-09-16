@@ -37,7 +37,7 @@ export class PlayerHealth {
     if (this.invuln > 0 && !ignoreInvuln) return;
     const before = this.current;
     this.current = Math.max(0, this.current - amount);
-    if (!ignoreInvuln) this.invuln = 0.5;
+    if (!ignoreInvuln) this.invuln = 0.3;
     if (this.current <= 0) {
       this.dead = true;
       this.onDeath();

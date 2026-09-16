@@ -9,7 +9,7 @@ export type IsSolidFn = (x: number, y: number, z: number) => boolean;
 export type IsWaterFn = (x: number, y: number, z: number) => boolean;
 
 const GRAVITY = 24;
-const JUMP_FORCE = 8; // matches the player's own jump impulse (player-physics.ts)
+const JUMP_FORCE = 8.5; // slightly above the player's own jump impulse (player-physics.ts) - clears obstacle-avoidance corner-jumps that were catching mobs on block edges at 8
 const WAYPOINT_REACH_DIST = 0.3;
 export const TURN_RATE = 10; // yaw-easing rate while walking; higher = snappier turning - also used directly by mob-ai.ts for the attack-facing turn
 // Same feel as the player (player-physics.ts): velocity ramps toward the AI's
