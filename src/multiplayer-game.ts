@@ -9,6 +9,7 @@ import { TouchControls } from './touch-controls';
 import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials, type ModelAdjustments } from './player-model';
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
+import { ViewBob } from './view-bob';
 import { loadPlayerSkinDataUrl } from './player-skin';
 import { loadPlayToken } from './access-gate';
 import { setSingleplayerChatEnabled, setSingleplayerPauseMenuEnabled } from './main';
@@ -1279,6 +1280,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   /** World-space movement since the last server tick, for the local third-person body's walk animation - see onState below for why this is a position delta rather than the server's raw velocity. */
   let localMoveDeltaX = 0;
   let localMoveDeltaZ = 0;
+  /** Fed once per server tick (onState), since that's the only cadence we get real position/velocity samples at - same ViewBob class singleplayer's player.ts drives every frame from local physics. */
+  const viewBob = new ViewBob();
+  let lastStateTimeMs = 0;
 
   /**
    * Hitbox wireframes (R) - the exact meshes onMouseDown already raycasts
@@ -2251,6 +2255,20 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       localMoveDeltaX = msg.self.pos.x - lastServerPos.x;
       localMoveDeltaZ = msg.self.pos.z - lastServerPos.z;
       lastServerPos.set(msg.self.pos.x, msg.self.pos.y, msg.self.pos.z);
+      // Only real cadence we get position/velocity samples at is per server
+      // tick (no local prediction yet - see the module doc comment), so
+      // ViewBob is fed here instead of every animation frame.
+      const nowMs = performance.now();
+      const stateDt = lastStateTimeMs ? (nowMs - lastStateTimeMs) / 1000 : 0;
+      lastStateTimeMs = nowMs;
+      viewBob.update(stateDt, {
+        horizontalDistance: Math.hypot(localMoveDeltaX, localMoveDeltaZ),
+        horizontalSpeed: Math.hypot(msg.self.velocity.x, msg.self.velocity.z),
+        verticalVelocity: msg.self.velocity.y,
+        grounded: msg.self.grounded,
+        sneaking: keys.has('ShiftLeft') || touchSneak,
+        yaw, pitch,
+      });
       hud.setHealth(msg.self.health);
       if (msg.self.health < lastSelfHealth) {
         soundManager.playRandom('player/Player_hurt', 3, 0.7);
@@ -2455,6 +2473,19 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
   }
 
+  const VIEW_BOB_DEG = Math.PI / 180;
+  /** Same transform as player.ts's applyViewBob() - camera must already be at the eye position/rotation for translateX/Y and rotateZ/X to compose correctly. */
+  function applyViewBob(): void {
+    const b = viewBob.phase;
+    const sinb = Math.sin(b * Math.PI);
+    const cosb = Math.cos(b * Math.PI);
+    const { bob, tilt } = viewBob;
+    camera.translateX(sinb * bob * 0.5);
+    camera.translateY(-Math.abs(cosb * bob));
+    camera.rotateZ(sinb * bob * 3 * VIEW_BOB_DEG);
+    camera.rotateX(Math.abs(Math.cos(b * Math.PI - 0.2) * bob) * 5 * VIEW_BOB_DEG + tilt * VIEW_BOB_DEG);
+  }
+
   let lastFrameTime = 0;
   function frame(now: number): void {
     if (!running) return;
@@ -2474,6 +2505,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (cameraMode === 0) {
       camera.position.copy(lastServerPos);
       camera.rotation.set(pitch, yaw, 0, 'YXZ');
+      applyViewBob();
     } else {
       camera.position.copy(thirdPersonCameraPosition(lastServerPos, yaw, pitch, cameraMode === 2, isSolidAtLocal));
       camera.lookAt(lastServerPos);
@@ -2498,7 +2530,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // takes the pointer.
     hand.setVisible(cameraMode === 0 && !backpackOpen && !tableOpen && !furnaceOpenState && !optionsOpen && !chatOpen && !isDead);
     hand.setLightLevel(lightEngine.getRawBrightness(Math.round(lastServerPos.x), Math.round(lastServerPos.y), Math.round(lastServerPos.z)) / 15);
-    hand.update(delta);
+    hand.update(delta, {
+      phase: viewBob.phase,
+      bob: viewBob.bob,
+      tilt: viewBob.tilt,
+      yaw, pitch,
+      yawLag: viewBob.yawBob,
+      pitchLag: viewBob.pitchBob,
+    });
     sendInput(now);
     updateMining(delta);
     updateBlockHighlight();
