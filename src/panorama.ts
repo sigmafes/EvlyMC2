@@ -46,6 +46,16 @@ export async function capturePanorama(
 ): Promise<Blob> {
   const camera = new THREE.PerspectiveCamera(90, 1, 0.05, 2000);
   const target = new THREE.WebGLRenderTarget(size, size, { depthBuffer: true });
+  // Three's shader only applies the linear->sRGB encoding step for whatever
+  // colorSpace the CURRENT render destination declares - the visible canvas
+  // gets it from renderer.outputColorSpace (main.ts sets SRGBColorSpace),
+  // but an off-screen WebGLRenderTarget defaults to NoColorSpace (raw linear
+  // light). Reading those linear values back and writing them straight into
+  // a PNG (always interpreted as sRGB) skipped that brightening step
+  // entirely, which is exactly why every panorama came out dark - not a
+  // lighting/exposure problem, an encoding one. Matching the canvas's own
+  // colorSpace here makes the capture look the same as what's on screen.
+  target.texture.colorSpace = THREE.SRGBColorSpace;
 
   // Render + read back all 6 faces in one synchronous block, and restore the
   // renderer's state before returning control to the event loop: the game's
