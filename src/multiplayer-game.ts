@@ -2330,6 +2330,13 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       entity.mesh.rotation.z = (Math.PI / 2) * t;
       entity.mobModel?.setWalking(false);
       entity.mobModel?.update(delta); // keeps the death tint resolving; setDying() was set when `dying` first arrived
+      if (entity.playerModel) {
+        // Same "keeps the tint resolving" role as mobModel.update() above -
+        // startDeath()'s forcedTint only actually paints red the next time
+        // setLightLevel() runs (see its own doc comment on this branch).
+        const p = entity.mesh.position;
+        entity.playerModel.setLightLevel(lightEngine.getRawBrightness(Math.round(p.x), Math.round(p.y), Math.round(p.z)) / 15, delta);
+      }
       return; // a corpse doesn't walk
     }
 
@@ -2353,6 +2360,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     entity.playerModel.setAdjustments(ZERO_MODEL_ADJUSTMENTS); // same as localPlayerModel above - legs don't move without this
     entity.playerModel.setHeldItem(entity.heldItem);
     entity.playerModel.updateWalkingAnimation(delta);
+    // Never called for a remote player at all (only the mob branch above and
+    // the local player's own model got it) - hurt()/setOnFire() only set
+    // flags/timers, the actual color tint (and the hurt flash's own decay)
+    // happens inside setLightLevel, so another player's hurt flash, fire
+    // tint AND death tint (playerModel.startDeath()'s forcedTint, wired
+    // below) never actually rendered as anything without this.
+    const p = entity.mesh.position;
+    entity.playerModel.setLightLevel(lightEngine.getRawBrightness(Math.round(p.x), Math.round(p.y), Math.round(p.z)) / 15, delta);
   }
 
   /** Ambient bark on the same random 4-9s cadence singleplayer uses, and only within earshot - the server has no SoundManager, so idle cues never come over the wire. */
@@ -2526,15 +2541,29 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
           op.sneaking = e.sneaking ?? false;
           op.heldItem = e.heldItem ?? null;
         }
+        // A player respawns in place (unlike a mob, which is gone for good
+        // once its topple finishes) - the server's snapshot goes back to
+        // dying:false the instant they hit respawn, so undo the topple/tint
+        // here instead of waiting for an entityRemoved that never comes.
+        if (!e.dying && op.dyingFor !== undefined) {
+          op.dyingFor = undefined;
+          op.mesh.rotation.z = 0;
+          op.playerModel?.resetDeath();
+        }
         if (e.dying && op.dyingFor === undefined) {
           op.dyingFor = 0;
           op.mobModel?.setDying(true); // holds the red tint on for the whole topple instead of letting the hurt flash expire mid-fall
-          // Same distance gate the idle bark above already uses (mob-manager.ts's
-          // own inSoundRange) - without it, every connected client hears every
-          // mob death/hurt in the world at full volume regardless of where
-          // their own camera is, since everyone gets the same snapshot.
-          if (op.mesh.position.distanceTo(camera.position) <= MOB_SOUND_RADIUS) playMobSound(soundManager, op.kind as MobKind, 'death', 0.8);
-          smokeParticles.burst(new THREE.Vector3(e.pos.x, e.pos.y + 0.6, e.pos.z));
+          op.playerModel?.startDeath(); // same idea for a remote PLAYER - server now keeps a dead player in the snapshot (dying:true) for this topple window instead of dropping them the instant they die
+          if (op.mobModel) {
+            // Same distance gate the idle bark above already uses (mob-
+            // manager.ts's own inSoundRange) - without it, every connected
+            // client hears every mob death/hurt in the world at full volume
+            // regardless of where their own camera is, since everyone gets
+            // the same snapshot. A player's own death/hurt sound already
+            // played off the health-drop check below, on the killing blow.
+            if (op.mesh.position.distanceTo(camera.position) <= MOB_SOUND_RADIUS) playMobSound(soundManager, op.kind as MobKind, 'death', 0.8);
+            smokeParticles.burst(new THREE.Vector3(e.pos.x, e.pos.y + 0.6, e.pos.z));
+          }
         }
         // Both model kinds carry the orange tint + flame overlay, and the
         // server now reports a burning PLAYER too (not just mobs), so this

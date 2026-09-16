@@ -45,7 +45,7 @@ const DEPTH_PX = 1;
 const PX = 1 / 16;
 
 let sharedGeometry: THREE.BoxGeometry | null = null;
-let sharedMaterial: THREE.MeshBasicMaterial | null = null;
+let sharedTexture: THREE.Texture | null = null;
 
 /** Standard Minecraft 64x32 cape UV unwrap (box(u=0,v=0,w=10,h=16,d=1)). */
 function capeUVRects(): FaceRects {
@@ -76,17 +76,27 @@ function getCapeGeometry(): THREE.BoxGeometry {
   return (sharedGeometry = geo);
 }
 
-function getCapeMaterial(): THREE.MeshBasicMaterial {
-  if (sharedMaterial) return sharedMaterial;
+function getCapeTexture(): THREE.Texture {
+  if (sharedTexture) return sharedTexture;
   const texture = new THREE.TextureLoader().load(CAPE_TEXTURE_PATH);
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   texture.generateMipmaps = false;
   texture.colorSpace = THREE.SRGBColorSpace;
-  sharedMaterial = new THREE.MeshBasicMaterial({
-    map: texture, vertexColors: true, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
+  return (sharedTexture = texture);
+}
+
+/**
+ * One new material per Cape instance (unlike the geometry/texture, which
+ * are shared) - PlayerModel.setLightLevel() tints this via `.color`, same
+ * as the body's own atlas/overlay materials, and different players stand
+ * in different light. A single shared material would have made every
+ * cape on screen flash to whichever player's brightness last set it.
+ */
+function createCapeMaterial(): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    map: getCapeTexture(), vertexColors: true, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
   });
-  return sharedMaterial;
 }
 
 const DEG = Math.PI / 180;
@@ -100,6 +110,7 @@ const REST_TILT_DAMP = 6; // lambda for THREE.MathUtils.damp - the rise/fall its
 export class Cape {
   readonly group: THREE.Group;
   private readonly mesh: THREE.Mesh;
+  private readonly material: THREE.MeshBasicMaterial;
   private lagX = 0;
   private lagY = 0;
   private lagZ = 0;
@@ -109,8 +120,14 @@ export class Cape {
 
   constructor() {
     this.group = new THREE.Group();
-    this.mesh = new THREE.Mesh(getCapeGeometry(), getCapeMaterial());
+    this.material = createCapeMaterial();
+    this.mesh = new THREE.Mesh(getCapeGeometry(), this.material);
     this.group.add(this.mesh);
+  }
+
+  /** Same tint PlayerModel.setLightLevel() already computed for the body's own atlas/overlay materials (world brightness, plus hurt-flash/on-fire blending) - reused as-is rather than re-deriving the curve, so the cape always matches the rest of the model exactly. Was never called at all before, so the cape stayed full-bright regardless of where the player stood or what was happening to them. */
+  setTint(color: THREE.Color): void {
+    this.material.color.copy(color);
   }
 
   /** Snap the lag point to `pos` immediately - call on spawn/respawn/teleport so the cape doesn't swing in from wherever it happened to be lagging. */

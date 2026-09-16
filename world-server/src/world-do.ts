@@ -128,6 +128,8 @@ const TIME_PHASES = ['day', 'night', 'sunset', 'sunrise'] as const;
 
 /** Usernames allowed to run the world-affecting admin commands (/time, /seed, /fly) - everyone else gets a "no permission" reply. Lowercased for a case-insensitive match against session.name. */
 const ADMIN_NAMES = new Set(['sigmafes', 'dummy']);
+/** Moderation commands (/kick, /ban, /mute) - a stricter, separate allowlist from ADMIN_NAMES: only sigmafes has these for now, not Dummy. */
+const MOD_ADMIN_NAMES = new Set(['sigmafes']);
 
 /** Same normalisation as src/chat-commands.ts's /give, duplicated (not imported) because that file pulls in THREE/Chat/DOM-adjacent types this headless server doesn't have. */
 function slugifyItemName(s: string): string {
@@ -275,6 +277,9 @@ export class WorldDO implements DurableObject {
    * setBlock()'s handling below.
    */
   private readonly blockData = new Map<string, BlockData>();
+  /** Moderation state - lowercased names, persisted to DO storage (`ban:<name>`/`mute:<name>`) alongside edits, loaded in fetch(). A ban rejects the join outright (see onJoin); a mute silently drops that player's chat messages before they're broadcast. */
+  private readonly bannedNames = new Set<string>();
+  private readonly mutedNames = new Set<string>();
   /** Real terrain (same deterministic Chunk/TerrainNoise generator the client uses) - see terrain.ts. Seeded once, from the first request's worldId. */
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
@@ -412,6 +417,10 @@ export class WorldDO implements DurableObject {
       for (const [key, value] of stored) this.edits.set(key.slice('edit:'.length), value);
       const storedData = await this.state.storage.list<BlockData>({ prefix: 'blockdata:' });
       for (const [key, value] of storedData) this.blockData.set(key.slice('blockdata:'.length), value);
+      const storedBans = await this.state.storage.list<true>({ prefix: 'ban:' });
+      for (const key of storedBans.keys()) this.bannedNames.add(key.slice('ban:'.length));
+      const storedMutes = await this.state.storage.list<true>({ prefix: 'mute:' });
+      for (const key of storedMutes.keys()) this.mutedNames.add(key.slice('mute:'.length));
       this.editsLoaded = true;
       // Adopt any FIRE block that outlived the engine that lit it. Engine
       // state is in-memory, so a DO that gets evicted mid-blaze wakes up with
@@ -624,7 +633,10 @@ export class WorldDO implements DurableObject {
         // use one (see Fase 6 of PLAN-MULTIPLAYER-BUGFIXES.md); there's no
         // creative mode or permission system in this project to gate it with.
         if (msg.text.startsWith('/')) this.handleChatCommand(session, msg.text.slice(1));
-        else this.broadcast({ type: 'chat', from: session.name, text: msg.text });
+        // A muted player's own message is silently dropped - not even
+        // echoed back to them - same as a real chat mute rather than a
+        // visible "you can't talk" wall that just confirms the mute worked.
+        else if (!this.mutedNames.has(session.name.toLowerCase())) this.broadcast({ type: 'chat', from: session.name, text: msg.text });
         break;
       case 'attack':
         // Mob ids are always negative (ServerMobManager), session ids always
@@ -1280,6 +1292,11 @@ export class WorldDO implements DurableObject {
       ws.close();
       return;
     }
+    if (this.bannedNames.has(verifiedName.toLowerCase())) {
+      this.send(ws, { type: 'rejected', reason: 'You are banned from this world' });
+      ws.close();
+      return;
+    }
 
     const id = this.nextId++;
     // Real terrain now (ServerTerrain, seeded from the worldId) - spawn point
@@ -1655,10 +1672,12 @@ export class WorldDO implements DurableObject {
     }
 
     const entities: EntitySnapshot[] = [
-      // A dead player drops out of the list entirely rather than standing
-      // frozen where they fell - the client's remove-by-absence pass then
-      // clears their avatar, the same way a mob's does.
-      ...[...this.sessions.values()].filter((s) => !s.dead).map((s) => ({
+      // A dead player STAYS in the list (dying:true) instead of dropping out
+      // the instant health hits 0 - the client plays the same topple/red-
+      // tint animation a dying mob gets (RemoteEntity.dyingFor) and holds it
+      // until they respawn, rather than the corpse just vanishing like a
+      // disconnect.
+      ...[...this.sessions.values()].map((s) => ({
         id: s.id,
         kind: 'player' as const,
         pos: { x: s.physics.state.position.x, y: s.physics.state.position.y, z: s.physics.state.position.z },
@@ -1666,7 +1685,7 @@ export class WorldDO implements DurableObject {
         health: s.health,
         maxHealth: PLAYER_MAX_HEALTH,
         onFire: s.onFire,
-        dying: false,
+        dying: s.dead,
         name: s.name,
         pitch: s.pitch,
         sneaking: s.intent.sneaking,
@@ -1878,26 +1897,31 @@ export class WorldDO implements DurableObject {
   /**
    * Reduced port of src/chat-commands.ts's /summon, /give, /time, /seed and
    * /fly (Fase 6/7 of PLAN-MULTIPLAYER-BUGFIXES.md /
-   * PLAN-MULTIPLAYER-MISSING-FEATURES.md), plus a multiplayer-only /clean
-   * <inv|mobs> with no singleplayer equivalent (a single-player world has
-   * no reason to nuke every mob at once, or clear an inventory it's just as
-   * easy to empty by hand). /panorama and /mobstatus stay singleplayer-only
-   * (purely client-side capture, or a debug readout of client-only spawning
-   * state that doesn't exist the same way server-side). The result is
-   * echoed back to the caller ONLY, as a `from: 'server'` chat line - never
-   * broadcast, same as a real Minecraft server's command output.
+   * PLAN-MULTIPLAYER-MISSING-FEATURES.md), plus multiplayer-only commands
+   * with no singleplayer equivalent: /clean <inv|mobs> (a single-player
+   * world has no reason to nuke every mob at once, or clear an inventory
+   * it's just as easy to empty by hand) and /kick, /ban, /mute <player> -
+   * moderation only makes sense once other real people are in the world.
+   * /panorama and /mobstatus stay singleplayer-only (purely client-side
+   * capture, or a debug readout of client-only spawning state that doesn't
+   * exist the same way server-side). The result is echoed back to the
+   * caller ONLY, as a `from: 'server'` chat line - never broadcast, same as
+   * a real Minecraft server's command output.
    *
    * /time, /seed, /fly and /clean mobs are gated to ADMIN_NAMES - unlike
    * /summon, /give and /clean inv (which only affect the caller's own
    * inventory/immediate surroundings), these change or reveal something for
    * every player in the world, so an arbitrary joiner shouldn't get them
-   * for free.
+   * for free. /kick, /ban and /mute are gated to the even stricter
+   * MOD_ADMIN_NAMES (sigmafes only, for now) - not even Dummy, who has
+   * every other admin command.
    */
   private handleChatCommand(session: Session, raw: string): void {
     const args = raw.trim().split(/\s+/).filter(Boolean);
     const cmd = (args.shift() ?? '').toLowerCase();
     const reply = (text: string) => this.send(session.ws, { type: 'chat', from: 'server', text });
     const isAdmin = ADMIN_NAMES.has(session.name.toLowerCase());
+    const isModAdmin = MOD_ADMIN_NAMES.has(session.name.toLowerCase());
 
     if (cmd === 'time') {
       if (!isAdmin) { reply('You do not have permission to use /time.'); return; }
@@ -1953,6 +1977,32 @@ export class WorldDO implements DurableObject {
         return;
       }
       reply('Usage: /clean inv|mobs');
+      return;
+    }
+
+    if (cmd === 'kick' || cmd === 'ban' || cmd === 'mute') {
+      if (!isModAdmin) { reply(`You do not have permission to use /${cmd}.`); return; }
+      const targetName = args[0];
+      if (!targetName) { reply(`Usage: /${cmd} <player>`); return; }
+      const target = this.sessionByName(targetName);
+
+      if (cmd === 'mute') {
+        this.mutedNames.add(targetName.toLowerCase());
+        void this.state.storage.put(`mute:${targetName.toLowerCase()}`, true);
+        reply(`Muted ${targetName}.`);
+        return;
+      }
+      if (cmd === 'ban') {
+        this.bannedNames.add(targetName.toLowerCase());
+        void this.state.storage.put(`ban:${targetName.toLowerCase()}`, true);
+      }
+      // /kick and /ban both disconnect anyone currently online under that
+      // name - /ban would otherwise only take effect on their NEXT join
+      // attempt, leaving them connected until then.
+      if (!target) { reply(`${targetName} is not online.${cmd === 'ban' ? ' Banned for next time.' : ''}`); return; }
+      this.send(target.ws, { type: 'rejected', reason: cmd === 'ban' ? 'You have been banned from this world' : 'You have been kicked from this world' });
+      target.ws.close();
+      reply(`${cmd === 'ban' ? 'Banned' : 'Kicked'} ${target.name}.`);
       return;
     }
 
@@ -2058,6 +2108,15 @@ export class WorldDO implements DurableObject {
   private sessionById(playerId: number): Session | null {
     for (const session of this.sessions.values()) {
       if (session.id === playerId) return session;
+    }
+    return null;
+  }
+
+  /** Case-insensitive name lookup, for /kick, /ban and /mute - `null` if that player isn't currently connected (a name-only ban/mute still records, see handleChatCommand). */
+  private sessionByName(name: string): Session | null {
+    const lower = name.toLowerCase();
+    for (const session of this.sessions.values()) {
+      if (session.name.toLowerCase() === lower) return session;
     }
     return null;
   }

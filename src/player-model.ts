@@ -64,6 +64,7 @@ export class PlayerModel {
   private returnStartTime = 0;
   private readonly WALK_CYCLE_DURATION = 1.0; // 1 second for full cycle (0.25s per phase)
   private static readonly SPRINT_CYCLE_SPEEDUP = 1.6; // faster stride, not just faster travel, while sprinting
+  private static readonly SPRINT_SWING_ARC_MULTIPLIER = 1.4; // arms/legs swing higher while sprinting, not just faster
   private readonly RETURN_DURATION = 0.3; // 0.3 seconds to return to idle
   private returnStartAngleLeft = 0;
   private returnStartAngleRight = 0;
@@ -329,43 +330,47 @@ export class PlayerModel {
 
     const cycleProgress = this.walkCycleTime / this.WALK_CYCLE_DURATION;
 
+    // Sprinting also lifts the arms/legs higher, not just faster - same
+    // idea as the cycle speedup above.
+    const swingArc = (Math.PI / 4) * (this.sprinting ? PlayerModel.SPRINT_SWING_ARC_MULTIPLIER : 1);
+
     // Left arm animation (rotating around shoulder on Y axis):
-    // 0.0-0.25: 0° to 45° (forward swing)
-    // 0.25-0.5: 45° to 0° (returns)
-    // 0.5-0.75: 0° to -45° (backward swing)
-    // 0.75-1.0: -45° to 0° (returns)
+    // 0.0-0.25: 0° to swingArc (forward swing)
+    // 0.25-0.5: swingArc to 0° (returns)
+    // 0.5-0.75: 0° to -swingArc (backward swing)
+    // 0.75-1.0: -swingArc to 0° (returns)
 
     let leftArmAngle = 0;
 
     if (cycleProgress < 0.25) {
-      // 0-0.5s: 0° -> 45°
-      leftArmAngle = (Math.PI / 4) * (cycleProgress / 0.25);
+      // 0-0.5s: 0° -> swingArc
+      leftArmAngle = swingArc * (cycleProgress / 0.25);
     } else if (cycleProgress < 0.5) {
-      // 0.5-1.0s: 45° -> 0°
-      leftArmAngle = (Math.PI / 4) * (1 - (cycleProgress - 0.25) / 0.25);
+      // 0.5-1.0s: swingArc -> 0°
+      leftArmAngle = swingArc * (1 - (cycleProgress - 0.25) / 0.25);
     } else if (cycleProgress < 0.75) {
-      // 1.0-1.5s: 0° -> -45°
-      leftArmAngle = -(Math.PI / 4) * ((cycleProgress - 0.5) / 0.25);
+      // 1.0-1.5s: 0° -> -swingArc
+      leftArmAngle = -swingArc * ((cycleProgress - 0.5) / 0.25);
     } else {
-      // 1.5-2.0s: -45° -> 0°
-      leftArmAngle = -(Math.PI / 4) * (1 - (cycleProgress - 0.75) / 0.25);
+      // 1.5-2.0s: -swingArc -> 0°
+      leftArmAngle = -swingArc * (1 - (cycleProgress - 0.75) / 0.25);
     }
 
     // Right arm animation: opposite of left
     let rightArmAngle = 0;
 
     if (cycleProgress < 0.25) {
-      // 0-0.5s: 0° -> -45°
-      rightArmAngle = -(Math.PI / 4) * (cycleProgress / 0.25);
+      // 0-0.5s: 0° -> -swingArc
+      rightArmAngle = -swingArc * (cycleProgress / 0.25);
     } else if (cycleProgress < 0.5) {
-      // 0.5-1.0s: -45° -> 0°
-      rightArmAngle = -(Math.PI / 4) * (1 - (cycleProgress - 0.25) / 0.25);
+      // 0.5-1.0s: -swingArc -> 0°
+      rightArmAngle = -swingArc * (1 - (cycleProgress - 0.25) / 0.25);
     } else if (cycleProgress < 0.75) {
-      // 1.0-1.5s: 0° -> 45°
-      rightArmAngle = (Math.PI / 4) * ((cycleProgress - 0.5) / 0.25);
+      // 1.0-1.5s: 0° -> swingArc
+      rightArmAngle = swingArc * ((cycleProgress - 0.5) / 0.25);
     } else {
-      // 1.5-2.0s: 45° -> 0°
-      rightArmAngle = (Math.PI / 4) * (1 - (cycleProgress - 0.75) / 0.25);
+      // 1.5-2.0s: swingArc -> 0°
+      rightArmAngle = swingArc * (1 - (cycleProgress - 0.75) / 0.25);
     }
 
     // Legs animate opposite to arms: when left arm goes forward, left leg goes back
@@ -594,13 +599,16 @@ export class PlayerModel {
       PlayerModel.hurtTintScratch.setScalar(b).lerp(PlayerModel.HURT_RED, PlayerModel.HURT_TINT_STRENGTH);
       atlas.color.copy(PlayerModel.hurtTintScratch);
       overlay.color.copy(PlayerModel.hurtTintScratch);
+      this.cape.setTint(PlayerModel.hurtTintScratch);
     } else if (this.onFire) {
       PlayerModel.hurtTintScratch.setScalar(b).lerp(PlayerModel.FIRE_ORANGE, PlayerModel.FIRE_TINT_STRENGTH);
       atlas.color.copy(PlayerModel.hurtTintScratch);
       overlay.color.copy(PlayerModel.hurtTintScratch);
+      this.cape.setTint(PlayerModel.hurtTintScratch);
     } else {
       atlas.color.setScalar(b);
       overlay.color.setScalar(b);
+      this.cape.setTint(PlayerModel.hurtTintScratch.setScalar(b));
     }
     this.lightLevel = level01;
     if (this.heldMesh) tintByLight(this.heldMesh, level01);
