@@ -34,6 +34,8 @@ import { makeStack } from './item-stack';
 import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight, initPreviewAtlases, renderBlockPreview, renderItemIcon } from './block-preview';
 import { breakTime } from './block-hardness';
 import { BreakOverlay } from './break-overlay';
+import { BlockHighlight } from './block-highlight';
+import { shapeBoxesFor } from './block-shapes';
 import { createArrowMesh, orientArrowMesh } from './arrow-projectiles';
 import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
@@ -1659,6 +1661,25 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   let touchMiningHeld = false; // touch: the hold-to-break gesture is active (onBreakStart/onBreakEnd below)
   const breakOverlay = new BreakOverlay();
   breakOverlay.attachToScene(scene);
+  // Black wireframe outline on whatever block the player is aiming at - was
+  // never ported at all (BlockHighlight, imported below, wasn't even
+  // referenced in this file). shapeBoxesFor's readData is a bare `() =>
+  // undefined`, same as this client's own chunk mesher: multiplayer doesn't
+  // track per-block orientation data yet (Fase 5 of
+  // PLAN-MULTIPLAYER-MISSING-FEATURES.md), so stairs/slabs render at their
+  // default shape both in the world mesh AND here - consistent with each
+  // other today, and both will pick up the real orientation together once
+  // that fase lands.
+  const blockHighlight = new BlockHighlight();
+  blockHighlight.attachToScene(scene);
+  function updateBlockHighlight(): void {
+    const ndc = document.pointerLockElement === canvas ? CENTER_NDC : touchAimNdc;
+    const target = ndc ? raycastBlockTarget(ndc) : null;
+    if (!target) { blockHighlight.hideTarget(); return; }
+    const pos = new THREE.Vector3(target.x, target.y, target.z);
+    const shape = shapeBoxesFor(target.id, target.x, target.y, target.z, getBlock, () => undefined);
+    blockHighlight.updateTarget(pos, target.id, shape);
+  }
 
   function selectedItemId(): number | null {
     return inventorySlots[selectedSlotIndex]?.id ?? null;
@@ -2476,6 +2497,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     hand.update(delta);
     sendInput(now);
     updateMining(delta);
+    updateBlockHighlight();
     updateStreaming();
     updateLabels();
     for (const entity of remoteEntities.values()) updateRemoteAnimation(entity, delta);
