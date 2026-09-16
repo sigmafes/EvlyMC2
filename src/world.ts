@@ -505,8 +505,21 @@ export class World {
     }
   }
 
+  /**
+   * All 8 neighbors, not just the 4 orthogonal ones - light can reach a
+   * diagonal neighbor too (it propagates in full 3D, an XZ-diagonal chunk
+   * still shares an edge/corner column with this one), and a chunk that
+   * streams in late leaves ITS OWN corner's culling stale against a
+   * diagonal neighbor exactly the same way an orthogonal one would. Missing
+   * the diagonal 4 could leave an isolated dark patch right at a chunk
+   * corner, remeshed only whenever something else later happens to touch
+   * that specific diagonal chunk.
+   */
   private markAdjacentChunksDirty(chunkX: number, chunkZ: number) {
-    for (const [x, z] of [[chunkX - 1, chunkZ], [chunkX + 1, chunkZ], [chunkX, chunkZ - 1], [chunkX, chunkZ + 1]]) {
+    for (const [x, z] of [
+      [chunkX - 1, chunkZ], [chunkX + 1, chunkZ], [chunkX, chunkZ - 1], [chunkX, chunkZ + 1],
+      [chunkX - 1, chunkZ - 1], [chunkX - 1, chunkZ + 1], [chunkX + 1, chunkZ - 1], [chunkX + 1, chunkZ + 1],
+    ]) {
       this.chunkManager.getChunk(x, z)?.markAllDirty();
     }
   }

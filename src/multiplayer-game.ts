@@ -560,8 +560,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   }
 
   /**
-   * Rebuild every already-loaded orthogonal neighbor of (cx,cz) from scratch.
-   * Two unrelated bugs share this one fix:
+   * Rebuild every already-loaded neighbor of (cx,cz) from scratch - all 8,
+   * not just the 4 orthogonal ones. Three unrelated bugs share this one fix:
    * - A chunk that streamed in AFTER its neighbor was already meshed left
    *   that neighbor's boundary faces stuck with whatever culling decision it
    *   made when there was nothing there yet (generateChunk's call below).
@@ -569,11 +569,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
    *   (a column that lost its roof near the edge, say) - the edited chunk's
    *   own rebuild in applyBlockChange doesn't touch the neighbor's mesh, so
    *   its shading would stay stale even though the light DATA is correct.
-   * Both are the same shape of bug: "a chunk's mesh is stale because
-   * something changed just outside it" - so one helper covers both.
+   * - Same as either of the above, but AT a chunk corner: light and culling
+   *   both reach across a shared corner too, not just a shared edge - src/
+   *   world.ts's own markAdjacentChunksDirty had the identical 4-only gap
+   *   (this isn't a multiplayer-only bug, just fixed here first), which
+   *   could leave an isolated dark patch sitting right at a chunk corner
+   *   until something else happened to touch that specific diagonal chunk.
+   * All three are the same shape of bug: "a chunk's mesh is stale because
+   * something changed just outside it" - so one helper covers them.
    */
   function rebuildAdjacentChunks(cx: number, cz: number): void {
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
       const neighbor = chunks.get(`${cx + dx},${cz + dz}`);
       if (!neighbor) continue;
       neighbor.markAllDirty();
