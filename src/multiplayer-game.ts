@@ -521,6 +521,26 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   let clientDayTime = 0;
   /** Set on `welcome` - suppresses block sounds for a moment after connecting, so the backlog of every historical edit world-do.ts replays as its own blockChanged right after `welcome` (see onJoin's doc comment there) doesn't play a burst of break/place sounds on join. */
   let joinedAtMs = 0;
+  /**
+   * True from `welcome` until the first `state` message - the window where
+   * world-do.ts's onJoin is still synchronously replaying every historical
+   * edit as its own `blockChanged` (see that loop's own doc comment). The
+   * server never starts ticking `state` messages until that replay loop has
+   * already finished sending, so the first `state` is a reliable "the
+   * backlog is over" signal.
+   *
+   * While this is true, applyBlockChange() below skips the expensive part
+   * (light BFS + chunk remesh) for EVERY edit and only writes the raw block
+   * data - for a world with thousands of edits (a decayed forest alone can
+   * be that many), doing a full relight+remesh per edit synchronously froze
+   * the whole tab for seconds: no rendering, no input, and whatever HAD
+   * already relit mid-freeze visibly "broke on its own" as the backlog
+   * caught up in front of the player. Once the backlog is confirmed over,
+   * one single full relight (lightEngine.rebuildLoadedChunks()) plus a
+   * throttled remesh via the existing relightQueue replaces all of that
+   * per-edit work with one bounded pass.
+   */
+  let catchingUp = true;
   /** The local player's own health as of the last `state` tick - a drop triggers Player_hurt, same as remote entities' lastHealth triggers their own hurt cue. */
   let lastSelfHealth = Infinity;
 
@@ -620,7 +640,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // anything deeper into the flow (an actual liquid, not this specific
     // spread step) skips the place sound below.
     const isFlowingLiquidStep = (id === BlockId.WATER || id === BlockId.LAVA) && waterDistance !== 0;
-    if (performance.now() - joinedAtMs > 500 && !isFlowingLiquidStep && !silent) {
+    if (performance.now() - joinedAtMs > 500 && !isFlowingLiquidStep && !silent && !catchingUp) {
       const sound = id === BlockId.AIR
         ? getBlockSound(previousId, 'dig')
         : getBlockSound(id, 'place') ?? getBlockSound(id, 'dig');
@@ -635,7 +655,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     edits.set(`${x},${y},${z}`, id);
     const [cx, cz] = chunkCoordOf(x, z);
     const chunk = chunks.get(`${cx},${cz}`);
-    if (!chunk || !chunk.setBlock(x, y, z, id)) return;
+    if (!chunk) return;
+
+    if (catchingUp) {
+      // Raw write only - correct for physics/getBlock() immediately, but no
+      // light/mesh work yet (see catchingUp's own doc comment for why: a
+      // chunk that already exists this early gets properly relit in one
+      // shot once the backlog is confirmed done, instead of once per edit).
+      chunk.setBlockData(x, y, z, id);
+      return;
+    }
+    if (!chunk.setBlock(x, y, z, id)) return;
 
     // Light was only ever computed ONCE, at chunk generation - nothing here
     // told it a block changed, so a broken block kept the darkness of
@@ -1149,28 +1179,30 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   furnaceEl.id = 'mp-furnace';
   furnaceEl.hidden = true;
   const furnaceInputSlot = document.createElement('button');
+  furnaceInputSlot.id = 'mp-furnace-input';
   const furnaceFuelSlot = document.createElement('button');
+  furnaceFuelSlot.id = 'mp-furnace-fuel';
   const furnaceOutputSlot = document.createElement('button');
-  for (const btn of [furnaceInputSlot, furnaceFuelSlot, furnaceOutputSlot]) btn.className = 'inventory-slot';
+  furnaceOutputSlot.id = 'mp-furnace-output';
+  for (const btn of [furnaceInputSlot, furnaceFuelSlot, furnaceOutputSlot]) { btn.className = 'inventory-slot'; btn.type = 'button'; }
+  const furnaceFlame = document.createElement('div');
+  furnaceFlame.id = 'mp-furnace-flame';
+  const furnaceArrow = document.createElement('div');
+  furnaceArrow.id = 'mp-furnace-arrow';
+  const furnaceButtonsEl = document.createElement('div');
+  furnaceButtonsEl.id = 'mp-furnace-buttons';
   const furnaceInsertInputBtn = document.createElement('button');
+  furnaceInsertInputBtn.type = 'button';
+  furnaceInsertInputBtn.className = 'texture-button';
   furnaceInsertInputBtn.textContent = 'Meter para fundir';
   const furnaceInsertFuelBtn = document.createElement('button');
+  furnaceInsertFuelBtn.type = 'button';
+  furnaceInsertFuelBtn.className = 'texture-button';
   furnaceInsertFuelBtn.textContent = 'Meter combustible';
-  const furnaceCookBar = document.createElement('div');
-  furnaceCookBar.className = 'mp-furnace-bar';
-  const furnaceCookFill = document.createElement('div');
-  furnaceCookBar.appendChild(furnaceCookFill);
-  const furnaceLitBar = document.createElement('div');
-  furnaceLitBar.className = 'mp-furnace-bar';
-  const furnaceLitFill = document.createElement('div');
-  furnaceLitBar.appendChild(furnaceLitFill);
+  furnaceButtonsEl.append(furnaceInsertInputBtn, furnaceInsertFuelBtn);
   const furnacePanel = document.createElement('div');
   furnacePanel.id = 'mp-furnace-panel';
-  furnacePanel.append(
-    furnaceInputSlot, furnaceCookBar, furnaceOutputSlot,
-    furnaceFuelSlot, furnaceLitBar,
-    furnaceInsertInputBtn, furnaceInsertFuelBtn,
-  );
+  furnacePanel.append(furnaceFlame, furnaceArrow, furnaceInputSlot, furnaceFuelSlot, furnaceOutputSlot, furnaceButtonsEl);
   furnaceEl.appendChild(furnacePanel);
   document.body.appendChild(furnaceEl);
   let furnacePos: { x: number; y: number; z: number } | null = null;
@@ -1179,8 +1211,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     renderSlot(furnaceInputSlot, state.input ? { id: state.input.id, name: '', count: state.input.count } : createEmptySlot());
     renderSlot(furnaceFuelSlot, state.fuel ? { id: state.fuel.id, name: '', count: state.fuel.count } : createEmptySlot());
     renderSlot(furnaceOutputSlot, state.output ? { id: state.output.id, name: '', count: state.output.count } : createEmptySlot());
-    furnaceCookFill.style.width = `${Math.min(1, state.cookTime / COOK_SECONDS) * 100}%`;
-    furnaceLitFill.style.width = `${state.litDuration > 0 ? (state.litTime / state.litDuration) * 100 : 0}%`;
+    // Same clip-path gauges as singleplayer's #furnace-arrow/#furnace-flame
+    // (style.css:297-323) instead of the old width%-based generic bars.
+    const cookPct = Math.min(1, state.cookTime / COOK_SECONDS) * 100;
+    furnaceArrow.style.clipPath = `inset(0 ${100 - cookPct}% 0 0)`;
+    const litPct = state.litDuration > 0 ? (state.litTime / state.litDuration) * 100 : 0;
+    furnaceFlame.style.clipPath = `inset(${100 - litPct}% 0 0 0)`;
   }
   function setFurnaceOpen(open: boolean, pos?: { x: number; y: number; z: number }): void {
     furnaceOpenState = open;
@@ -2140,12 +2176,24 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       lastServerPos.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
       camera.position.copy(lastServerPos);
       joinedAtMs = performance.now();
+      catchingUp = true;
       clientDayTime = msg.dayTime;
       applyDayNightState(clientDayTime);
       terrainReady = initTerrain(msg.worldSeed);
     },
     onRejected: (reason) => disconnect(`Rejected: ${reason}`),
     onState: (msg) => {
+      if (catchingUp) {
+        // The backlog is confirmed over (see catchingUp's doc comment) - one
+        // full relight of whatever chunks already exist, using the NOW-
+        // complete edit data those chunks' raw writes accumulated during the
+        // freeze-free catch-up above, then a throttled remesh via the
+        // existing relightQueue drain instead of one big-frame hitch.
+        catchingUp = false;
+        lightEngine.rebuildLoadedChunks();
+        relightQueue.length = 0;
+        for (const key of chunks.keys()) relightQueue.push(key);
+      }
       // Same trick updateRemoteAnimation uses for every OTHER player, applied
       // to this one's own third-person body: a plain world-space delta since
       // the last server tick, computed before lastServerPos is overwritten

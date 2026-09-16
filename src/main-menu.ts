@@ -231,8 +231,14 @@ export class MainMenu {
       // /world/<id> validation below, so it behaves exactly as if that full
       // URL had been typed in.
       const raw = urlInput.value.trim();
+      // "prueba1" is retired - that Durable Object instance was already
+      // pinned wherever Cloudflare first placed it (no locationHint existed
+      // yet), so switching to a new worldId is what actually lets the fresh
+      // 'sam' (South America) hint in world-server/src/index.ts take effect
+      // - a hint only applies the first time a given worldId's instance is
+      // created. "prueba1"'s old data is simply abandoned, not migrated.
       const url = raw.toLowerCase() === 'xatatestserver'
-        ? 'wss://evlymc-world-server.mrfierrocarrilgames.workers.dev/world/prueba1'
+        ? 'wss://evlymc-world-server.mrfierrocarrilgames.workers.dev/world/prueba2'
         : raw;
       const match = url.match(/\/world\/([A-Za-z0-9_-]+)\/?$/);
       if (!url || !match) {

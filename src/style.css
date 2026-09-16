@@ -2173,6 +2173,12 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
    the cook/fuel-burn gauges, and two "insert selected hotbar slot" buttons
    instead of a real per-item drag (see multiplayer-game.ts's furnaceEl doc
    comment). */
+/* Real GUI (furnace_gui.png), same coordinates/scale as singleplayer's own
+   #furnace/#furnace-panel (style.css:270-322) - was a plain grey box with
+   two "Meter combustible"/"Meter para fundir" buttons before. The buttons
+   stay (see multiplayer-game.ts's doc comment on why the interaction itself
+   is deliberately simplified vs singleplayer's drag-and-drop), only the
+   look was ever missing. */
 #mp-furnace {
   position: fixed;
   inset: 0;
@@ -2180,43 +2186,59 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.55);
 }
 #mp-furnace[hidden] { display: none; }
 #mp-furnace-panel {
-  display: grid;
-  grid-template-columns: 60px 60px 60px;
-  grid-auto-rows: 60px;
-  gap: 8px;
-  align-items: center;
-  justify-items: center;
-  padding: 16px;
-  background: rgba(20, 20, 20, 0.85);
-  border: 2px solid #000;
-  color: #fff;
-  font-size: 12px;
+  position: relative;
+  width: 352px;
+  height: 332px;
+  background: url('../gui/furnace_gui.png') 0 0 / 512px 512px no-repeat;
+  image-rendering: pixelated;
+  transform: scale(1.18);
+  filter: drop-shadow(4px 4px 0 rgba(0, 0, 0, .5));
 }
-#mp-furnace-panel button:not(.inventory-slot) {
-  grid-column: span 3;
+#mp-furnace-input  { position: absolute; left: 110px; top: 32px; }
+#mp-furnace-fuel   { position: absolute; left: 110px; top: 104px; }
+#mp-furnace-output { position: absolute; left: 222px; top: 68px; }
+#mp-furnace-panel .inventory-slot { width: 32px; height: 32px; background: none; }
+#mp-furnace-panel .inventory-block { top: 1px; left: 1px; width: 30px; height: 30px; }
+
+/* Flame gauge: burns down from the top as fuel depletes. */
+#mp-furnace-flame {
+  position: absolute;
+  left: 112px;
+  top: 72px;
+  width: 28px;
+  height: 28px;
+  background: url('../gui/Lit_progress.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+  clip-path: inset(100% 0 0 0); /* JS sets the top inset from litTime/litDuration */
+}
+/* Cook progress arrow: fills left->right as the cook timer advances. */
+#mp-furnace-arrow {
+  position: absolute;
+  left: 160px;
+  top: 70px;
+  width: 44px;
+  height: 30px;
+  background: url('../gui/Burn_progress.png') left center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+  clip-path: inset(0 100% 0 0); /* JS sets the right inset from cookTime */
+}
+/* The two "insert" buttons sit below the panel proper - real texture-button
+   look instead of the old flat grey rectangles. */
+#mp-furnace-buttons {
+  position: absolute;
+  left: 0;
+  top: 260px;
   width: 100%;
-  padding: 6px;
-  background: #444;
-  color: #fff;
-  border: 1px solid #000;
-  cursor: pointer;
-  font-family: 'Tricraft', sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
-.mp-furnace-bar {
-  width: 52px;
-  height: 8px;
-  background: #000;
-  border: 1px solid #222;
-}
-.mp-furnace-bar > div {
-  height: 100%;
-  width: 0%;
-  background: #4caf50;
-}
+#mp-furnace-buttons .texture-button { width: 220px; }
 
 body.touch .touch-btn {
   pointer-events: auto;

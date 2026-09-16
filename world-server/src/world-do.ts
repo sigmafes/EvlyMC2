@@ -289,7 +289,14 @@ export class WorldDO implements DurableObject {
    */
   private readonly fluidWorld: FluidWorld = {
     getBlock: (x, y, z) => this.getBlockAt(x, y, z),
-    setBlock: (x, y, z, id) => this.setBlock(x, y, z, id),
+    // silent: true - every call through here is the water/lava/fire engine's
+    // own simulation ticking (spreading, retracting, burning out), never a
+    // direct player action, same reasoning as leaf decay's silent removals
+    // (see setBlock's own doc comment). Without this, a source cut off mid-
+    // pond made every one of its now-retracting flow cells play the "place
+    // water" sound (block-sounds.ts's WATER dig entry is literally named
+    // 'water_place') as they turned back to air, one after another.
+    setBlock: (x, y, z, id) => this.setBlock(x, y, z, id, true),
     isInsideWorld: () => true,
   };
   private readonly water = new WaterEngine(this.fluidWorld);

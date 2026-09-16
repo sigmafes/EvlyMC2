@@ -19,7 +19,15 @@ export default {
       return new Response('Usage: connect a WebSocket to /world/<worldId>, or GET /stats/<worldId>', { status: 404 });
     }
     const id = env.WORLD_DO.idFromName(match[1]);
-    const stub = env.WORLD_DO.get(id);
+    // South America hint - a Durable Object is one single instance, pinned
+    // to wherever Cloudflare placed it the first time it was ever created,
+    // with no hint this meant "wherever the first request happened to come
+    // from" rather than anything chosen deliberately. Only takes effect the
+    // FIRST time a given worldId is created - an already-existing world's
+    // instance stays wherever it already landed, which is why this ships
+    // together with switching to a fresh worldId (see main-menu.ts's
+    // "xatatestserver" shortcut) rather than alone.
+    const stub = env.WORLD_DO.get(id, { locationHint: 'sam' });
     // Forward the original request unchanged - reconstructing a new Request
     // for a WebSocket upgrade is risky (the Upgrade header is handled
     // specially by the runtime). The DO derives its own terrain seed by
