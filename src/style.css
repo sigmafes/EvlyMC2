@@ -392,6 +392,9 @@ body {
   filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, .6));
   opacity: 0.9;
 }
+/* Above every multiplayer panel (950) but below the cursor (2000) - see
+   #custom-cursor's own z-index comment. */
+#mp-inventory-ghost { z-index: 1500; }
 
 #game-shell,
 #game-canvas {

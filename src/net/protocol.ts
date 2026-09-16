@@ -182,6 +182,28 @@ export type ClientMessage =
   | { type: 'craftMove'; from: CraftSlotRef; to: CraftSlotRef }
   /** Take the result: consumes one item from every occupied input cell, exactly like singleplayer's CraftingGrid.consumeCraft(). */
   | { type: 'craftTakeOutput' }
+  /**
+   * Cursor-follows-mouse inventory interaction, same model as singleplayer's
+   * Inventory class (pickUpFrom/placeHeld/depositOne) - just server-held
+   * instead of client-held, since this inventory is server-authoritative.
+   * `session.heldItem` (world-do.ts) is the equivalent of that class's own
+   * `heldItem`/`heldFrom` fields; `invHeld` below echoes it back so the
+   * client can draw the cursor-following ghost with the right icon/count.
+   *
+   * - Left click empty-handed -> `invPickUp` with `half: false` (whole stack).
+   * - Right click empty-handed -> `invPickUp` with `half: true` (half the
+   *   stack, rounded up - onSlotRightClick's exact rule).
+   * - Left click while holding -> `invPlace` with `one: false` (merge into a
+   *   same-id stack, or swap if the target holds something else).
+   * - Right click while holding, or dragging with the right button held
+   *   across several slots (one deposit per new slot entered) -> `invPlace`
+   *   with `one: true` each time (depositOne's exact rule).
+   * - `invCancel`: put the held stack back where it came from (merging if
+   *   it fits), for a right-click on empty space, or the panel closing.
+   */
+  | { type: 'invPickUp'; from: CraftSlotRef; half: boolean }
+  | { type: 'invPlace'; to: CraftSlotRef; one: boolean }
+  | { type: 'invCancel' }
   /** Backpack (E) slot click: move/merge whatever is in `from` into `to` - same-id stacks merge (up to maxStack, leftover stays in `from`), otherwise the two slots swap. Both are indices into the same 36-slot inventory (0..8 hotbar, 9..35 backpack) - there's no separate "held item cursor" state to track over the network, each click is a complete, self-contained move. */
   | { type: 'moveSlot'; from: number; to: number }
   /** Right-clicking a placed furnace block opens its GUI - the server starts including this position in the periodic `furnaceState` pushes to this session (see world-do.ts's Session.openFurnace) until furnaceClose. */
@@ -251,6 +273,8 @@ export type ServerMessage =
   | { type: 'craftGridState'; side: 2 | 3; inputs: InventorySlot[]; output: InventorySlot }
   /** The grid was closed (by the player, or because they walked away from the table). */
   | { type: 'craftGridClosed' }
+  /** Echoes `session.heldItem` (see invPickUp/invPlace/invCancel's doc comment) - `null` when nothing is held, so the client's cursor-following ghost knows what to draw and when to hide. */
+  | { type: 'invHeld'; item: InventorySlot | null }
   /**
    * You died. The server freezes this player at 0 health - no physics, no
    * input, untargetable - until they send `respawn`, rather than teleporting
@@ -267,6 +291,7 @@ export function isClientMessageType(type: string): type is ClientMessage['type']
     [
       'join', 'input', 'breakStart', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft', 'moveSlot',
       'craftOpen', 'craftClose', 'craftMove', 'craftTakeOutput',
+      'invPickUp', 'invPlace', 'invCancel',
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
       'attack', 'respawn', 'shootBow', 'chat', 'ping',
     ] as const
@@ -279,7 +304,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
       'inventoryUpdate', 'entityRemoved', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState',
-      'craftGridState', 'craftGridClosed', 'died', 'chat', 'pong',
+      'craftGridState', 'craftGridClosed', 'invHeld', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
 }

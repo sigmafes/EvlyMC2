@@ -30,7 +30,7 @@ import { Hud } from './hud';
 import { COOK_SECONDS } from './smelting';
 import { foodValue, isBlock, ItemId } from './item';
 import { makeStack } from './item-stack';
-import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight, initPreviewAtlases } from './block-preview';
+import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight, initPreviewAtlases, renderBlockPreview, renderItemIcon } from './block-preview';
 import { breakTime } from './block-hardness';
 import { BreakOverlay } from './break-overlay';
 import { createArrowMesh, orientArrowMesh } from './arrow-projectiles';
@@ -770,46 +770,87 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   renderHotbar();
 
   /**
-   * One "held" reference shared by every grid in this file (backpack's own
-   * cells, its embedded 2x2, and the crafting table's 3x3) - click a slot to
-   * pick it up (highlighted), click another to move/merge, click the same
-   * slot again to cancel. Always sent as `craftMove` (zone-tagged on both
-   * ends) rather than the older bare `moveSlot`: world-do.ts's
-   * handleCraftMove already collapses to a plain inventory-to-inventory move
-   * when both ends are zone:'inventory' (`arrayFor` returns `session.inventory`
-   * either way), and since opening the backpack now ALSO opens the player's
-   * personal 2x2 grid (see setBackpackOpen), a craft grid is always open by
-   * the time any of these panels are visible - `moveSlot` never had to be a
-   * second code path here, just an accident of Fase 10 building the grid
-   * before Fase 4 gave it a place to live.
+   * Cursor-follows-mouse inventory interaction, same feel as singleplayer's
+   * Inventory class (src/inventory.ts's pickUpFrom/placeHeld/depositOne) -
+   * left click takes/places a whole stack, right click takes half / places
+   * one, holding right and dragging across slots deposits one into each new
+   * slot entered. Unlike singleplayer this client never mutates a slot
+   * directly: `heldItem` here is just a LOCAL mirror of the server's own
+   * `session.heldItem` (world-do.ts), echoed back by `invHeld` after every
+   * invPickUp/invPlace/invCancel - the actual pick/place/merge/swap logic
+   * all happens server-side (same reasoning `craftMove` already had: this
+   * inventory is server-authoritative, so a real move needs the server's
+   * own validation, not an optimistic local guess).
    */
-  let craftPicked: CraftSlotRef | null = null;
-  const sameCraftRef = (a: CraftSlotRef | null, b: CraftSlotRef) => a !== null && a.zone === b.zone && a.index === b.index;
-  function slotAt(ref: CraftSlotRef): InventorySlot | undefined {
-    return ref.zone === 'grid' ? craftInputs[ref.index] : inventorySlots[ref.index];
-  }
-  function onGridSlotClick(ref: CraftSlotRef): void {
-    if (craftPicked === null) {
-      if (slotAt(ref)?.id == null) return; // nothing there to pick up
-      craftPicked = ref;
-    } else if (sameCraftRef(craftPicked, ref)) {
-      craftPicked = null; // clicked the same cell again - cancel
-    } else {
-      client.send({ type: 'craftMove', from: craftPicked, to: ref });
-      craftPicked = null;
+  let heldItem: InventorySlot | null = null;
+  const ghostEl = document.createElement('div');
+  ghostEl.id = 'mp-inventory-ghost';
+  ghostEl.className = 'inventory-ghost'; // same look as singleplayer's own held-item cursor (style.css)
+  ghostEl.hidden = true;
+  document.body.appendChild(ghostEl);
+  function renderGhost(): void {
+    ghostEl.innerHTML = '';
+    if (!heldItem) { ghostEl.hidden = true; return; }
+    ghostEl.hidden = false;
+    const canvas = document.createElement('canvas');
+    canvas.className = 'inventory-block';
+    ghostEl.appendChild(canvas);
+    if (isBlock(heldItem.id)) renderBlockPreview(canvas, heldItem);
+    else renderItemIcon(canvas, heldItem.sideTexture ?? '');
+    const count = heldItem.count ?? 1;
+    if (count > 1) {
+      const badge = document.createElement('span');
+      badge.className = 'slot-count';
+      badge.textContent = String(count);
+      ghostEl.appendChild(badge);
     }
-    if (backpackOpen) renderBackpack();
-    if (tableOpen) renderTable();
+  }
+  document.addEventListener('mousemove', (e) => {
+    ghostEl.style.left = `${e.clientX}px`;
+    ghostEl.style.top = `${e.clientY}px`;
+  });
+
+  /** Every slot button this file creates, so the paint-drag gesture below can look up which one the cursor is currently over. */
+  const slotRefByEl = new Map<HTMLElement, CraftSlotRef>();
+  /** Non-null only while the right mouse button is down AND something is held - the set of slots already painted this drag, so re-entering one doesn't deposit twice. Mouse-only (unlike singleplayer's touch-aware onPaintDown/Move/Up, src/inventory.ts:615-656) - this panel has no touch equivalent to unify it with. */
+  let paintSeen: Set<HTMLElement> | null = null;
+  document.addEventListener('mousedown', (e) => { if (e.button === 2) paintSeen = new Set(); });
+  document.addEventListener('mouseup', (e) => { if (e.button === 2) paintSeen = null; });
+  document.addEventListener('mousemove', (e) => {
+    if (!paintSeen || !heldItem) return;
+    const el = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>('.inventory-slot');
+    if (!el || paintSeen.has(el)) return;
+    const ref = slotRefByEl.get(el);
+    if (!ref) return;
+    paintSeen.add(el);
+    client.send({ type: 'invPlace', to: ref, one: true });
+  });
+
+  function onSlotClick(ref: CraftSlotRef): void {
+    if (heldItem) client.send({ type: 'invPlace', to: ref, one: false });
+    else client.send({ type: 'invPickUp', from: ref, half: false });
+  }
+  function onSlotRightClick(ref: CraftSlotRef, el: HTMLElement): void {
+    // The button that opened this same drag already deposited via the
+    // paint-drag listener above (mousedown fires before contextmenu) -
+    // don't also run the plain one-shot action for it.
+    if (paintSeen?.has(el)) return;
+    paintSeen?.add(el);
+    if (heldItem) client.send({ type: 'invPlace', to: ref, one: true });
+    else client.send({ type: 'invPickUp', from: ref, half: true });
   }
 
-  /** `count` fresh `.inventory-slot` buttons, each wired to `onGridSlotClick({ zone: 'inventory', index: indexOffset + i })` - the shared building block for every inventory-slot grid below (backpack's own 27, the mirrored hotbar rows in both panels, and the table's 27). */
+  /** `count` fresh `.inventory-slot` buttons wired to left/right click on `{ zone: 'inventory', index: indexOffset + i }` - the shared building block for every inventory-slot grid below (backpack's own 27, the mirrored hotbar rows in both panels, and the table's 27). */
   function makeInventorySlotButtons(count: number, indexOffset: number): HTMLButtonElement[] {
     const out: HTMLButtonElement[] = [];
     for (let i = 0; i < count; i++) {
       const btn = document.createElement('button');
       btn.className = 'inventory-slot';
       btn.type = 'button';
-      btn.addEventListener('click', () => onGridSlotClick({ zone: 'inventory', index: indexOffset + i }));
+      const ref: CraftSlotRef = { zone: 'inventory', index: indexOffset + i };
+      slotRefByEl.set(btn, ref);
+      btn.addEventListener('click', () => onSlotClick(ref));
+      btn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); onSlotRightClick(ref, btn); });
       out.push(btn);
     }
     return out;
@@ -821,7 +862,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       const btn = document.createElement('button');
       btn.className = 'inventory-slot craft-slot';
       btn.type = 'button';
-      btn.addEventListener('click', () => onGridSlotClick({ zone: 'grid', index: i }));
+      const ref: CraftSlotRef = { zone: 'grid', index: i };
+      slotRefByEl.set(btn, ref);
+      btn.addEventListener('click', () => onSlotClick(ref));
+      btn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); onSlotRightClick(ref, btn); });
       out.push(btn);
     }
     return out;
@@ -869,30 +913,28 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   backpackPanelEl.append(backpackDollEl, backpackCraftEl, backpackCraftResultEl, backpackGridEl, backpackHotbarEl);
   backpackEl.appendChild(backpackPanelEl);
   document.body.appendChild(backpackEl);
+  // Right-click on empty space (not a recognised slot, which stops this via
+  // stopPropagation) while holding something puts it back - same as
+  // singleplayer's document-level cancelHeld() only ever reached when the
+  // click didn't land on a slot in the first place.
+  backpackEl.addEventListener('contextmenu', (e) => { e.preventDefault(); if (heldItem) client.send({ type: 'invCancel' }); });
   const backpackDoll = new InventoryDoll({ canvasSelector: '#mp-backpack-doll', containerSelector: '#mp-backpack' });
   backpackDoll.setSlim(mpSettings.alexSkin);
 
   let backpackOpen = false;
   function renderBackpack(): void {
-    backpackCraftEls.forEach((el, i) => {
-      renderSlot(el, craftInputs[i] ?? createEmptySlot());
-      el.classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'grid', index: i }));
-    });
+    backpackCraftEls.forEach((el, i) => renderSlot(el, craftInputs[i] ?? createEmptySlot()));
     renderSlot(backpackCraftResultEl, craftOutput);
     for (let i = 0; i < backpackGridEls.length; i++) {
-      const index = HOTBAR_SIZE + i;
-      renderSlot(backpackGridEls[i], inventorySlots[index] ?? createEmptySlot());
-      backpackGridEls[i].classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index }));
+      renderSlot(backpackGridEls[i], inventorySlots[HOTBAR_SIZE + i] ?? createEmptySlot());
     }
     for (let i = 0; i < backpackHotbarEls.length; i++) {
       renderSlot(backpackHotbarEls[i], inventorySlots[i] ?? createEmptySlot());
-      backpackHotbarEls[i].classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index: i }));
     }
   }
   function setBackpackOpen(open: boolean): void {
     backpackOpen = open;
     backpackEl.hidden = !open;
-    craftPicked = null;
     backpackDoll.setActive(open);
     if (open) {
       craftSide = 2;
@@ -936,28 +978,22 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   tablePanelEl.append(tableCraftEl, tableCraftResultEl, tableBackpackEl, tableHotbarEl);
   tableEl.appendChild(tablePanelEl);
   document.body.appendChild(tableEl);
+  tableEl.addEventListener('contextmenu', (e) => { e.preventDefault(); if (heldItem) client.send({ type: 'invCancel' }); });
 
   let tableOpen = false;
   function renderTable(): void {
-    tableCraftEls.forEach((el, i) => {
-      renderSlot(el, craftInputs[i] ?? createEmptySlot());
-      el.classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'grid', index: i }));
-    });
+    tableCraftEls.forEach((el, i) => renderSlot(el, craftInputs[i] ?? createEmptySlot()));
     renderSlot(tableCraftResultEl, craftOutput);
     for (let i = 0; i < tableBackpackEls.length; i++) {
-      const index = HOTBAR_SIZE + i;
-      renderSlot(tableBackpackEls[i], inventorySlots[index] ?? createEmptySlot());
-      tableBackpackEls[i].classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index }));
+      renderSlot(tableBackpackEls[i], inventorySlots[HOTBAR_SIZE + i] ?? createEmptySlot());
     }
     for (let i = 0; i < tableHotbarEls.length; i++) {
       renderSlot(tableHotbarEls[i], inventorySlots[i] ?? createEmptySlot());
-      tableHotbarEls[i].classList.toggle('picked', sameCraftRef(craftPicked, { zone: 'inventory', index: i }));
     }
   }
   function setTableOpen(open: boolean, table: { x: number; y: number; z: number } | null = null): void {
     tableOpen = open;
     tableEl.hidden = !open;
-    craftPicked = null;
     if (open) {
       craftSide = 3;
       client.send({ type: 'craftOpen', table });
@@ -2048,6 +2084,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     backpackDoll.setActive(false);
     backpackEl.remove();
     tableEl.remove();
+    ghostEl.remove();
     furnaceEl.remove();
     chatEl.remove();
     diagnosticsEl.remove();
@@ -2245,6 +2282,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onCraftGridClosed: () => {
       craftInputs = [];
       craftOutput = createEmptySlot();
+    },
+    onInvHeld: (item) => {
+      heldItem = item;
+      renderGhost();
     },
     onFurnaceState: (x, y, z, state) => {
       if (furnacePos && furnacePos.x === x && furnacePos.y === y && furnacePos.z === z) renderFurnace(state);

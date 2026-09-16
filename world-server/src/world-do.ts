@@ -158,6 +158,15 @@ type Session = {
   dead: boolean;
   /** The crafting grid this player currently has open, or null. `side` is 2 (carried) or 3 (standing at a table); `inputs` is side*side cells that live here, NOT in the inventory, until the grid is closed. */
   craft: { side: 2 | 3; inputs: InventorySlot[] } | null;
+  /**
+   * Cursor-follows-mouse inventory item, server-held equivalent of
+   * singleplayer's Inventory class's own `heldItem`/`heldFrom` fields (see
+   * protocol.ts's invPickUp/invPlace/invCancel doc comment). `heldFrom` is
+   * where it came from, so closing the panel or a right-click on empty space
+   * (invCancel) can put it back / merge it there instead of destroying it.
+   */
+  heldItem: InventorySlot | null;
+  heldFrom: CraftSlotRef | null;
   /** Mid-bite: which slot is being eaten, what was in it, and how long it's been going. Null when not eating. */
   eating: { slotIndex: number; itemId: number; elapsed: number } | null;
   /**
@@ -504,6 +513,15 @@ export class WorldDO implements DurableObject {
       case 'craftTakeOutput':
         this.handleCraftTakeOutput(session);
         break;
+      case 'invPickUp':
+        this.handleInvPickUp(session, msg.from, msg.half);
+        break;
+      case 'invPlace':
+        this.handleInvPlace(session, msg.to, msg.one);
+        break;
+      case 'invCancel':
+        this.handleInvCancel(session);
+        break;
       case 'moveSlot':
         if (
           msg.from >= 0 && msg.from < TOTAL_SLOTS &&
@@ -821,6 +839,11 @@ export class WorldDO implements DurableObject {
   /** Hand every cell back to the inventory before dropping the grid - closing a GUI must never destroy what was staged in it. */
   private closeCraftGrid(session: Session): void {
     if (!session.craft) return;
+    // Same reasoning as the grid's own cells below: whatever's on the cursor
+    // when the panel closes has to go back, not vanish - mirrors
+    // singleplayer's toggleBackpack() calling restoreHeld() on close. Done
+    // BEFORE nulling session.craft, in case it came from a 'grid' cell.
+    this.handleInvCancel(session);
     for (const slot of session.craft.inputs) {
       if (slot.id !== null) addToInventory(session.inventory, slot.id, slot.count ?? 0);
     }
@@ -863,6 +886,108 @@ export class WorldDO implements DurableObject {
     moveOrMergeBetween(arrayFor(from), from.index, arrayFor(to), to.index);
     this.sendInventory(session);
     this.sendCraftGrid(session);
+  }
+
+  private slotArrayFor(session: Session, ref: CraftSlotRef): InventorySlot[] {
+    return ref.zone === 'grid' ? (session.craft?.inputs ?? []) : session.inventory;
+  }
+
+  private sendHeld(session: Session): void {
+    this.send(session.ws, { type: 'invHeld', item: session.heldItem });
+  }
+
+  /** Left-click-empty-handed (half=false) or right-click-empty-handed (half=true, takes ceil(count/2)) on a slot - see protocol.ts's invPickUp doc comment. Mirrors inventory.ts's pickUpFrom(). */
+  private handleInvPickUp(session: Session, from: CraftSlotRef, half: boolean): void {
+    if (session.heldItem) return; // already holding something - a well-behaved client never sends this then
+    if (from.zone === 'grid' && !session.craft) return;
+    const arr = this.slotArrayFor(session, from);
+    if (from.index < 0 || from.index >= arr.length) return;
+    const slot = arr[from.index];
+    if (slot.id === null) return;
+    const total = slot.count ?? 1;
+    const take = half ? Math.ceil(total / 2) : total;
+    session.heldItem = { ...slot, count: take };
+    session.heldFrom = from;
+    removeFromSlot(slot, take);
+    this.sendInventory(session);
+    this.sendCraftGrid(session);
+    this.sendHeld(session);
+  }
+
+  /** Left-click (one=false, merge/swap the whole held stack) or right-click/paint-drag (one=true, deposit exactly one) onto a slot - see protocol.ts's invPlace doc comment. Mirrors inventory.ts's placeHeld()/depositOne(). */
+  private handleInvPlace(session: Session, to: CraftSlotRef, one: boolean): void {
+    const held = session.heldItem;
+    if (!held) return;
+    if (to.zone === 'grid' && !session.craft) return;
+    const arr = this.slotArrayFor(session, to);
+    if (to.index < 0 || to.index >= arr.length) return;
+    const dst = arr[to.index];
+
+    if (one) {
+      if (dst.id === null) {
+        arr[to.index] = { ...held, count: 1 };
+      } else if (dst.id === held.id && (dst.count ?? 0) < maxStackOf(dst.id)) {
+        dst.count = (dst.count ?? 0) + 1;
+      } else {
+        return; // nowhere to put exactly one here - held stays as-is, nothing to broadcast
+      }
+      held.count = (held.count ?? 1) - 1;
+      if ((held.count ?? 0) <= 0) { session.heldItem = null; session.heldFrom = null; }
+    } else if (dst.id === held.id && maxStackOf(dst.id) > 1) {
+      const moved = Math.min(maxStackOf(dst.id) - (dst.count ?? 0), held.count ?? 0);
+      if (moved > 0) dst.count = (dst.count ?? 0) + moved;
+      held.count = (held.count ?? 0) - moved;
+      if ((held.count ?? 0) <= 0) { session.heldItem = null; session.heldFrom = null; }
+      // else destination was already full - held keeps whatever didn't fit, same as placeHeld()'s early return
+    } else if (dst.id === null) {
+      arr[to.index] = held;
+      session.heldItem = null;
+      session.heldFrom = null;
+    } else {
+      // Different item occupying the target - swap. The displaced stack goes
+      // back to wherever the held one came from - unlike singleplayer's
+      // creative pickUp() there's no "infinite palette" source here, so
+      // heldFrom is always set by the time anything is actually held.
+      const previous = { ...dst };
+      arr[to.index] = held;
+      const from = session.heldFrom;
+      if (from) {
+        const fromArr = this.slotArrayFor(session, from);
+        if (from.index >= 0 && from.index < fromArr.length) fromArr[from.index] = previous;
+      }
+      session.heldItem = null;
+      session.heldFrom = null;
+    }
+
+    this.sendInventory(session);
+    this.sendCraftGrid(session);
+    this.sendHeld(session);
+  }
+
+  /** Put the held stack back where it came from (merging if it fits), for a right-click on empty space or the panel closing - see protocol.ts's invCancel doc comment. Mirrors inventory.ts's restoreHeld(). */
+  private handleInvCancel(session: Session): void {
+    const held = session.heldItem;
+    const from = session.heldFrom;
+    session.heldItem = null;
+    session.heldFrom = null;
+    if (held && from) {
+      const arr = this.slotArrayFor(session, from);
+      if (from.index >= 0 && from.index < arr.length) {
+        const dest = arr[from.index];
+        if (dest.id === null) {
+          arr[from.index] = held;
+        } else if (dest.id === held.id) {
+          const moved = Math.min(maxStackOf(dest.id) - (dest.count ?? 0), held.count ?? 0);
+          dest.count = (dest.count ?? 0) + moved;
+          // Leftover beyond what fit back is lost, same as singleplayer's
+          // restoreHeld() ("A different block sitting there, or overflow, is
+          // dropped" - this server has no ground-drop fallback for it here).
+        }
+      }
+    }
+    this.sendInventory(session);
+    this.sendCraftGrid(session);
+    this.sendHeld(session);
   }
 
   /** Taking the result consumes ONE item from every occupied cell, same as singleplayer's consumeCraft() - not the whole stack, so holding a full grid crafts repeatedly. */
@@ -1036,6 +1161,8 @@ export class WorldDO implements DurableObject {
       onFire: false,
       dead: false,
       craft: null,
+      heldItem: null,
+      heldFrom: null,
       eating: null,
       mining: null,
       // References `physics` (declared with `let` above and assigned just
@@ -1087,6 +1214,10 @@ export class WorldDO implements DurableObject {
     // changes nothing visible - it matters the moment Fase 12 persists
     // inventories, and doing it here means that phase can't forget.
     this.closeCraftGrid(session);
+    // closeCraftGrid() above already cancels a held item IF a grid was open,
+    // but a plain inventory-zone pick doesn't require one to be open - cover
+    // that case too so nothing on the cursor is silently lost on disconnect.
+    this.handleInvCancel(session);
     // Save AFTER returning the grid's contents, so what was staged in it is
     // part of the inventory that gets written rather than lost.
     this.savePlayer(session);
