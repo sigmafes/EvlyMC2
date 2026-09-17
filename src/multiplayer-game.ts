@@ -1429,10 +1429,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       chestPos = pos;
       client.send({ type: 'chestOpen', x: pos.x, y: pos.y, z: pos.z });
       chestRenderer.setOpen(pos.x, pos.y, pos.z, true);
+      soundManager.playSingleSound('blocks/Chest_open', 0.5);
       unlockPointerForGui();
     } else {
       if (heldItem) client.send({ type: 'invCancel' });
-      if (chestPos) { client.send({ type: 'chestClose' }); chestRenderer.setOpen(chestPos.x, chestPos.y, chestPos.z, false); }
+      if (chestPos) {
+        client.send({ type: 'chestClose' });
+        chestRenderer.setOpen(chestPos.x, chestPos.y, chestPos.z, false);
+        soundManager.playSound('chest_close', 0.5);
+      }
       chestPos = null;
       lockPointer(canvas);
       hideTooltip();
@@ -2818,9 +2823,18 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onChestState: (x, y, z, state) => {
       if (chestPos && chestPos.x === x && chestPos.y === y && chestPos.z === z) renderChest(state);
     },
-    // Cosmetic-only lid animation cue for a chest someone ELSE opened/closed - see protocol.ts's entityChestOpen/Close doc comment.
-    onEntityChestOpen: (x, y, z) => chestRenderer.setOpen(x, y, z, true),
-    onEntityChestClose: (x, y, z) => chestRenderer.setOpen(x, y, z, false),
+    // Cosmetic-only lid animation cue for a chest someone ELSE opened/closed
+    // - see protocol.ts's entityChestOpen/Close doc comment. Same distance
+    // gate the mob sounds use (MOB_SOUND_RADIUS) so a chest across the map
+    // doesn't play at full volume in every connected client's ears.
+    onEntityChestOpen: (x, y, z) => {
+      chestRenderer.setOpen(x, y, z, true);
+      if (new THREE.Vector3(x, y, z).distanceTo(camera.position) <= MOB_SOUND_RADIUS) soundManager.playSingleSound('blocks/Chest_open', 0.5);
+    },
+    onEntityChestClose: (x, y, z) => {
+      chestRenderer.setOpen(x, y, z, false);
+      if (new THREE.Vector3(x, y, z).distanceTo(camera.position) <= MOB_SOUND_RADIUS) soundManager.playSound('chest_close', 0.5);
+    },
     onChat: (from, text) => addChatLine(`<${from}> ${text}`),
     onPong: (clientTimeMs) => { pingMs = performance.now() - clientTimeMs; },
     onClose: (reason) => disconnect(reason),

@@ -7,17 +7,60 @@ import * as THREE from 'three';
  * meshed cube can't do. Same architectural split LCE itself uses (its
  * ChestTile bakes nothing, ChestRenderer.cpp draws it separately).
  *
- * PLACEHOLDER MATERIAL: chest.png's exact UV layout (which region is the
- * lid vs. the box vs. which face) hasn't been confirmed yet, so this draws
- * a plain flat-shaded box instead of guessing a crop and shipping something
- * that might look wrong - swap `buildMaterials()` for a real textured one
- * once that's settled, nothing else here needs to change.
+ * UV layout measured directly off textures/blocks/chest.png (64x64, active
+ * region only y0..42 - the rest is transparent padding). It's a simplified/
+ * custom single-chest sheet, not vanilla's classic cross-unwrap: two 14x14
+ * "top" tiles, a thin ~5px lid-side strip (4 tiles), a 14x14 lid-front tile
+ * (+ one adjacent tile that's solid black - unused/never sampled here), and
+ * a ~9px box-side strip (4 tiles, the last one carrying the latch mark).
  */
-const BOX_HEIGHT = 0.625;   // 10/16 - vanilla chest box height
-const LID_HEIGHT = 0.3125;  // 5/16 - vanilla chest lid height
-const WIDTH = 0.875;        // 14/16 - vanilla chest footprint (inset 1/16 each side)
-const LID_OPEN_ANGLE = -1.05; // radians the lid tilts back when open (~60 degrees)
-const ANIM_RATE = 8; // damp() lambda - how snappily the lid eases toward open/closed
+const TEX_SIZE = 64;
+type PixelRect = [number, number, number, number]; // [x0, y0, x1, y1], top-left origin, exclusive of nothing (just corners)
+
+const RECT = {
+  LID_TOP: [14, 0, 28, 14] as PixelRect,
+  BOX_TOP: [28, 0, 42, 14] as PixelRect,
+  LID_SIDE_BACK: [0, 14, 14, 20] as PixelRect,
+  LID_SIDE_LEFT: [14, 14, 28, 20] as PixelRect,
+  LID_SIDE_RIGHT: [28, 14, 42, 20] as PixelRect,
+  LID_FRONT: [14, 20, 28, 34] as PixelRect,
+  BOX_SIDE_BACK: [0, 34, 14, 43] as PixelRect,
+  BOX_SIDE_LEFT: [14, 34, 28, 43] as PixelRect,
+  BOX_SIDE_RIGHT: [28, 34, 42, 43] as PixelRect,
+  BOX_FRONT: [42, 34, 56, 43] as PixelRect,
+};
+
+const BOX_HEIGHT = 0.625;    // 10/16 - vanilla chest box height
+const LID_HEIGHT = 0.3125;   // 5/16 - vanilla chest lid height
+const WIDTH = 0.875;         // 14/16 - vanilla chest footprint (inset 1/16 each side)
+const LID_OPEN_ANGLE = 1.3;  // radians the lid tilts back when open (~75 degrees)
+const ANIM_RATE = 8;         // damp() lambda - how snappily the lid eases toward open/closed
+
+/** Sets one BoxGeometry face's 4 UVs to a pixel rect, flipping Y (image top-down -> UV bottom-up). Face order is BoxGeometry's own: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z. */
+function setFaceUV(uv: THREE.BufferAttribute, faceIndex: number, rect: PixelRect): void {
+  const [px0, py0, px1, py1] = rect;
+  const u0 = px0 / TEX_SIZE, u1 = px1 / TEX_SIZE;
+  const v0 = 1 - py1 / TEX_SIZE, v1 = 1 - py0 / TEX_SIZE;
+  const base = faceIndex * 4;
+  uv.setXY(base + 0, u0, v1);
+  uv.setXY(base + 1, u1, v1);
+  uv.setXY(base + 2, u0, v0);
+  uv.setXY(base + 3, u1, v0);
+}
+
+/** Local -Z is this geometry's "front" (the latch/handle face) - group.rotation.y then points it at whichever world direction `facing` names, same convention block-data.ts's `facing` already uses for the furnace. */
+function buildBoxGeometry(height: number, top: PixelRect, front: PixelRect, back: PixelRect, left: PixelRect, right: PixelRect): THREE.BoxGeometry {
+  const geo = new THREE.BoxGeometry(WIDTH, height, WIDTH);
+  const uv = geo.attributes.uv as THREE.BufferAttribute;
+  setFaceUV(uv, 0, right);
+  setFaceUV(uv, 1, left);
+  setFaceUV(uv, 2, top);
+  setFaceUV(uv, 3, back); // bottom - never visible, reuse a side tile rather than adding a dedicated rect
+  setFaceUV(uv, 4, back);
+  setFaceUV(uv, 5, front);
+  uv.needsUpdate = true;
+  return geo;
+}
 
 type ChestEntry = {
   group: THREE.Group;
@@ -28,8 +71,7 @@ type ChestEntry = {
 
 let boxGeometry: THREE.BoxGeometry | null = null;
 let lidGeometry: THREE.BoxGeometry | null = null;
-let boxMaterial: THREE.MeshBasicMaterial | null = null;
-let lidMaterial: THREE.MeshBasicMaterial | null = null;
+let material: THREE.MeshBasicMaterial | null = null;
 
 // MeshBasicMaterial, not Lambert/Standard - this voxel engine has no real
 // THREE.Light in singleplayer's scene at all (main.ts), only baked per-
@@ -38,11 +80,14 @@ let lidMaterial: THREE.MeshBasicMaterial | null = null;
 // light-level tint (like PlayerModel.setLightLevel()) is a real follow-up,
 // left flat/undimmed for this pass.
 function ensureShared(): void {
-  if (boxMaterial) return;
-  boxGeometry = new THREE.BoxGeometry(WIDTH, BOX_HEIGHT, WIDTH);
-  lidGeometry = new THREE.BoxGeometry(WIDTH, LID_HEIGHT, WIDTH);
-  boxMaterial = new THREE.MeshBasicMaterial({ color: 0x8a5a2e });
-  lidMaterial = new THREE.MeshBasicMaterial({ color: 0x6e4522 });
+  if (material) return;
+  const texture = new THREE.TextureLoader().load(new URL('../textures/blocks/chest.png', import.meta.url).href);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  material = new THREE.MeshBasicMaterial({ map: texture });
+  boxGeometry = buildBoxGeometry(BOX_HEIGHT, RECT.BOX_TOP, RECT.BOX_FRONT, RECT.BOX_SIDE_BACK, RECT.BOX_SIDE_LEFT, RECT.BOX_SIDE_RIGHT);
+  lidGeometry = buildBoxGeometry(LID_HEIGHT, RECT.LID_TOP, RECT.LID_FRONT, RECT.LID_SIDE_BACK, RECT.LID_SIDE_LEFT, RECT.LID_SIDE_RIGHT);
 }
 
 /**
@@ -61,7 +106,7 @@ export class ChestRenderer {
     return `${x},${y},${z}`;
   }
 
-  /** Facing: 0=+Z, 1=+X, 2=-Z, 3=-X (block-data.ts's convention) - the lid hinges at the BACK, opposite the facing direction, and tilts up toward the front. */
+  /** Facing: 0=+Z, 1=+X, 2=-Z, 3=-X (block-data.ts's convention) - rotates the geometry's local -Z front to point that way. */
   spawn(x: number, y: number, z: number, facing: 0 | 1 | 2 | 3 = 0): void {
     const key = this.key(x, y, z);
     if (this.entries.has(key)) return;
@@ -69,17 +114,18 @@ export class ChestRenderer {
 
     const group = new THREE.Group();
     group.position.set(x, y, z);
-    group.rotation.y = [0, -Math.PI / 2, Math.PI, Math.PI / 2][facing];
+    group.rotation.y = [Math.PI, -Math.PI / 2, 0, Math.PI / 2][facing];
 
-    const box = new THREE.Mesh(boxGeometry!, boxMaterial!);
+    const box = new THREE.Mesh(boxGeometry!, material!);
     box.position.y = -0.5 + BOX_HEIGHT / 2;
     group.add(box);
 
-    // Lid pivots at its own back-top edge (hinge), tilts up around X.
+    // Lid pivots at its own back-top edge (hinge, +Z local = back), tilts
+    // up-and-back around X as it opens (see update()'s LID_OPEN_ANGLE math).
     const lidPivot = new THREE.Group();
-    lidPivot.position.set(0, -0.5 + BOX_HEIGHT, -WIDTH / 2);
-    const lid = new THREE.Mesh(lidGeometry!, lidMaterial!);
-    lid.position.set(0, LID_HEIGHT / 2, WIDTH / 2);
+    lidPivot.position.set(0, -0.5 + BOX_HEIGHT, WIDTH / 2);
+    const lid = new THREE.Mesh(lidGeometry!, material!);
+    lid.position.set(0, LID_HEIGHT / 2, -WIDTH / 2);
     lidPivot.add(lid);
     group.add(lidPivot);
 

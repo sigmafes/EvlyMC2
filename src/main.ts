@@ -341,7 +341,7 @@ const chestUI = new ChestUI(inventory, world, (open) => {
   inventoryOpen = open;
   player.setMovementLocked(open);
   if (!open) persistPlayer();
-}, (x, y, z, open) => chestRenderer.setOpen(x, y, z, open));
+}, (x, y, z, open) => chestRenderer.setOpen(x, y, z, open), soundManager);
 const hud = new Hud();
 
 // Block icons rendered during startup can come out dark before the shared

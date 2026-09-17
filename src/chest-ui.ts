@@ -3,6 +3,7 @@ import { createEmptySlot, renderSlot, type Inventory, type InventorySlot } from 
 import { makeStack } from './item-stack';
 import { emptyChest, CHEST_SLOT_COUNT, type ChestState, type SlotRef } from './block-data';
 import type { World } from './world';
+import type { SoundManager } from './sound-manager';
 
 type Pos = { x: number; y: number; z: number };
 
@@ -31,6 +32,7 @@ export class ChestUI {
     private readonly onToggle: (open: boolean) => void,
     /** Drives the in-world lid animation (ChestRenderer) - kept separate from `world` since the renderer isn't part of World's own state. */
     private readonly setLidOpen: (x: number, y: number, z: number, open: boolean) => void,
+    private readonly soundManager: SoundManager,
   ) {
     const panel = this.root.querySelector<HTMLElement>('#chest-panel')!;
     const slotsRoot = panel.querySelector<HTMLElement>('#chest-slots')!;
@@ -62,6 +64,9 @@ export class ChestUI {
     this.inventory.setExternalUiOpen(true, () => this.close());
     unlockPointerForGui();
     this.setLidOpen(this.pos.x, this.pos.y, this.pos.z, true);
+    // Only one variant (Chest_open.ogg) - playSingleSound, not the
+    // auto-numbered playSound() the 3-variant close sound below uses.
+    this.soundManager.playSingleSound('blocks/Chest_open', 0.5);
     this.onToggle(true);
   }
 
@@ -72,6 +77,7 @@ export class ChestUI {
     this.root.hidden = true;
     this.onToggle(false);
     this.setLidOpen(this.pos.x, this.pos.y, this.pos.z, false);
+    this.soundManager.playSound('chest_close', 0.5);
     lockPointer(document.querySelector<HTMLCanvasElement>('#game-canvas'));
     this.lastSig.fill(null);
   }
