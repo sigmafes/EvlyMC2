@@ -50,6 +50,10 @@ export enum BlockId {
   CONTROL_BLOCK = 44,
   /** Multiplayer-only, Admin+ exclusive - teleports whoever steps on it to a configured destination (world-do.ts's applyEnvironmentDamage). Right-click opens a config panel (protocol.ts's tpBlockOpen/Set). */
   TP_BLOCK = 45,
+  /** Multiplayer-only, Admin+ exclusive - broadcasts a rotating set of chat messages on its own (world-do.ts's messageBlockTimers). Right-click opens a config panel (protocol.ts's messageBlockOpen/Set). */
+  MESSAGE_BLOCK = 46,
+  /** Multiplayer-only, Admin+ exclusive - a static floating text label (multiplayer-game.ts's holograms), same visual idea as a player's own name tag. Right-click opens a config panel (protocol.ts's hologramBlockOpen/Set). */
+  HOLOGRAM_BLOCK = 47,
 }
 
 export type VoxelBlock = {
@@ -150,6 +154,8 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   // control_block.png, tp_block.png).
   [BlockId.CONTROL_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.TP_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.MESSAGE_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.HOLOGRAM_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -169,7 +175,8 @@ export function isSolidBlock(id: BlockId): boolean {
 
 /** Blocks that respond to right-click (open a GUI) instead of being placed against. */
 export const INTERACTIVE_BLOCKS = new Set<BlockId>([
-  BlockId.CRAFTING_TABLE, BlockId.FURNACE, BlockId.CHEST, BlockId.CONTROL_BLOCK, BlockId.TP_BLOCK,
+  BlockId.CRAFTING_TABLE, BlockId.FURNACE, BlockId.CHEST,
+  BlockId.CONTROL_BLOCK, BlockId.TP_BLOCK, BlockId.MESSAGE_BLOCK, BlockId.HOLOGRAM_BLOCK,
 ]);
 
 /** Blocks that carry side-table state (facing / lit / half / axis / open) the mesher must read. */
@@ -209,7 +216,7 @@ export const BLOCK_ATLAS_TILES = [
   'furnace_off', 'furnace_on', 'furnace_top', 'torch', 'wool',
   'iron_block', 'gold_block', 'diamond_block', 'lapis_block',
   'redstone_block', 'emerald_block', 'coal_block', 'chest_icon_top', 'chest_icon_side',
-  'control_block', 'tp_block',
+  'control_block', 'tp_block', 'hologram', 'message',
 ] as const;
 export type BlockAtlasKey = (typeof BLOCK_ATLAS_TILES)[number];
 const BLOCK_ATLAS_COLS = 32;

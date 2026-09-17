@@ -1,7 +1,7 @@
 import type { BlockId } from '../block';
 import type { InventorySlot } from '../inventory';
 import type { MobKind } from '../mob-manager';
-import type { FurnaceState, ChestState, BlockData, ControlFlags } from '../block-data';
+import type { FurnaceState, ChestState, BlockData, ControlFlags, MessageEntry, MessageColor } from '../block-data';
 
 /**
  * Fase 4 of the multiplayer migration plan: the wire contract between a
@@ -277,6 +277,14 @@ export type ClientMessage =
   | { type: 'tpBlockOpen'; x: number; y: number; z: number }
   /** Saves this pad's teleport destination. */
   | { type: 'tpBlockSet'; x: number; y: number; z: number; target: Vec3 }
+  /** Right-click on a MESSAGE_BLOCK - Admin+ only, same trust level as controlBlockOpen. Replies with `messageBlockState`. */
+  | { type: 'messageBlockOpen'; x: number; y: number; z: number }
+  /** Saves this block's rotating message list (up to 5 - the server trims any more), the delay between broadcasts, and whether they cycle in order or randomly. */
+  | { type: 'messageBlockSet'; x: number; y: number; z: number; messages: MessageEntry[]; intervalSeconds: number; random: boolean }
+  /** Right-click on a HOLOGRAM_BLOCK - Admin+ only, same trust level as controlBlockOpen. Replies with `hologramBlockState`. */
+  | { type: 'hologramBlockOpen'; x: number; y: number; z: number }
+  /** Saves this hologram's text/color/height. Unlike messageBlockSet, this ALSO reaches every other client (world-do.ts broadcasts a `blockChanged` alongside the direct reply) - a hologram is a visible world object everyone needs to see update, not just the admin configuring it. */
+  | { type: 'hologramBlockSet'; x: number; y: number; z: number; text: string; color: MessageColor; height: number }
   /** Melee swing at an entity: negative ids are mobs, positive ones other players (PvP - see world-do.ts's spawn-protection check). */
   | { type: 'attack'; targetId: number }
   /**
@@ -375,6 +383,10 @@ export type ServerMessage =
   | { type: 'controlBlockDenied' }
   /** Reply to `tpBlockOpen`/echoed after a `tpBlockSet` - this pad's current destination (defaults to its own position if never configured). */
   | { type: 'tpBlockState'; x: number; y: number; z: number; target: Vec3 }
+  /** Reply to `messageBlockOpen`/echoed after a `messageBlockSet` - this block's current message list/interval/order. Defaults to an empty list (broadcasts nothing) if never configured. */
+  | { type: 'messageBlockState'; x: number; y: number; z: number; messages: MessageEntry[]; intervalSeconds: number; random: boolean }
+  /** Reply to `hologramBlockOpen` - this hologram's current text/color/height. Defaults to empty text (renders nothing) if never configured. Unlike controlBlockState/tpBlockState, a `hologramBlockSet` does NOT get echoed back this way - everyone (including the sender) instead learns the new values from the `blockChanged` broadcast hologramBlockSet's own doc comment describes. */
+  | { type: 'hologramBlockState'; x: number; y: number; z: number; text: string; color: MessageColor; height: number }
   /**
    * The open crafting grid's contents and what they currently make. Pushed on
    * every change rather than polled, same as the furnace. `output` is derived
@@ -396,7 +408,8 @@ export type ServerMessage =
    * `killedBy` is the other player's name for a PvP kill, absent otherwise.
    */
   | { type: 'died'; killedBy?: string }
-  | { type: 'chat'; from: string; text: string }
+  /** `color` is only ever set for a MESSAGE_BLOCK's own automatic broadcasts (world-do.ts's tickMessageBlocks) - absent/undefined for a real player's chat, which always renders in the default color. */
+  | { type: 'chat'; from: string; text: string; color?: MessageColor }
   | { type: 'pong'; clientTimeMs: number; serverTimeMs: number };
 
 /** Narrow an unknown decoded payload to a ClientMessage by its `type` tag - use on the server after `JSON.parse`ing a raw WebSocket frame. */
@@ -409,6 +422,7 @@ export function isClientMessageType(type: string): type is ClientMessage['type']
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
       'chestOpen', 'chestClose',
       'controlBlockOpen', 'controlBlockSet', 'tpBlockOpen', 'tpBlockSet',
+      'messageBlockOpen', 'messageBlockSet', 'hologramBlockOpen', 'hologramBlockSet',
       'attack', 'swing', 'breakCancel', 'respawn', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);
@@ -420,7 +434,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
       'inventoryUpdate', 'entityRemoved', 'entitySwing', 'entityBreakStart', 'entityBreakCancel', 'playerSkin', 'entityEat', 'dayTime', 'craftableRecipes', 'furnaceState', 'chestState', 'entityChestOpen', 'entityChestClose',
-      'controlBlockState', 'controlBlockDenied', 'tpBlockState',
+      'controlBlockState', 'controlBlockDenied', 'tpBlockState', 'messageBlockState', 'hologramBlockState',
       'craftGridState', 'craftGridClosed', 'invHeld', 'toolBroke', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);

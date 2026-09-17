@@ -53,7 +53,8 @@ import { UnderwaterManager } from './underwater-manager';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot, DroppedItemSnapshot, ArrowSnapshot, CraftSlotRef } from './net/protocol';
 import { armorSlotFor, totalArmorValue } from './armor';
-import type { BlockData, ControlFlags } from './block-data';
+import type { BlockData, ControlFlags, MessageColor, MessageEntry } from './block-data';
+import { MESSAGE_COLOR_HEX } from './block-data';
 
 /**
  * Fase 6 of the multiplayer migration plan: the client side of the world
@@ -727,6 +728,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // function already sees, ours and everyone else's alike.
     if (previousId === BlockId.CHEST && id !== BlockId.CHEST) chestRenderer.despawn(x, y, z);
     else if (id === BlockId.CHEST && previousId !== BlockId.CHEST) chestRenderer.spawn(x, y, z, data?.facing ?? 0);
+    // Hologram labels: (re)spawn/update on every edit that carries a
+    // hologramConfig (the initial placement AND any later reconfigure both
+    // arrive as a blockChanged - see world-do.ts's handleHologramBlockSet),
+    // remove if the block itself is gone.
+    if (id === BlockId.HOLOGRAM_BLOCK && data?.hologramConfig) spawnOrUpdateHologram(x, y, z, data.hologramConfig);
+    else if (previousId === BlockId.HOLOGRAM_BLOCK && id !== BlockId.HOLOGRAM_BLOCK) removeHologram(x, y, z);
     const [cx, cz] = chunkCoordOf(x, z);
     const chunk = chunks.get(`${cx},${cz}`);
     if (!chunk) return;
@@ -844,6 +851,37 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const labelLayer = document.createElement('div');
   labelLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:901;';
   document.body.appendChild(labelLayer);
+
+  /**
+   * HOLOGRAM_BLOCK labels - same DOM-label-projected-onto-the-screen trick
+   * remoteEntities' own nametags use (see updateLabels below), just at a
+   * fixed world position instead of following a moving entity. Keyed by
+   * position so applyBlockChange (below) can add/update/remove one as this
+   * block's own blockChanged edits arrive, same as chestRenderer.spawn/
+   * despawn does for chests right next to it.
+   */
+  const holograms = new Map<string, { label: HTMLDivElement; pos: THREE.Vector3 }>();
+  function spawnOrUpdateHologram(x: number, y: number, z: number, cfg: { text: string; color: MessageColor; height: number }): void {
+    const key = `${x},${y},${z}`;
+    let entry = holograms.get(key);
+    if (!entry) {
+      const label = document.createElement('div');
+      label.className = 'mp-name-tag mp-hologram';
+      labelLayer.appendChild(label);
+      entry = { label, pos: new THREE.Vector3(x + 0.5, y, z + 0.5) };
+      holograms.set(key, entry);
+    }
+    entry.pos.y = y + cfg.height;
+    entry.label.textContent = cfg.text;
+    entry.label.style.color = MESSAGE_COLOR_HEX[cfg.color];
+  }
+  function removeHologram(x: number, y: number, z: number): void {
+    const key = `${x},${y},${z}`;
+    const entry = holograms.get(key);
+    if (!entry) return;
+    entry.label.remove();
+    holograms.delete(key);
+  }
 
   // --- Hotbar: server is authoritative (world-do.ts's Session.inventory) -
   // this just renders whatever `inventoryUpdate` last said and lets the
@@ -1231,10 +1269,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   let chatOpen = false;
 
   const CHAT_LINE_LIFETIME_MS = 15000;
-  function addChatLine(text: string): void {
+  function addChatLine(text: string, color?: MessageColor): void {
     const line = document.createElement('div');
     line.className = 'mp-chat-line';
     line.textContent = text;
+    if (color) line.style.color = MESSAGE_COLOR_HEX[color];
     chatLogEl.appendChild(line);
     while (chatLogEl.children.length > 50) chatLogEl.firstElementChild!.remove();
     chatLogEl.scrollTop = chatLogEl.scrollHeight;
@@ -2223,6 +2262,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       client.send({ type: 'tpBlockOpen', x: existing.x, y: existing.y, z: existing.z });
       return true;
     }
+    if (getBlock(existing.x, existing.y, existing.z) === BlockId.MESSAGE_BLOCK) {
+      client.send({ type: 'messageBlockOpen', x: existing.x, y: existing.y, z: existing.z });
+      return true;
+    }
+    if (getBlock(existing.x, existing.y, existing.z) === BlockId.HOLOGRAM_BLOCK) {
+      client.send({ type: 'hologramBlockOpen', x: existing.x, y: existing.y, z: existing.z });
+      return true;
+    }
     // The server ignores this blockId for ordinary placement and places
     // whatever is actually in the player's selected inventory slot
     // (world-do.ts's handlePlaceBlock doc comment) - it's only read there
@@ -2646,12 +2693,16 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     optionsEl.remove();
     controlBlockEl.remove();
     tpBlockEl.remove();
+    messageBlockEl.remove();
+    hologramBlockEl.remove();
     if (localPlayerModel) {
       scene.remove(localPlayerModel.group);
       disposeGroupGeometries(localPlayerModel.group);
       if (localSkinMaterials) disposeSkinMaterials(localSkinMaterials);
     }
     for (const [, p] of remoteEntities) removeEntityAvatar(p);
+    for (const { label } of holograms.values()) label.remove();
+    holograms.clear();
     for (const entityId of [...groundItems.keys()]) removeGroundItem(entityId);
     for (const mesh of arrowMeshes.values()) scene.remove(mesh); // shared geometry/material, nothing to dispose per arrow
     arrowMeshes.clear();
@@ -2705,13 +2756,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   // to reset it from outside, so a fresh set of buttons is the simplest way
   // to reflect whatever the server just said this block's flags actually are.
   const controlTogglesEl = document.createElement('div');
-  let controlFlags: ControlFlags = { grief: true, pvp: true, mobDamage: true, mobSpawn: true };
+  let controlFlags: ControlFlags = { grief: true, pvp: true, mobDamage: true, mobSpawn: true, invuln: false };
   function renderControlToggles(): void {
     controlTogglesEl.replaceChildren(
       makeToggle('Grief', controlFlags.grief, (v) => { controlFlags.grief = v; }),
       makeToggle('PvP', controlFlags.pvp, (v) => { controlFlags.pvp = v; }),
       makeToggle('Mob Damage', controlFlags.mobDamage, (v) => { controlFlags.mobDamage = v; }),
       makeToggle('Mob Spawn', controlFlags.mobSpawn, (v) => { controlFlags.mobSpawn = v; }),
+      makeToggle('Player Invulnerability', controlFlags.invuln, (v) => { controlFlags.invuln = v; }),
     );
   }
   const controlSaveBtn = makeButton('Save', () => {
@@ -2756,6 +2808,108 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   tpPanel.append(tpHeading, tpX.row, tpY.row, tpZ.row, tpSaveBtn, tpCloseBtn);
   tpBlockEl.appendChild(tpPanel);
   document.body.appendChild(tpBlockEl);
+
+  const MESSAGE_COLORS: MessageColor[] = ['white', 'red', 'green', 'blue', 'yellow', 'orange', 'cyan', 'pink', 'purple'];
+  function makeColorSelect(initial: MessageColor): HTMLSelectElement {
+    const select = document.createElement('select');
+    for (const color of MESSAGE_COLORS) {
+      const option = document.createElement('option');
+      option.value = color;
+      option.textContent = color;
+      select.appendChild(option);
+    }
+    select.value = initial;
+    return select;
+  }
+
+  let messageBlockPos: { x: number; y: number; z: number } | null = null;
+  const messageBlockEl = document.createElement('div');
+  messageBlockEl.className = 'mp-block-config';
+  messageBlockEl.hidden = true;
+  const messagePanel = document.createElement('div');
+  messagePanel.className = 'mp-config-panel';
+  const messageHeading = document.createElement('h2');
+  messageHeading.textContent = 'Message Block';
+  // Fixed 5 rows (MAX_MESSAGE_BLOCK_ENTRIES server-side) - an empty text
+  // field just means "unused", trimmed out on save rather than sent as a
+  // real (blank) message.
+  const MESSAGE_ROWS = 5;
+  const messageRows = Array.from({ length: MESSAGE_ROWS }, () => {
+    const row = document.createElement('label');
+    row.className = 'mp-config-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 200;
+    input.placeholder = '(empty)';
+    const color = makeColorSelect('white');
+    row.append(input, color);
+    return { row, input, color };
+  });
+  const messageIntervalRow = document.createElement('label');
+  messageIntervalRow.className = 'mp-config-row';
+  const messageIntervalInput = document.createElement('input');
+  messageIntervalInput.type = 'number';
+  messageIntervalInput.min = '1';
+  messageIntervalInput.step = '1';
+  messageIntervalRow.append('Seconds between messages: ', messageIntervalInput);
+  const messageRandomTogglesEl = document.createElement('div');
+  let messageRandom = false;
+  function renderMessageRandomToggle(): void {
+    messageRandomTogglesEl.replaceChildren(makeToggle('Order', messageRandom, (v) => { messageRandom = v; }, 'Random', 'Sequential'));
+  }
+  const messageSaveBtn = makeButton('Save', () => {
+    if (!messageBlockPos) return;
+    const messages: MessageEntry[] = messageRows
+      .filter((r) => r.input.value.trim().length > 0)
+      .map((r) => ({ text: r.input.value.trim(), color: r.color.value as MessageColor }));
+    const intervalSeconds = Math.max(1, Number(messageIntervalInput.value) || 10);
+    client.send({
+      type: 'messageBlockSet', x: messageBlockPos.x, y: messageBlockPos.y, z: messageBlockPos.z,
+      messages, intervalSeconds, random: messageRandom,
+    });
+    messageBlockEl.hidden = true;
+  });
+  const messageCloseBtn = makeButton('Close', () => { messageBlockEl.hidden = true; });
+  messagePanel.append(messageHeading, ...messageRows.map((r) => r.row), messageIntervalRow, messageRandomTogglesEl, messageSaveBtn, messageCloseBtn);
+  messageBlockEl.appendChild(messagePanel);
+  document.body.appendChild(messageBlockEl);
+
+  let hologramBlockPos: { x: number; y: number; z: number } | null = null;
+  const hologramBlockEl = document.createElement('div');
+  hologramBlockEl.className = 'mp-block-config';
+  hologramBlockEl.hidden = true;
+  const hologramPanel = document.createElement('div');
+  hologramPanel.className = 'mp-config-panel';
+  const hologramHeading = document.createElement('h2');
+  hologramHeading.textContent = 'Hologram Block';
+  const hologramTextRow = document.createElement('label');
+  hologramTextRow.className = 'mp-config-row';
+  const hologramTextInput = document.createElement('input');
+  hologramTextInput.type = 'text';
+  hologramTextInput.maxLength = 200;
+  let hologramColorSelect = makeColorSelect('white');
+  hologramTextRow.append(hologramTextInput, hologramColorSelect);
+  const hologramHeightRow = document.createElement('label');
+  hologramHeightRow.className = 'mp-config-row';
+  const hologramHeightInput = document.createElement('input');
+  hologramHeightInput.type = 'number';
+  hologramHeightInput.min = '0';
+  hologramHeightInput.max = '10';
+  hologramHeightInput.step = '0.1';
+  hologramHeightRow.append('Height: ', hologramHeightInput);
+  const hologramSaveBtn = makeButton('Save', () => {
+    if (!hologramBlockPos) return;
+    client.send({
+      type: 'hologramBlockSet', x: hologramBlockPos.x, y: hologramBlockPos.y, z: hologramBlockPos.z,
+      text: hologramTextInput.value.slice(0, 200), color: hologramColorSelect.value as MessageColor,
+      height: THREE.MathUtils.clamp(Number(hologramHeightInput.value) || 0, 0, 10),
+    });
+    hologramBlockEl.hidden = true;
+  });
+  const hologramCloseBtn = makeButton('Close', () => { hologramBlockEl.hidden = true; });
+  hologramPanel.append(hologramHeading, hologramTextRow, hologramHeightRow, hologramSaveBtn, hologramCloseBtn);
+  hologramBlockEl.appendChild(hologramPanel);
+  document.body.appendChild(hologramBlockEl);
 
   client.connect(serverUrl, worldId, loadPlayToken(), {
     onWelcome: (msg) => {
@@ -3064,7 +3218,26 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       tpZ.input.value = String(target.z);
       tpBlockEl.hidden = false;
     },
-    onChat: (from, text) => addChatLine(`<${from}> ${text}`),
+    onMessageBlockState: (x, y, z, messages, intervalSeconds, random) => {
+      messageBlockPos = { x, y, z };
+      for (let i = 0; i < messageRows.length; i++) {
+        const entry = messages[i];
+        messageRows[i].input.value = entry?.text ?? '';
+        messageRows[i].color.value = entry?.color ?? 'white';
+      }
+      messageIntervalInput.value = String(intervalSeconds);
+      messageRandom = random;
+      renderMessageRandomToggle();
+      messageBlockEl.hidden = false;
+    },
+    onHologramBlockState: (x, y, z, text, color, height) => {
+      hologramBlockPos = { x, y, z };
+      hologramTextInput.value = text;
+      hologramColorSelect.value = color;
+      hologramHeightInput.value = String(height);
+      hologramBlockEl.hidden = false;
+    },
+    onChat: (from, text, color) => addChatLine(`<${from}> ${text}`, color),
     onPong: (clientTimeMs) => { pingMs = performance.now() - clientTimeMs; },
     onClose: (reason) => disconnect(reason),
   }, loadPlayerSkinDataUrl(), mpSettings.alexSkin, mpSettings.selectedCape);
@@ -3121,6 +3294,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       p.label.style.display = 'block';
       p.label.style.left = `${(v.x * 0.5 + 0.5) * window.innerWidth}px`;
       p.label.style.top = `${(-v.y * 0.5 + 0.5) * window.innerHeight}px`;
+    }
+    for (const { label, pos } of holograms.values()) {
+      if (!label.textContent) { label.style.display = 'none'; continue; }
+      v.copy(pos);
+      v.project(camera);
+      if (v.z > 1) { label.style.display = 'none'; continue; }
+      label.style.display = 'block';
+      label.style.left = `${(v.x * 0.5 + 0.5) * window.innerWidth}px`;
+      label.style.top = `${(-v.y * 0.5 + 0.5) * window.innerHeight}px`;
     }
   }
 

@@ -56,6 +56,8 @@ const HARDNESS: Record<BlockId, number> = {
   // has a separate Admin+-only bypass for actually removing one.
   [BlockId.CONTROL_BLOCK]: -1,
   [BlockId.TP_BLOCK]: -1,
+  [BlockId.MESSAGE_BLOCK]: -1,
+  [BlockId.HOLOGRAM_BLOCK]: -1,
 };
 
 type BlockTool = {

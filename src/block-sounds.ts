@@ -55,6 +55,8 @@ export const blockSounds: Record<BlockId, BlockSoundSet> = {
   [BlockId.CHEST]: { hit: 'wood_hit', dig: 'wood_dig', mine: 'wood_mining' },
   [BlockId.CONTROL_BLOCK]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
   [BlockId.TP_BLOCK]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
+  [BlockId.MESSAGE_BLOCK]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
+  [BlockId.HOLOGRAM_BLOCK]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
 };
 
 export function getBlockSound(blockId: BlockId, soundType: BlockSoundType): string | undefined {

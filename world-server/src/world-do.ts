@@ -25,6 +25,7 @@ import { FurnaceManager } from '../../src/furnace';
 import {
   emptyFurnace, emptyChest, facingTowardPlayer, defaultControlFlags,
   type FurnaceState, type ChestState, type BlockData, type ControlFlags,
+  type MessageEntry, type MessageColor, type MessageConfig, type HologramConfig,
 } from '../../src/block-data';
 import { isStairs, isSlab } from '../../src/block-shapes';
 import { ServerDroppedItems } from './game/dropped-items';
@@ -125,6 +126,13 @@ const SPAWN_PROTECTION_CHUNKS = 3;
 /** After leaving the flames a player keeps burning for this many 1-damage ticks, one second apart - same pattern as a mob's onFire. */
 const PLAYER_FIRE_AFTERBURN_TICKS = 8;
 const PLAYER_FIRE_TICK_INTERVAL = 1;
+
+/** Every Admin+-exclusive mp block (block.ts's own doc comments) - placing, breaking or configuring any of these needs isAdminOrOwner(). */
+const ADMIN_BLOCK_IDS = new Set<BlockId>([BlockId.CONTROL_BLOCK, BlockId.TP_BLOCK, BlockId.MESSAGE_BLOCK, BlockId.HOLOGRAM_BLOCK]);
+/** Max messages a MESSAGE_BLOCK can hold - anything past this in a messageBlockSet is silently dropped. */
+const MAX_MESSAGE_BLOCK_ENTRIES = 5;
+/** Every valid MessageColor, for validating a messageBlockSet/hologramBlockSet's claimed color rather than trusting it blindly. */
+const MESSAGE_COLORS: MessageColor[] = ['white', 'red', 'green', 'blue', 'yellow', 'orange', 'cyan', 'pink', 'purple'];
 
 /** Every mob /summon can spawn - mirrors mob-manager.ts's MobKind union, listed out because that type itself can't be iterated at runtime. */
 const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep', 'zombie', 'skeleton'];
@@ -333,6 +341,8 @@ export class WorldDO implements DurableObject {
    * blocks in a world) to not need incremental updates.
    */
   private controlZones: (ControlFlags & { minX: number; maxX: number; minZ: number; maxZ: number })[] = [];
+  /** Per-block runtime countdown/cycle-position for every configured MESSAGE_BLOCK, keyed by `${x},${y},${z}` - not persisted (a restart just starts each one's cycle over from its first message), ticked in tick() and pruned in setBlock() when the block itself goes away. */
+  private readonly messageBlockTimers = new Map<string, { elapsed: number; index: number }>();
   /** Real terrain (same deterministic Chunk/TerrainNoise generator the client uses) - see terrain.ts. Seeded once, from the first request's worldId. */
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
@@ -732,6 +742,18 @@ export class WorldDO implements DurableObject {
       case 'tpBlockSet':
         this.handleTpBlockSet(session, msg.x, msg.y, msg.z, msg.target);
         break;
+      case 'messageBlockOpen':
+        this.handleMessageBlockOpen(session, msg.x, msg.y, msg.z);
+        break;
+      case 'messageBlockSet':
+        this.handleMessageBlockSet(session, msg.x, msg.y, msg.z, msg.messages, msg.intervalSeconds, msg.random);
+        break;
+      case 'hologramBlockOpen':
+        this.handleHologramBlockOpen(session, msg.x, msg.y, msg.z);
+        break;
+      case 'hologramBlockSet':
+        this.handleHologramBlockSet(session, msg.x, msg.y, msg.z, msg.text, msg.color, msg.height);
+        break;
       case 'chat':
         // A command is parsed and answered by the SERVER, never the client -
         // same trust boundary as breakBlock/placeBlock. Anyone connected can
@@ -868,10 +890,10 @@ export class WorldDO implements DurableObject {
     // would otherwise reject an Admin's break here too before ever
     // reaching their bypass.
     if (!isAdmin && this.controlZoneAt(x, z)?.grief === false) return;
-    // Control/tp blocks are hardness -1 (unbreakable) so an ordinary dig
-    // never finishes one regardless of the check below - Admin+ removing
-    // one is a separate, instant bypass rather than a real timed dig.
-    if (brokenId === BlockId.CONTROL_BLOCK || brokenId === BlockId.TP_BLOCK) {
+    // Admin blocks are hardness -1 (unbreakable) so an ordinary dig never
+    // finishes one regardless of the check below - Admin+ removing one is
+    // a separate, instant bypass rather than a real timed dig.
+    if (ADMIN_BLOCK_IDS.has(brokenId)) {
       if (!isAdmin) return;
       this.setBlockFromPlayer(x, y, z, BlockId.AIR);
       return;
@@ -968,7 +990,7 @@ export class WorldDO implements DurableObject {
     // Admin+ only, regardless of how the slot got this block (even /give is
     // already Admin-gated, but this is the actual enforcement point - a
     // client can't place one just by claiming to hold it).
-    if ((slot.id === BlockId.CONTROL_BLOCK || slot.id === BlockId.TP_BLOCK) && !this.isAdminOrOwner(session.name)) return;
+    if (ADMIN_BLOCK_IDS.has(slot.id) && !this.isAdminOrOwner(session.name)) return;
     // Same self-collision guard as singleplayer's BlockPlacer.placeBlock()
     // (block-placer.ts:38, via player.intersectsBlock - player-physics.ts's
     // overlapsHorizontally/overlapsVertically): never let a player wedge a
@@ -1033,6 +1055,72 @@ export class WorldDO implements DurableObject {
     this.blockData.set(`${x},${y},${z}`, data);
     void this.state.storage.put(`blockdata:${x},${y},${z}`, data);
     this.send(session.ws, { type: 'tpBlockState', x, y, z, target: data.tpTarget! });
+  }
+
+  /** Right-click on a MESSAGE_BLOCK - Admin+ only. */
+  private handleMessageBlockOpen(session: Session, x: number, y: number, z: number): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.MESSAGE_BLOCK) return;
+    if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
+    const cfg = this.blockData.get(`${x},${y},${z}`)?.messageConfig;
+    this.send(session.ws, { type: 'messageBlockState', x, y, z, messages: cfg?.messages ?? [], intervalSeconds: cfg?.intervalSeconds ?? 10, random: cfg?.random ?? false });
+  }
+
+  private handleMessageBlockSet(session: Session, x: number, y: number, z: number, messages: MessageEntry[], intervalSeconds: number, random: boolean): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.MESSAGE_BLOCK) return;
+    if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
+    const trimmed = messages.slice(0, MAX_MESSAGE_BLOCK_ENTRIES)
+      .filter((m) => typeof m.text === 'string' && MESSAGE_COLORS.includes(m.color))
+      .map((m) => ({ text: m.text.slice(0, 200), color: m.color }));
+    const seconds = Number.isFinite(intervalSeconds) ? Math.max(1, Math.min(3600, intervalSeconds)) : 10;
+    const cfg: MessageConfig = { messages: trimmed, intervalSeconds: seconds, random: !!random };
+    const key = `${x},${y},${z}`;
+    const data: BlockData = { messageConfig: cfg };
+    this.blockData.set(key, data);
+    void this.state.storage.put(`blockdata:${key}`, data);
+    // (Re)start the cycle from the top rather than preserving mid-cycle
+    // progress - a reconfigured block's message list may not even have as
+    // many entries as its old `index` pointed at.
+    this.messageBlockTimers.set(key, { elapsed: 0, index: 0 });
+    this.send(session.ws, { type: 'messageBlockState', x, y, z, messages: cfg.messages, intervalSeconds: cfg.intervalSeconds, random: cfg.random });
+  }
+
+  /** Advances every configured MESSAGE_BLOCK's cycle and broadcasts whichever message comes due - called once per tick (not per-session, unlike applyEnvironmentDamage), since a message block's own cycle has nothing to do with any particular player. */
+  private tickMessageBlocks(dt: number): void {
+    for (const [key, timer] of this.messageBlockTimers) {
+      const cfg = this.blockData.get(key)?.messageConfig;
+      if (!cfg || cfg.messages.length === 0) continue;
+      timer.elapsed += dt;
+      if (timer.elapsed < cfg.intervalSeconds) continue;
+      timer.elapsed = 0;
+      const i = cfg.random ? Math.floor(Math.random() * cfg.messages.length) : timer.index % cfg.messages.length;
+      timer.index = i + 1;
+      const entry = cfg.messages[i];
+      this.broadcast({ type: 'chat', from: 'server', text: entry.text, color: entry.color });
+    }
+  }
+
+  /** Right-click on a HOLOGRAM_BLOCK - Admin+ only. */
+  private handleHologramBlockOpen(session: Session, x: number, y: number, z: number): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.HOLOGRAM_BLOCK) return;
+    if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
+    const cfg = this.blockData.get(`${x},${y},${z}`)?.hologramConfig;
+    this.send(session.ws, { type: 'hologramBlockState', x, y, z, text: cfg?.text ?? '', color: cfg?.color ?? 'white', height: cfg?.height ?? 1 });
+  }
+
+  private handleHologramBlockSet(session: Session, x: number, y: number, z: number, text: string, color: MessageColor, height: number): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.HOLOGRAM_BLOCK) return;
+    if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
+    if (!MESSAGE_COLORS.includes(color)) return;
+    const cfg: HologramConfig = { text: String(text).slice(0, 200), color, height: Number.isFinite(height) ? THREE.MathUtils.clamp(height, 0, 10) : 1 };
+    const key = `${x},${y},${z}`;
+    const data: BlockData = { hologramConfig: cfg };
+    this.blockData.set(key, data);
+    void this.state.storage.put(`blockdata:${key}`, data);
+    // Everyone needs to see the new text/color/height, not just whoever
+    // configured it - piggyback on the same blockChanged broadcast a real
+    // block edit already uses (silent: true, since nothing actually
+    // changed about the block itself, just its side-table data).
+    this.broadcast({ type: 'blockChanged', x, y, z, blockId: BlockId.HOLOGRAM_BLOCK, silent: true, data });
   }
 
   /**
@@ -1859,6 +1947,7 @@ export class WorldDO implements DurableObject {
       this.applyEnvironmentDamage(session, dt);
       this.updateEating(session, dt);
     }
+    this.tickMessageBlocks(dt);
 
     // Recompute which chunks are worth simulating BEFORE anything consults it
     // this tick, so a player who just crossed a chunk boundary wakes up their
@@ -2222,6 +2311,13 @@ export class WorldDO implements DurableObject {
   private hurtPlayer(playerId: number, rawDamage: number, killedBy?: string, ignoreInvuln = false, fromPos?: THREE.Vector3, bypassArmor = false): void {
     const session = this.sessionById(playerId);
     if (!session || session.dead) return; // a corpse can't be hurt again
+    // Zone invulnerability - unlike the i-frame window below, this blocks
+    // EVERY damage source unconditionally (fall/lava/fire/drown included,
+    // which all pass ignoreInvuln=true to skip THAT window) - a control
+    // zone's own invuln flag is a much stronger guarantee than a brief
+    // post-hit grace period.
+    const p = session.physics.state.position;
+    if (this.controlZoneAt(p.x, p.z)?.invuln) return;
     const now = Date.now();
     if (!ignoreInvuln && now < session.invulnUntilMs) return;
     // LCE Mob::getDamageAfterArmorAbsorb/Inventory::hurtArmor - drowning
@@ -2243,7 +2339,6 @@ export class WorldDO implements DurableObject {
     // (fromPos given), never for fall/lava/fire/drown, matching singleplayer.
     // Applied even on the killing blow, same as singleplayer does.
     if (fromPos) {
-      const p = session.physics.state.position;
       const dx = p.x - fromPos.x;
       const dz = p.z - fromPos.z;
       const len = Math.hypot(dx, dz) || 1;
@@ -2701,6 +2796,7 @@ export class WorldDO implements DurableObject {
     // something else all change the answer controlZoneAt() gives - see its
     // own doc comment for why a full rebuild is cheap enough here.
     if (id === BlockId.CONTROL_BLOCK || oldId === BlockId.CONTROL_BLOCK) this.rebuildControlZones();
+    if (oldId === BlockId.MESSAGE_BLOCK && id !== BlockId.MESSAGE_BLOCK) this.messageBlockTimers.delete(key);
   }
 
   /**

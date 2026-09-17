@@ -378,6 +378,8 @@ export function resolveFace(id: BlockId, faceIndex: number, liquidDistance: numb
   // Admin-only mp blocks (world-do.ts's ControlZone / tp pad).
   if (id === BlockId.CONTROL_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'control_block' };
   if (id === BlockId.TP_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'tp_block' };
+  if (id === BlockId.MESSAGE_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'message' };
+  if (id === BlockId.HOLOGRAM_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'hologram' };
   if (id === BlockId.CRAFTING_TABLE) {
     if (faceIndex === 2) return { material: MATERIAL_OPAQUE, atlasKey: 'crafting_table_top' };  // +Y
     if (faceIndex === 3) return { material: MATERIAL_OPAQUE, atlasKey: 'oak_planks' };            // -Y (underside = planks)

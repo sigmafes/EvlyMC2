@@ -26,8 +26,30 @@ export type ChestState = {
   items: SlotRef[];
 };
 
-/** A control zone's 4 toggleable protections - see BlockData.controlFlags's own doc comment. */
-export type ControlFlags = { grief: boolean; pvp: boolean; mobDamage: boolean; mobSpawn: boolean };
+/** A control zone's 5 toggleable protections - see BlockData.controlFlags's own doc comment. */
+export type ControlFlags = { grief: boolean; pvp: boolean; mobDamage: boolean; mobSpawn: boolean; invuln: boolean };
+
+/** One of the 9 named colors a message/hologram block can use - "celeste"/"morado" in the original request are `cyan`/`purple`. */
+export type MessageColor = 'white' | 'red' | 'green' | 'blue' | 'yellow' | 'orange' | 'cyan' | 'pink' | 'purple';
+
+export type MessageEntry = { text: string; color: MessageColor };
+
+/** MESSAGE_BLOCK only - a rotating set of up to 5 chat lines this block broadcasts on its own, no player interaction needed. */
+export type MessageConfig = {
+  messages: MessageEntry[];
+  /** Seconds between broadcasts. */
+  intervalSeconds: number;
+  /** false = cycle 0,1,2... in order; true = pick a random entry each time. */
+  random: boolean;
+};
+
+/** HOLOGRAM_BLOCK only - a static floating text label, same visual idea as a player's own name tag but at a fixed world position instead of following an entity. */
+export type HologramConfig = {
+  text: string;
+  color: MessageColor;
+  /** Blocks above this cell's centre the label floats. */
+  height: number;
+};
 
 export type BlockData = {
   facing?: 0 | 1 | 2 | 3;
@@ -48,12 +70,29 @@ export type BlockData = {
   controlFlags?: ControlFlags;
   /** TP_BLOCK only - the exact destination this pad teleports whoever steps on it to. Unset = no destination configured yet (stepping on it does nothing). */
   tpTarget?: { x: number; y: number; z: number };
+  /** MESSAGE_BLOCK only - see MessageConfig's own doc comment. Unset = not yet configured, broadcasts nothing. */
+  messageConfig?: MessageConfig;
+  /** HOLOGRAM_BLOCK only - see HologramConfig's own doc comment. Unset = not yet configured, shows nothing. */
+  hologramConfig?: HologramConfig;
 };
 
 /** A freshly-placed, unconfigured CONTROL_BLOCK's flags - no protection at all until an Admin actually sets them (see protocol.ts's controlBlockSet). */
 export function defaultControlFlags(): ControlFlags {
-  return { grief: true, pvp: true, mobDamage: true, mobSpawn: true };
+  return { grief: true, pvp: true, mobDamage: true, mobSpawn: true, invuln: false };
 }
+
+/** CSS colors for MessageColor - shared by the chat line renderer (message block broadcasts) and the hologram label renderer, so both read a message/hologram's color identically. */
+export const MESSAGE_COLOR_HEX: Record<MessageColor, string> = {
+  white: '#ffffff',
+  red: '#ff5555',
+  green: '#55ff55',
+  blue: '#5555ff',
+  yellow: '#ffff55',
+  orange: '#ffaa00',
+  cyan: '#55ffff',
+  pink: '#ff77dd',
+  purple: '#aa55ff',
+};
 
 export function emptyFurnace(): FurnaceState {
   return { input: null, fuel: null, output: null, cookTime: 0, litTime: 0, litDuration: 0 };

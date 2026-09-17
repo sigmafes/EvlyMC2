@@ -1,6 +1,6 @@
 import { PROTOCOL_VERSION, isServerMessageType, type ClientMessage, type ServerMessage, type Vec3 } from './protocol';
 import type { InventorySlot } from '../inventory';
-import type { FurnaceState, ChestState, ControlFlags } from '../block-data';
+import type { FurnaceState, ChestState, ControlFlags, MessageEntry, MessageColor } from '../block-data';
 
 export type MpClientHandlers = {
   onWelcome: (msg: Extract<ServerMessage, { type: 'welcome' }>) => void;
@@ -23,12 +23,14 @@ export type MpClientHandlers = {
   onControlBlockState: (x: number, y: number, z: number, controlId: number, flags: ControlFlags) => void;
   onControlBlockDenied: () => void;
   onTpBlockState: (x: number, y: number, z: number, target: Vec3) => void;
+  onMessageBlockState: (x: number, y: number, z: number, messages: MessageEntry[], intervalSeconds: number, random: boolean) => void;
+  onHologramBlockState: (x: number, y: number, z: number, text: string, color: MessageColor, height: number) => void;
   onCraftGridState: (side: 2 | 3, inputs: InventorySlot[], output: InventorySlot) => void;
   onCraftGridClosed: () => void;
   onInvHeld: (item: InventorySlot | null) => void;
   onToolBroke: () => void;
   onDied: (killedBy?: string) => void;
-  onChat: (from: string, text: string) => void;
+  onChat: (from: string, text: string, color?: MessageColor) => void;
   /** Round-trip reply to a `ping` this client sent - `clientTimeMs` is its own value echoed back, so `performance.now() - clientTimeMs` is the RTT. */
   onPong: (clientTimeMs: number, serverTimeMs: number) => void;
   onClose: (reason: string) => void;
@@ -83,12 +85,14 @@ export class MpClient {
         case 'controlBlockState': handlers.onControlBlockState(msg.x, msg.y, msg.z, msg.controlId, msg.flags); break;
         case 'controlBlockDenied': handlers.onControlBlockDenied(); break;
         case 'tpBlockState': handlers.onTpBlockState(msg.x, msg.y, msg.z, msg.target); break;
+        case 'messageBlockState': handlers.onMessageBlockState(msg.x, msg.y, msg.z, msg.messages, msg.intervalSeconds, msg.random); break;
+        case 'hologramBlockState': handlers.onHologramBlockState(msg.x, msg.y, msg.z, msg.text, msg.color, msg.height); break;
         case 'craftGridState': handlers.onCraftGridState(msg.side, msg.inputs, msg.output); break;
         case 'craftGridClosed': handlers.onCraftGridClosed(); break;
         case 'invHeld': handlers.onInvHeld(msg.item); break;
         case 'toolBroke': handlers.onToolBroke(); break;
         case 'died': handlers.onDied(msg.killedBy); break;
-        case 'chat': handlers.onChat(msg.from, msg.text); break;
+        case 'chat': handlers.onChat(msg.from, msg.text, msg.color); break;
         case 'pong': handlers.onPong(msg.clientTimeMs, msg.serverTimeMs); break;
         default: break; // chunkData: not used by this client yet
       }

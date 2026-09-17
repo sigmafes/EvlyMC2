@@ -59,4 +59,6 @@ export const BLOCK_CATALOG: InventorySlot[] = [
   // purely so /give <control_block|tp_block> can find them by name.
   { id: BlockId.CONTROL_BLOCK, name: 'Control Block', sideTexture: 'blocks/control_block.png', topTexture: 'blocks/control_block.png' },
   { id: BlockId.TP_BLOCK, name: 'Teleport Block', sideTexture: 'blocks/tp_block.png', topTexture: 'blocks/tp_block.png' },
+  { id: BlockId.MESSAGE_BLOCK, name: 'Message Block', sideTexture: 'blocks/message.png', topTexture: 'blocks/message.png' },
+  { id: BlockId.HOLOGRAM_BLOCK, name: 'Hologram Block', sideTexture: 'blocks/hologram.png', topTexture: 'blocks/hologram.png' },
 ];
