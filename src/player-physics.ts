@@ -303,7 +303,13 @@ export class PlayerPhysics {
 
     // Track fall distance so the health system can apply fall damage on landing.
     this.fallImpact = 0;
-    if (this.isInWater()) {
+    if (this.flying) {
+      // Otherwise flying around above the ground still tracks airPeakY like
+      // a real fall, so landing after /fly turns off (or just dipping back
+      // to the ground while still flying) charges damage for the entire
+      // flight height instead of nothing.
+      this.airPeakY = null;
+    } else if (this.isInWater()) {
       this.airPeakY = null;
     } else if (this.state.grounded) {
       if (this.airPeakY !== null) {

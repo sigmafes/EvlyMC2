@@ -97,6 +97,7 @@ function buildBoxGeometry(
 type ChestEntry = {
   group: THREE.Group;
   lidPivot: THREE.Group;
+  material: THREE.MeshBasicMaterial; // this chest's own clone - see ensureShared's doc comment
   openness: number; // 0 = closed, 1 = fully open, eased every frame
   open: boolean;
 };
@@ -109,9 +110,11 @@ let material: THREE.MeshBasicMaterial | null = null;
 // MeshBasicMaterial, not Lambert/Standard - this voxel engine has no real
 // THREE.Light in singleplayer's scene at all (main.ts), only baked per-
 // vertex brightness on the terrain's own MeshBasicMaterial, so anything lit
-// would just render pure black there. A per-position day/night or torch
-// light-level tint (like PlayerModel.setLightLevel()) is a real follow-up,
-// left flat/undimmed for this pass.
+// would just render pure black there. Light-level tint is applied the same
+// way PlayerModel.setLightLevel() does it (material.color.setScalar), but
+// each chest needs its OWN material clone (see ChestEntry.material below) -
+// unlike the player there can be many chests at many different light levels
+// at once, so a single shared material's color can't serve them all.
 function ensureShared(): void {
   if (material) return;
   const texture = new THREE.TextureLoader().load(new URL('../textures/blocks/chest.png', import.meta.url).href);
@@ -150,7 +153,11 @@ export class ChestRenderer {
     group.position.set(x, y, z);
     group.rotation.y = [Math.PI, -Math.PI / 2, 0, Math.PI / 2][facing];
 
-    const box = new THREE.Mesh(boxGeometry!, material!);
+    // Own clone so this chest's light-level tint (see update()) doesn't
+    // bleed onto every other chest sharing the same base material/texture.
+    const ownMaterial = material!.clone();
+
+    const box = new THREE.Mesh(boxGeometry!, ownMaterial);
     box.position.y = -0.5 + BOX_HEIGHT / 2;
     group.add(box);
 
@@ -158,7 +165,7 @@ export class ChestRenderer {
     // up-and-back around X as it opens (see update()'s LID_OPEN_ANGLE math).
     const lidPivot = new THREE.Group();
     lidPivot.position.set(0, -0.5 + BOX_HEIGHT, WIDTH / 2);
-    const lid = new THREE.Mesh(lidGeometry!, material!);
+    const lid = new THREE.Mesh(lidGeometry!, ownMaterial);
     lid.position.set(0, LID_HEIGHT / 2, -WIDTH / 2);
     lidPivot.add(lid);
 
@@ -170,14 +177,14 @@ export class ChestRenderer {
     // front) converted into this pivot's local space and re-centred here:
     // world y = 0.5 - 7/16 = 0.0625, world z = 0.5/16 - 0.5 = -0.46875,
     // minus the pivot's own (0, BOX_HEIGHT-0.5, WIDTH/2).
-    const lock = new THREE.Mesh(lockGeometry!, material!);
+    const lock = new THREE.Mesh(lockGeometry!, ownMaterial);
     lock.position.set(0, -0.0625, -0.90625);
     lidPivot.add(lock);
 
     group.add(lidPivot);
 
     this.scene.add(group);
-    this.entries.set(key, { group, lidPivot, openness: 0, open: false });
+    this.entries.set(key, { group, lidPivot, material: ownMaterial, openness: 0, open: false });
   }
 
   despawn(x: number, y: number, z: number): void {
@@ -185,6 +192,7 @@ export class ChestRenderer {
     const entry = this.entries.get(key);
     if (!entry) return;
     this.scene.remove(entry.group);
+    entry.material.dispose();
     this.entries.delete(key);
   }
 
@@ -204,15 +212,24 @@ export class ChestRenderer {
     return meshes;
   }
 
-  update(delta: number): void {
-    for (const entry of this.entries.values()) {
+  /** `getLight(x,y,z)` returns the raw 0..15 world light level, same signature as lightEngine.getRawBrightness - see main.ts's/multiplayer-game.ts's own setLightLevel() calls for the pattern this mirrors. */
+  update(delta: number, getLight?: (x: number, y: number, z: number) => number): void {
+    for (const [key, entry] of this.entries) {
       entry.openness = THREE.MathUtils.damp(entry.openness, entry.open ? 1 : 0, ANIM_RATE, delta);
       entry.lidPivot.rotation.x = LID_OPEN_ANGLE * entry.openness;
+      if (getLight) {
+        const [x, y, z] = key.split(',').map(Number);
+        const b = Math.pow(THREE.MathUtils.clamp(getLight(x, y, z) / 15, 0, 1), 1.25);
+        entry.material.color.setScalar(b);
+      }
     }
   }
 
   dispose(): void {
-    for (const entry of this.entries.values()) this.scene.remove(entry.group);
+    for (const entry of this.entries.values()) {
+      this.scene.remove(entry.group);
+      entry.material.dispose();
+    }
     this.entries.clear();
   }
 }

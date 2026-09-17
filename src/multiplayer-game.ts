@@ -1657,7 +1657,21 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   pausedHeading.textContent = 'Game Paused';
   const backToGameBtn = makeButton('Back to Game', () => toggleOptionsPanel());
   const openOptionsBtn = makeButton('Options', () => showOptionsView(true));
-  const leaveBtn = makeButton('Leave World', () => disconnect('Disconnected'));
+  const leaveBtn = makeButton('Leave World', () => {
+    // A plain disconnect() left #main-menu's own MainMenu instance disposed
+    // (it's torn down the moment multiplayer starts - see main-menu.ts's
+    // openMultiplayerConnect onSubmit) with nothing left alive to keep
+    // driving its panorama's requestAnimationFrame loop, so the panorama
+    // canvas just kept showing whatever its very last rendered frame was
+    // forever - "frozen" - once back at the connect screen. Singleplayer's
+    // own "Leave World" already reloads the page for exactly this class of
+    // problem (see main.ts's showMainMenu doc comment); doing the same here
+    // guarantees a fresh MainMenu/panorama instead of trying to resurrect
+    // the old one in place.
+    client.disconnect();
+    try { sessionStorage.setItem('evlymc-skip-intro', '1'); } catch { /* private mode */ }
+    location.reload();
+  });
   pausedViewEl.append(pausedHeading, backToGameBtn, openOptionsBtn, leaveBtn);
 
   const optionsViewEl = document.createElement('div');
@@ -3037,7 +3051,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       fireOverlayEl.style.backgroundSize = `100% ${h * 32}px`;
       fireOverlayEl.style.backgroundPositionY = `-${getFireFrameIndex(now / 1000) * h}px`;
     }
-    chestRenderer.update(delta);
+    chestRenderer.update(delta, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
     // Position is always the server's last confirmed value (no local
     // prediction yet - see the module doc comment); look direction is local
     // for a responsive camera despite network latency on movement itself.

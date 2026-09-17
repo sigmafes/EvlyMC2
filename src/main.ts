@@ -858,7 +858,7 @@ function animate() {
   smokeParticles.update(delta);
   blockInspector.update();
   furnaceUI.update();
-  chestRenderer.update(delta);
+  chestRenderer.update(delta, (x, y, z) => lightEngine.getRawBrightness(x, y, z));
   chat.update(delta);
 
   // Rendering

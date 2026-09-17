@@ -90,6 +90,11 @@ export type ItemDef = {
 };
 
 const TOOL = (name: string, texture: string): ItemDef => ({ name, texture, maxStack: 1 });
+
+/** Pickaxe/axe/shovel/sword only (not armor, bow, or flint&steel, which also happen to be maxStack 1) - the contiguous id range 120..139 above. Used to scale these up slightly when held in the third-person hand. */
+export function isToolOrSword(id: number): boolean {
+  return id >= ItemId.WOODEN_PICKAXE && id <= ItemId.DIAMOND_SWORD;
+}
 const MAT = (name: string, texture: string): ItemDef => ({ name, texture, maxStack: 64 });
 
 export const ITEMS: Record<number, ItemDef> = {

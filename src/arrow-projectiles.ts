@@ -131,6 +131,10 @@ function getArrowMesh(): THREE.Group {
   }
   if (!tailMaterial) {
     tailMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    // Without this, tintByLight's per-frame call (below) silently skips this
+    // material - it only tints materials that already carry their own
+    // untinted base color to multiply against, same as arrowMaterial above.
+    tailMaterial.userData.baseColor = new THREE.Color(0xffffff);
   }
 
   const group = new THREE.Group();

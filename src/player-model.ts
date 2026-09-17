@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { buildBlockMesh, buildItemMesh, disposeBlockMesh, tintByLight } from './block-preview';
 import { BLOCK_CATALOG } from './creative-palette';
 import { BlockId } from './block';
-import { ITEMS, isBlock } from './item';
+import { ITEMS, isBlock, isToolOrSword } from './item';
 import {
   getAtlasMaterial, getOverlayMaterial, getSkinAtlasMaterial, applySkinTexture, resetSkinTexture,
   buildArmGeometry, buildArmMesh, buildPlayerModelParts, type PlayerModelParts,
@@ -187,8 +187,18 @@ export class PlayerModel {
    * thing - otherwise it would sit exactly flush with leggings' own full-leg
    * shell and z-fight against it whenever both are worn together.
    */
-  private static readonly BOOT_HEIGHT = 0.28;
+  // Slightly taller than before (was 0.28) - the boot shell reads too short/
+  // stubby at the old height, see this session's bugfix list.
+  private static readonly BOOT_HEIGHT = 0.34;
   private static readonly BOOT_Y_OFFSET = -(0.76 - PlayerModel.BOOT_HEIGHT) / 2;
+  // Waist/hip piece leggings were missing entirely - a short shell around the
+  // bottom of the torso, same idea as the boot shell being a short piece at
+  // the bottom of the leg. Layer-2 armor sheets do have belt-row pixels in
+  // the torso UV region (that's what a real leggings model wears there), so
+  // this reuses SKIN_UV.torso against the layer-2 material rather than
+  // needing new UV rects.
+  private static readonly WAIST_HEIGHT = 0.22;
+  private static readonly WAIST_Y_OFFSET = -(0.76 - PlayerModel.WAIST_HEIGHT) / 2;
 
   private buildArmorShells(slot: ArmorSlotIndex, material: 'iron' | 'gold' | 'diamond'): THREE.Mesh[] {
     const shells: THREE.Mesh[] = [];
@@ -196,29 +206,38 @@ export class PlayerModel {
       // The actual head MESH, not `this.parts.head` (the neck-rotation
       // PIVOT) - attaching to the pivot centred the helmet at the neck,
       // rendering it mostly inside the head instead of wrapping it.
-      shells.push(addArmorOverlay(this.parts.headMesh, 0.55, 0.55, 0.55, SKIN_UV.head, undefined, getArmorMaterial(material, 1)));
+      // Slightly bigger than the bare head (was 0.55) per this session's
+      // bugfix list.
+      shells.push(addArmorOverlay(this.parts.headMesh, 0.62, 0.62, 0.62, SKIN_UV.head, undefined, getArmorMaterial(material, 1)));
     } else if (slot === 1) {
       const mat = getArmorMaterial(material, 1);
-      const armWidth = this.slimArms ? ARM_WIDTH_SLIM : ARM_WIDTH;
-      shells.push(addArmorOverlay(this.parts.torso, 0.55, 0.76, 0.275, SKIN_UV.torso, undefined, mat));
+      const armWidth = (this.slimArms ? ARM_WIDTH_SLIM : ARM_WIDTH) + 0.05;
+      // Chestplate + shoulder pads (sleeves) slightly bigger than before
+      // (was 0.55/0.275 torso, 0.275 sleeve depth) per this session's
+      // bugfix list.
+      shells.push(addArmorOverlay(this.parts.torso, 0.62, 0.76, 0.32, SKIN_UV.torso, undefined, mat));
       // Both sleeves sample SKIN_UV.armRight (mirrored for the left) - the
       // classic 64x32 armor sheet only HAS one arm region at all (unlike
       // the skin's own 64x64 layout, which has a genuinely separate
       // armLeft). Sampling SKIN_UV.armLeft's y=48-63 rows against a 32px-
       // tall armor texture read past the bottom edge, which is what was
       // rendering as a missing/garbled sleeve.
-      if (this.armRight) shells.push(addArmorOverlay(this.armRight, armWidth, 0.76, 0.275, SKIN_UV.armRight, undefined, mat));
-      if (this.armLeft) shells.push(addArmorOverlay(this.armLeft, armWidth, 0.76, 0.275, SKIN_UV.armRight, MIRROR_U, mat));
+      if (this.armRight) shells.push(addArmorOverlay(this.armRight, armWidth, 0.76, 0.32, SKIN_UV.armRight, undefined, mat));
+      if (this.armLeft) shells.push(addArmorOverlay(this.armLeft, armWidth, 0.76, 0.32, SKIN_UV.armRight, MIRROR_U, mat));
     } else if (slot === 2) {
       // Same "only one leg region exists in the classic sheet" reasoning as
       // the arms above - both legs sample SKIN_UV.legRight, left mirrored.
       const mat = getArmorMaterial(material, 2);
       shells.push(addArmorOverlay(this.parts.legRight, 0.275, 0.76, 0.275, SKIN_UV.legRight, undefined, mat));
       shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legRight, MIRROR_U, mat));
+      // Waist/hip piece - see WAIST_HEIGHT's doc comment above.
+      shells.push(addArmorOverlay(this.parts.torso, 0.62, 0.76, 0.32, SKIN_UV.torso, undefined, mat, PlayerModel.WAIST_HEIGHT, PlayerModel.WAIST_Y_OFFSET));
     } else {
       const mat = getArmorMaterial(material, 1);
-      shells.push(addArmorOverlay(this.parts.legRight, 0.275, 0.76, 0.275, SKIN_UV.legRight, undefined, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
-      shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legRight, MIRROR_U, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
+      // Slightly bigger footprint than the leg itself (was 0.275/0.275) per
+      // this session's bugfix list, on top of the taller BOOT_HEIGHT above.
+      shells.push(addArmorOverlay(this.parts.legRight, 0.32, 0.76, 0.32, SKIN_UV.legRight, undefined, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
+      shells.push(addArmorOverlay(this.parts.legLeft, 0.32, 0.76, 0.32, SKIN_UV.legRight, MIRROR_U, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
     }
     return shells;
   }
@@ -577,7 +596,10 @@ export class PlayerModel {
       // Negative Y scale mirrors the sprite vertically (a flip, not a spin), so
       // the working end (axe blade, pick head) points DOWN out of the fist
       // without the texture also swapping left-to-right.
-      mesh.scale.set(0.72, -0.72, 0.72);
+      // Tools/swords read slightly bigger than other held items (was a flat
+      // 0.72 for everything) per this session's bugfix list.
+      const s = isToolOrSword(id) ? 0.85 : 0.72;
+      mesh.scale.set(s, -s, s);
       mesh.position.set(0, 0.10, -0.18);
       // Edge-on to the arm (normal along its side) and tipped forward, like LCE.
       // Z is the sprite's own in-plane roll: -40 - 80 - 180 deg, clockwise.

@@ -193,7 +193,13 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
     }
     easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
     mob.attackTimer -= delta;
-    if (mob.attackTimer <= 0) {
+    // sightMemory above is a grace window so losing LOS for an instant
+    // doesn't drop the chase - it deliberately keeps `chasing` (and this
+    // attack-range branch) alive for a bit with no direct line of sight,
+    // which let a zombie pressed up against a wall next to the player keep
+    // landing hits through it. The swing itself needs a fresh, un-memoried
+    // check right now, not the memoried one.
+    if (mob.attackTimer <= 0 && hasLineOfSight(deps.isSolid, eyePos, playerPos)) {
       mob.attackTimer = ATTACK_INTERVAL;
       deps.onAttackPlayer?.(ZOMBIE_ATTACK_DAMAGE, pos.clone());
     }
