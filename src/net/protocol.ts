@@ -284,7 +284,7 @@ export type ClientMessage =
   /** Right-click on a HOLOGRAM_BLOCK - Admin+ only, same trust level as controlBlockOpen. Replies with `hologramBlockState`. */
   | { type: 'hologramBlockOpen'; x: number; y: number; z: number }
   /** Saves this hologram's text/color/height. Unlike messageBlockSet, this ALSO reaches every other client (world-do.ts broadcasts a `blockChanged` alongside the direct reply) - a hologram is a visible world object everyone needs to see update, not just the admin configuring it. */
-  | { type: 'hologramBlockSet'; x: number; y: number; z: number; text: string; color: MessageColor; height: number }
+  | { type: 'hologramBlockSet'; x: number; y: number; z: number; text: string; color: MessageColor; height: number; showDistance: number }
   /** Melee swing at an entity: negative ids are mobs, positive ones other players (PvP - see world-do.ts's spawn-protection check). */
   | { type: 'attack'; targetId: number }
   /**
@@ -386,7 +386,7 @@ export type ServerMessage =
   /** Reply to `messageBlockOpen`/echoed after a `messageBlockSet` - this block's current message list/interval/order. Defaults to an empty list (broadcasts nothing) if never configured. */
   | { type: 'messageBlockState'; x: number; y: number; z: number; messages: MessageEntry[]; intervalSeconds: number; random: boolean }
   /** Reply to `hologramBlockOpen` - this hologram's current text/color/height. Defaults to empty text (renders nothing) if never configured. Unlike controlBlockState/tpBlockState, a `hologramBlockSet` does NOT get echoed back this way - everyone (including the sender) instead learns the new values from the `blockChanged` broadcast hologramBlockSet's own doc comment describes. */
-  | { type: 'hologramBlockState'; x: number; y: number; z: number; text: string; color: MessageColor; height: number }
+  | { type: 'hologramBlockState'; x: number; y: number; z: number; text: string; color: MessageColor; height: number; showDistance: number }
   /**
    * The open crafting grid's contents and what they currently make. Pushed on
    * every change rather than polled, same as the furnace. `output` is derived

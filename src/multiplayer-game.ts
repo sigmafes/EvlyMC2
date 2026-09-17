@@ -860,18 +860,19 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
    * block's own blockChanged edits arrive, same as chestRenderer.spawn/
    * despawn does for chests right next to it.
    */
-  const holograms = new Map<string, { label: HTMLDivElement; pos: THREE.Vector3 }>();
-  function spawnOrUpdateHologram(x: number, y: number, z: number, cfg: { text: string; color: MessageColor; height: number }): void {
+  const holograms = new Map<string, { label: HTMLDivElement; pos: THREE.Vector3; showDistance: number }>();
+  function spawnOrUpdateHologram(x: number, y: number, z: number, cfg: { text: string; color: MessageColor; height: number; showDistance: number }): void {
     const key = `${x},${y},${z}`;
     let entry = holograms.get(key);
     if (!entry) {
       const label = document.createElement('div');
       label.className = 'mp-name-tag mp-hologram';
       labelLayer.appendChild(label);
-      entry = { label, pos: new THREE.Vector3(x + 0.5, y, z + 0.5) };
+      entry = { label, pos: new THREE.Vector3(x + 0.5, y, z + 0.5), showDistance: cfg.showDistance };
       holograms.set(key, entry);
     }
     entry.pos.y = y + cfg.height;
+    entry.showDistance = cfg.showDistance;
     entry.label.textContent = cfg.text;
     entry.label.style.color = MESSAGE_COLOR_HEX[cfg.color];
   }
@@ -1864,14 +1865,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
    */
   let sprintToggled = false;
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.code === 'KeyT' && !chatOpen) {
+    if (e.code === 'KeyT' && !chatOpen && !isServerBlockPanelOpen()) {
       // Without this, the same keydown that opens the input (focusing it
       // synchronously below) still runs its default browser behavior -
       // typing a literal "t" into the now-focused field the instant it opens.
       e.preventDefault();
       openChat();
       return;
-    } // opens even over another panel, same as singleplayer's own T
+    } // opens even over another (non-admin-panel) panel, same as singleplayer's own T
     keys.add(e.code);
     if (e.code === 'Escape') {
       // Close whichever panel is actually open first - this used to
@@ -1880,6 +1881,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // closing it. Also what Android's back gesture ends up triggering
       // (see android-back.ts) - it needs a menu to actually close, not an
       // immediate disconnect.
+      if (!controlBlockEl.hidden) { controlBlockEl.hidden = true; lockPointer(canvas); return; }
+      if (!tpBlockEl.hidden) { tpBlockEl.hidden = true; lockPointer(canvas); return; }
+      if (!messageBlockEl.hidden) { messageBlockEl.hidden = true; lockPointer(canvas); return; }
+      if (!hologramBlockEl.hidden) { hologramBlockEl.hidden = true; lockPointer(canvas); return; }
       if (optionsOpen) { toggleOptionsPanel(); return; }
       if (tableOpen) { setTableOpen(false); return; }
       if (furnaceOpenState) { setFurnaceOpen(false); return; }
@@ -1898,10 +1903,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // Don't stack it on top of another panel - closing is always allowed
       // (getting back OUT of options can't be blocked by anything), opening
       // is refused while backpack/table/furnace already have the pointer.
-      if (optionsOpen || !(tableOpen || backpackOpen || furnaceOpenState || chestOpenState)) toggleOptionsPanel();
+      if (!isServerBlockPanelOpen() && (optionsOpen || !(tableOpen || backpackOpen || furnaceOpenState || chestOpenState))) toggleOptionsPanel();
       return;
     }
-    if (e.code === 'KeyE' && !optionsOpen) {
+    if (e.code === 'KeyE' && !optionsOpen && !isServerBlockPanelOpen()) {
       // E closes the table instead of opening the backpack over it, same
       // reasoning as the furnace branch right below - only one panel at a
       // time. There's no C shortcut any more: the 2x2 lives inside the
@@ -1913,7 +1918,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       setBackpackOpen(!backpackOpen);
       return;
     }
-    if (tableOpen || backpackOpen || furnaceOpenState || chestOpenState || optionsOpen) return; // don't move/select slots while a menu has the pointer
+    if (tableOpen || backpackOpen || furnaceOpenState || chestOpenState || optionsOpen || isServerBlockPanelOpen()) return; // don't move/select slots while a menu has the pointer
     const digitIndex = DIGIT_CODES.indexOf(e.code);
     if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
     if (e.code === 'KeyQ') {
@@ -2214,9 +2219,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const entityId = hit.object.userData.entityId as number | undefined;
     if (action === 'attack') {
       // Mob ids are negative (ServerMobManager); player ids are positive -
-      // PvP is deliberately not wired up yet (see world-do.ts's attack
-      // handler), so this just doesn't send anything for a player target.
-      if (entityId === undefined || entityId >= 0) return false;
+      // both are sent the same way now. The server (attackPlayer/attackMob
+      // in world-do.ts) is the real gate: spawn protection, a zone's own
+      // pvp/mobDamage flags, and attack cooldown/reach all get checked
+      // there regardless of what this sends.
+      if (entityId === undefined) return false;
       client.send({ type: 'attack', targetId: entityId });
       localPlayerModel?.swingArm(); // same third-person swing cue as a successful mine start below
       hand.swing();
@@ -2256,18 +2263,22 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // feedback everyone else's admin-only commands already give.
     if (getBlock(existing.x, existing.y, existing.z) === BlockId.CONTROL_BLOCK) {
       client.send({ type: 'controlBlockOpen', x: existing.x, y: existing.y, z: existing.z });
+      unlockPointerForGui();
       return true;
     }
     if (getBlock(existing.x, existing.y, existing.z) === BlockId.TP_BLOCK) {
       client.send({ type: 'tpBlockOpen', x: existing.x, y: existing.y, z: existing.z });
+      unlockPointerForGui();
       return true;
     }
     if (getBlock(existing.x, existing.y, existing.z) === BlockId.MESSAGE_BLOCK) {
       client.send({ type: 'messageBlockOpen', x: existing.x, y: existing.y, z: existing.z });
+      unlockPointerForGui();
       return true;
     }
     if (getBlock(existing.x, existing.y, existing.z) === BlockId.HOLOGRAM_BLOCK) {
       client.send({ type: 'hologramBlockOpen', x: existing.x, y: existing.y, z: existing.z });
+      unlockPointerForGui();
       return true;
     }
     // The server ignores this blockId for ordinary placement and places
@@ -2771,8 +2782,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const id = Math.max(0, Math.trunc(Number(controlIdInput.value) || 0));
     client.send({ type: 'controlBlockSet', x: controlBlockPos.x, y: controlBlockPos.y, z: controlBlockPos.z, controlId: id, flags: controlFlags });
     controlBlockEl.hidden = true;
+    lockPointer(canvas);
   });
-  const controlCloseBtn = makeButton('Close', () => { controlBlockEl.hidden = true; });
+  const controlCloseBtn = makeButton('Close', () => { controlBlockEl.hidden = true; lockPointer(canvas); });
   controlPanel.append(controlHeading, controlIdRow, controlTogglesEl, controlSaveBtn, controlCloseBtn);
   controlBlockEl.appendChild(controlPanel);
   document.body.appendChild(controlBlockEl);
@@ -2803,8 +2815,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (![target.x, target.y, target.z].every(Number.isFinite)) return;
     client.send({ type: 'tpBlockSet', x: tpBlockPos.x, y: tpBlockPos.y, z: tpBlockPos.z, target });
     tpBlockEl.hidden = true;
+    lockPointer(canvas);
   });
-  const tpCloseBtn = makeButton('Close', () => { tpBlockEl.hidden = true; });
+  const tpCloseBtn = makeButton('Close', () => { tpBlockEl.hidden = true; lockPointer(canvas); });
   tpPanel.append(tpHeading, tpX.row, tpY.row, tpZ.row, tpSaveBtn, tpCloseBtn);
   tpBlockEl.appendChild(tpPanel);
   document.body.appendChild(tpBlockEl);
@@ -2868,8 +2881,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       messages, intervalSeconds, random: messageRandom,
     });
     messageBlockEl.hidden = true;
+    lockPointer(canvas);
   });
-  const messageCloseBtn = makeButton('Close', () => { messageBlockEl.hidden = true; });
+  const messageCloseBtn = makeButton('Close', () => { messageBlockEl.hidden = true; lockPointer(canvas); });
   messagePanel.append(messageHeading, ...messageRows.map((r) => r.row), messageIntervalRow, messageRandomTogglesEl, messageSaveBtn, messageCloseBtn);
   messageBlockEl.appendChild(messagePanel);
   document.body.appendChild(messageBlockEl);
@@ -2897,19 +2911,35 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   hologramHeightInput.max = '10';
   hologramHeightInput.step = '0.1';
   hologramHeightRow.append('Height: ', hologramHeightInput);
+  const hologramDistanceRow = document.createElement('label');
+  hologramDistanceRow.className = 'mp-config-row';
+  const hologramDistanceInput = document.createElement('input');
+  hologramDistanceInput.type = 'number';
+  hologramDistanceInput.min = '1';
+  hologramDistanceInput.max = '256';
+  hologramDistanceInput.step = '1';
+  hologramDistanceInput.value = '16';
+  hologramDistanceRow.append('Show distance: ', hologramDistanceInput);
   const hologramSaveBtn = makeButton('Save', () => {
     if (!hologramBlockPos) return;
     client.send({
       type: 'hologramBlockSet', x: hologramBlockPos.x, y: hologramBlockPos.y, z: hologramBlockPos.z,
       text: hologramTextInput.value.slice(0, 200), color: hologramColorSelect.value as MessageColor,
       height: THREE.MathUtils.clamp(Number(hologramHeightInput.value) || 0, 0, 10),
+      showDistance: THREE.MathUtils.clamp(Number(hologramDistanceInput.value) || 16, 1, 256),
     });
     hologramBlockEl.hidden = true;
+    lockPointer(canvas);
   });
-  const hologramCloseBtn = makeButton('Close', () => { hologramBlockEl.hidden = true; });
-  hologramPanel.append(hologramHeading, hologramTextRow, hologramHeightRow, hologramSaveBtn, hologramCloseBtn);
+  const hologramCloseBtn = makeButton('Close', () => { hologramBlockEl.hidden = true; lockPointer(canvas); });
+  hologramPanel.append(hologramHeading, hologramTextRow, hologramHeightRow, hologramDistanceRow, hologramSaveBtn, hologramCloseBtn);
   hologramBlockEl.appendChild(hologramPanel);
   document.body.appendChild(hologramBlockEl);
+
+  /** True while any of the 4 Admin+ block config panels above is open - same "a menu has the pointer" gate the furnace/chest/table/options panels already use for movement/slot-select/sneak/pause, extended to cover these too (see this session's bugfix list: right-clicking one of these blocks previously left the player free to walk off, open their inventory, or open chat while the panel sat there). */
+  function isServerBlockPanelOpen(): boolean {
+    return !controlBlockEl.hidden || !tpBlockEl.hidden || !messageBlockEl.hidden || !hologramBlockEl.hidden;
+  }
 
   client.connect(serverUrl, worldId, loadPlayToken(), {
     onWelcome: (msg) => {
@@ -3230,11 +3260,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       renderMessageRandomToggle();
       messageBlockEl.hidden = false;
     },
-    onHologramBlockState: (x, y, z, text, color, height) => {
+    onHologramBlockState: (x, y, z, text, color, height, showDistance) => {
       hologramBlockPos = { x, y, z };
       hologramTextInput.value = text;
       hologramColorSelect.value = color;
       hologramHeightInput.value = String(height);
+      hologramDistanceInput.value = String(showDistance);
       hologramBlockEl.hidden = false;
     },
     onChat: (from, text, color) => addChatLine(`<${from}> ${text}`, color),
@@ -3251,7 +3282,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // listener), but not a keyUP for a movement key that was ALREADY held
     // when chat opened - that key would otherwise stay stuck in `keys` and
     // keep moving the player for as long as they're chatting.
-    if (chatOpen || optionsOpen) return;
+    if (chatOpen || optionsOpen || isServerBlockPanelOpen()) return;
     let moveX = touchMoveX, moveZ = touchMoveZ;
     if (keys.has('KeyW')) moveZ -= 1;
     if (keys.has('KeyS')) moveZ += 1;
@@ -3295,8 +3326,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       p.label.style.left = `${(v.x * 0.5 + 0.5) * window.innerWidth}px`;
       p.label.style.top = `${(-v.y * 0.5 + 0.5) * window.innerHeight}px`;
     }
-    for (const { label, pos } of holograms.values()) {
-      if (!label.textContent) { label.style.display = 'none'; continue; }
+    for (const { label, pos, showDistance } of holograms.values()) {
+      if (!label.textContent || camera.position.distanceTo(pos) > showDistance) { label.style.display = 'none'; continue; }
       v.copy(pos);
       v.project(camera);
       if (v.z > 1) { label.style.display = 'none'; continue; }
@@ -3421,7 +3452,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // stopped the world from being mined/moved through instead), and the
     // pause menu's buttons were unreachable because #touch-look intercepted
     // the tap first.
-    const mpMenuOpen = backpackOpen || tableOpen || furnaceOpenState || chestOpenState || optionsOpen || chatOpen || isDead;
+    const mpMenuOpen = backpackOpen || tableOpen || furnaceOpenState || chestOpenState || optionsOpen || chatOpen || isDead || isServerBlockPanelOpen();
     touchControls?.setGameplayVisible(!mpMenuOpen);
     // Same "give Android's back gesture something to catch" reasoning as
     // main.ts's own armAndroidBack() call - see android-back.ts.

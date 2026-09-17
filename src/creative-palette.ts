@@ -58,7 +58,10 @@ export const BLOCK_CATALOG: InventorySlot[] = [
   // Admin-only mp blocks (see block.ts's own doc comments) - listed here
   // purely so /give <control_block|tp_block> can find them by name.
   { id: BlockId.CONTROL_BLOCK, name: 'Control Block', sideTexture: 'blocks/control_block.png', topTexture: 'blocks/control_block.png' },
-  { id: BlockId.TP_BLOCK, name: 'Teleport Block', sideTexture: 'blocks/tp_block.png', topTexture: 'blocks/tp_block.png' },
+  // Named "TP Block" (not "Teleport Block") so it slugifies to tp_block,
+  // matching the block's own textures/blocks/tp_block.png filename and
+  // what /give tp_block actually expects.
+  { id: BlockId.TP_BLOCK, name: 'TP Block', sideTexture: 'blocks/tp_block.png', topTexture: 'blocks/tp_block.png' },
   { id: BlockId.MESSAGE_BLOCK, name: 'Message Block', sideTexture: 'blocks/message.png', topTexture: 'blocks/message.png' },
   { id: BlockId.HOLOGRAM_BLOCK, name: 'Hologram Block', sideTexture: 'blocks/hologram.png', topTexture: 'blocks/hologram.png' },
 ];

@@ -23,7 +23,7 @@ import type { InventorySlot } from '../../src/inventory';
 import { RECIPES, matchRecipe, type Recipe } from '../../src/crafting';
 import { FurnaceManager } from '../../src/furnace';
 import {
-  emptyFurnace, emptyChest, facingTowardPlayer, defaultControlFlags,
+  emptyFurnace, emptyChest, facingTowardPlayer, defaultControlFlags, DEFAULT_HOLOGRAM_SHOW_DISTANCE,
   type FurnaceState, type ChestState, type BlockData, type ControlFlags,
   type MessageEntry, type MessageColor, type MessageConfig, type HologramConfig,
 } from '../../src/block-data';
@@ -752,7 +752,7 @@ export class WorldDO implements DurableObject {
         this.handleHologramBlockOpen(session, msg.x, msg.y, msg.z);
         break;
       case 'hologramBlockSet':
-        this.handleHologramBlockSet(session, msg.x, msg.y, msg.z, msg.text, msg.color, msg.height);
+        this.handleHologramBlockSet(session, msg.x, msg.y, msg.z, msg.text, msg.color, msg.height, msg.showDistance);
         break;
       case 'chat':
         // A command is parsed and answered by the SERVER, never the client -
@@ -885,14 +885,14 @@ export class WorldDO implements DurableObject {
     if (!mining || mining.x !== x || mining.y !== y || mining.z !== z) return;
     const isAdmin = this.isAdminOrOwner(session.name);
     // Grief protection: a zone with grief off can't be broken into by
-    // anyone below Admin, full stop - this check has to come before the
-    // hardness-based one below, since a control/tp block's own -1 hardness
-    // would otherwise reject an Admin's break here too before ever
-    // reaching their bypass.
+    // anyone below Admin, full stop - checked before the admin-block
+    // bypass below too, so a non-admin can't sneak past it that way either.
     if (!isAdmin && this.controlZoneAt(x, z)?.grief === false) return;
-    // Admin blocks are hardness -1 (unbreakable) so an ordinary dig never
-    // finishes one regardless of the check below - Admin+ removing one is
-    // a separate, instant bypass rather than a real timed dig.
+    // Admin blocks are hardness 0 (client-side canMineClient() treats
+    // anything else as truly unbreakable and never even starts a dig - see
+    // block-hardness.ts's own comment on this) so they instamine for
+    // anyone who reaches here, but only an Admin+ actually gets to remove
+    // one; anyone else's breakBlock for one of these silently no-ops.
     if (ADMIN_BLOCK_IDS.has(brokenId)) {
       if (!isAdmin) return;
       this.setBlockFromPlayer(x, y, z, BlockId.AIR);
@@ -1104,14 +1104,22 @@ export class WorldDO implements DurableObject {
     if (this.getBlockAt(x, y, z) !== BlockId.HOLOGRAM_BLOCK) return;
     if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
     const cfg = this.blockData.get(`${x},${y},${z}`)?.hologramConfig;
-    this.send(session.ws, { type: 'hologramBlockState', x, y, z, text: cfg?.text ?? '', color: cfg?.color ?? 'white', height: cfg?.height ?? 1 });
+    this.send(session.ws, {
+      type: 'hologramBlockState', x, y, z,
+      text: cfg?.text ?? '', color: cfg?.color ?? 'white', height: cfg?.height ?? 1,
+      showDistance: cfg?.showDistance ?? DEFAULT_HOLOGRAM_SHOW_DISTANCE,
+    });
   }
 
-  private handleHologramBlockSet(session: Session, x: number, y: number, z: number, text: string, color: MessageColor, height: number): void {
+  private handleHologramBlockSet(session: Session, x: number, y: number, z: number, text: string, color: MessageColor, height: number, showDistance: number): void {
     if (this.getBlockAt(x, y, z) !== BlockId.HOLOGRAM_BLOCK) return;
     if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
     if (!MESSAGE_COLORS.includes(color)) return;
-    const cfg: HologramConfig = { text: String(text).slice(0, 200), color, height: Number.isFinite(height) ? THREE.MathUtils.clamp(height, 0, 10) : 1 };
+    const cfg: HologramConfig = {
+      text: String(text).slice(0, 200), color,
+      height: Number.isFinite(height) ? THREE.MathUtils.clamp(height, 0, 10) : 1,
+      showDistance: Number.isFinite(showDistance) ? THREE.MathUtils.clamp(showDistance, 1, 256) : DEFAULT_HOLOGRAM_SHOW_DISTANCE,
+    };
     const key = `${x},${y},${z}`;
     const data: BlockData = { hologramConfig: cfg };
     this.blockData.set(key, data);

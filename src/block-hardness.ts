@@ -51,13 +51,17 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.EMERALD_BLOCK]: 5,
   [BlockId.COAL_BLOCK]: 5,
   [BlockId.CHEST]: 2.5,
-  // -1 (unbreakable) like bedrock - an ordinary dig can never remove these
-  // regardless of the zone's own grief flag; world-do.ts's handleBreakBlock
-  // has a separate Admin+-only bypass for actually removing one.
-  [BlockId.CONTROL_BLOCK]: -1,
-  [BlockId.TP_BLOCK]: -1,
-  [BlockId.MESSAGE_BLOCK]: -1,
-  [BlockId.HOLOGRAM_BLOCK]: -1,
+  // 0, not -1: an Admin+ needs to be able to instantly remove one of these
+  // (world-do.ts's handleBreakBlock has the actual Admin+-only bypass that
+  // does it), and -1 (Infinity) made canMineClient() refuse to even START
+  // a dig for ANYONE, admin included - client-side that's indistinguishable
+  // from bedrock. A non-admin's attempt still does nothing: the server-side
+  // bypass silently no-ops without them, so the block just never
+  // disappears for them, no drop, no real access granted by this alone.
+  [BlockId.CONTROL_BLOCK]: 0,
+  [BlockId.TP_BLOCK]: 0,
+  [BlockId.MESSAGE_BLOCK]: 0,
+  [BlockId.HOLOGRAM_BLOCK]: 0,
 };
 
 type BlockTool = {

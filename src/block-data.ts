@@ -49,7 +49,11 @@ export type HologramConfig = {
   color: MessageColor;
   /** Blocks above this cell's centre the label floats. */
   height: number;
+  /** Blocks of distance from the camera beyond which the label stops rendering entirely - default 16, same idea as a mob/player nametag's own draw distance. */
+  showDistance: number;
 };
+
+export const DEFAULT_HOLOGRAM_SHOW_DISTANCE = 16;
 
 export type BlockData = {
   facing?: 0 | 1 | 2 | 3;

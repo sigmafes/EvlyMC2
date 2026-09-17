@@ -24,7 +24,7 @@ export type MpClientHandlers = {
   onControlBlockDenied: () => void;
   onTpBlockState: (x: number, y: number, z: number, target: Vec3) => void;
   onMessageBlockState: (x: number, y: number, z: number, messages: MessageEntry[], intervalSeconds: number, random: boolean) => void;
-  onHologramBlockState: (x: number, y: number, z: number, text: string, color: MessageColor, height: number) => void;
+  onHologramBlockState: (x: number, y: number, z: number, text: string, color: MessageColor, height: number, showDistance: number) => void;
   onCraftGridState: (side: 2 | 3, inputs: InventorySlot[], output: InventorySlot) => void;
   onCraftGridClosed: () => void;
   onInvHeld: (item: InventorySlot | null) => void;
@@ -86,7 +86,7 @@ export class MpClient {
         case 'controlBlockDenied': handlers.onControlBlockDenied(); break;
         case 'tpBlockState': handlers.onTpBlockState(msg.x, msg.y, msg.z, msg.target); break;
         case 'messageBlockState': handlers.onMessageBlockState(msg.x, msg.y, msg.z, msg.messages, msg.intervalSeconds, msg.random); break;
-        case 'hologramBlockState': handlers.onHologramBlockState(msg.x, msg.y, msg.z, msg.text, msg.color, msg.height); break;
+        case 'hologramBlockState': handlers.onHologramBlockState(msg.x, msg.y, msg.z, msg.text, msg.color, msg.height, msg.showDistance); break;
         case 'craftGridState': handlers.onCraftGridState(msg.side, msg.inputs, msg.output); break;
         case 'craftGridClosed': handlers.onCraftGridClosed(); break;
         case 'invHeld': handlers.onInvHeld(msg.item); break;
