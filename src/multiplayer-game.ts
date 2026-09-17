@@ -2910,6 +2910,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
     updateBlockHighlight();
     updateStreaming();
+    // Missing entirely before: singleplayer's game-loop.ts re-checks each
+    // subchunk's camera distance every rendered frame (updateView()) so
+    // its `visible` flag tracks where the camera actually is; multiplayer
+    // never called the equivalent, so chunk.ts's updateCulling() only ever
+    // ran once per subchunk build/rebuild - subchunks that should have
+    // dropped out of range as the player moved stayed visible (and kept
+    // costing draw calls/triangles) instead of being culled.
+    for (const chunk of chunks.values()) chunk.updateCulling(camera, viewRadiusChunks * 16);
     updateLabels();
     for (const entity of remoteEntities.values()) updateRemoteAnimation(entity, delta);
     animateGroundItems(delta);
