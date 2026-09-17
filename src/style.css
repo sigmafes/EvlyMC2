@@ -2333,6 +2333,53 @@ body.mp-touch.touch #touch-ui { z-index: 951; }
 #mp-furnace-backpack { top: 168px; }
 #mp-furnace-hotbar { top: 284px; }
 
+/* ===== Chest GUI (mp mirror of singleplayer's own #chest/#chest-panel/
+   #chest-slots/#chest-backpack/#chest-hotbar) - this whole block was
+   missing entirely: the panel's DOM/JS existed but with no CSS at all it
+   never had a background, size, or position, so opening a chest in
+   multiplayer showed nothing. ===== */
+#mp-chest {
+  position: fixed;
+  inset: 0;
+  z-index: 970; /* above #mp-hotbar's 960 - see its own comment */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+#mp-chest[hidden] { display: none; }
+#mp-chest-panel {
+  position: relative;
+  width: 352px;
+  height: 332px;
+  background: url('../gui/chest_gui.png') 0 0 / 512px 512px no-repeat;
+  image-rendering: pixelated;
+  transform: scale(1.18);
+  filter: drop-shadow(4px 4px 0 rgba(0, 0, 0, .5));
+}
+#mp-chest-slots {
+  position: absolute;
+  left: 16px;
+  top: 36px;
+  display: grid;
+  grid-template-columns: repeat(9, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#mp-chest-panel .inventory-slot { width: 32px; height: 32px; background: none; }
+#mp-chest-panel .inventory-block { top: 1px; left: 1px; width: 30px; height: 30px; }
+#mp-chest-backpack,
+#mp-chest-hotbar {
+  position: absolute;
+  left: 16px;
+  display: grid;
+  grid-template-columns: repeat(9, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#mp-chest-backpack { top: 168px; }
+#mp-chest-hotbar { top: 284px; }
+
 body.touch .touch-btn {
   pointer-events: auto;
   touch-action: none;

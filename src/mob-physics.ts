@@ -18,6 +18,7 @@ const MOB_FRICTION = 15;
 const MOB_AIR_ACCEL_MULT = 0.15; // much less control while airborne, matches the player
 const WATER_BUOYANCY = 18; // upward accel while submerged, LCE-ish "float up" feel
 const WATER_RISE_SPEED = 2.2; // cap on how fast a mob bobs upward
+const STEP_UP_NUDGE = 0.06; // blocks/frame a swimming mob climbs a shoreline step by - see updatePhysics's swim-exit branch
 const WANDER_INTERVAL_MIN = 8; // "se moverán cada 8-12s" - re-rolled here whenever ANY path (wander/flee/chase/swim) finishes
 const WANDER_INTERVAL_MAX = 12;
 
@@ -91,6 +92,17 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
     } else if (mob.grounded && !overlapsSolid(isSolid, tryX, y + 1, mob.pos.z, mob.radius, mob.height)) {
       mob.velocity.y = JUMP_FORCE;
       mob.grounded = false;
+    } else if (!mob.grounded && mob.inWater && !overlapsSolid(isSolid, tryX, y + STEP_UP_NUDGE, mob.pos.z, mob.radius, mob.height)) {
+      // Swimming toward a shoreline that's a solid step (not a ramp): the
+      // grounded step-up above never applies here (mob.grounded is false
+      // the whole time it's swimming - see the `mob.inWater` branch below,
+      // which sets it), and buoyancy alone only lifts velocity.y toward its
+      // own cap - it never actually got the mob's feet clear of the ledge,
+      // so it just pushed against it forever. A direct nudge (not a
+      // velocity kick, which the buoyancy branch below would immediately
+      // re-clamp back down this same frame) climbs it out over a handful
+      // of frames instead.
+      mob.pos.y += STEP_UP_NUDGE;
     } else if (mob.grounded) {
       // Genuinely flat-blocked (no clear step above) - only stop dead while
       // grounded. While airborne mid-jump, the same foot-height check keeps
@@ -114,6 +126,8 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
     } else if (mob.grounded && !overlapsSolid(isSolid, mob.pos.x, y + 1, tryZ, mob.radius, mob.height)) {
       mob.velocity.y = JUMP_FORCE;
       mob.grounded = false;
+    } else if (!mob.grounded && mob.inWater && !overlapsSolid(isSolid, mob.pos.x, y + STEP_UP_NUDGE, tryZ, mob.radius, mob.height)) {
+      mob.pos.y += STEP_UP_NUDGE; // see the tryX branch's doc comment above
     } else if (mob.grounded) {
       mob.velocity.z = 0;
       stuckGrounded = true;

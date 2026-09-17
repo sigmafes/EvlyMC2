@@ -43,6 +43,7 @@ import { ChestUI } from './chest-ui';
 import { ChestRenderer } from './chest-renderer';
 import { TouchControls } from './touch-controls';
 import { lockPointer } from './is-touch';
+import { armAndroidBack } from './android-back';
 import { keepFullscreenOnGesture, linkPwaManifest } from './fullscreen';
 import { DayNightCycle } from './day-night-cycle';
 import { SkyRenderer } from './sky-renderer';
@@ -669,6 +670,10 @@ function animate() {
     const menuOpen = inventoryOpen || pauseMenu.isPaused || playerHealth.isDead;
     touchControls.setGameplayVisible(!menuOpen);
     interaction.setTouchActive(!menuOpen);
+    // Android's back gesture otherwise has nothing to catch (see
+    // android-back.ts's doc comment) - a menu being open is exactly when a
+    // back press should close it instead of backgrounding the app.
+    if (menuOpen) armAndroidBack();
   }
 
   // Dead: gameplay (movement, mobs, damage) freezes behind the death screen,

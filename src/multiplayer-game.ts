@@ -4,6 +4,7 @@ import { BlockId, blockLightProperties, createBlockMaterials, isSolidBlock, FURN
 import { Chunk, CHUNK_SIZE, CHUNK_HEIGHT } from './chunk';
 import { TerrainNoise } from './terrain-noise';
 import { lockPointer, unlockPointerForGui, isTouchDevice } from './is-touch';
+import { armAndroidBack } from './android-back';
 import { loadMpSettings, saveMpSettings } from './settings';
 import { TouchControls } from './touch-controls';
 import { PlayerModel, createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials, type ModelAdjustments } from './player-model';
@@ -1819,7 +1820,20 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       return;
     } // opens even over another panel, same as singleplayer's own T
     keys.add(e.code);
-    if (e.code === 'Escape') disconnect('Disconnected');
+    if (e.code === 'Escape') {
+      // Close whichever panel is actually open first - this used to
+      // disconnect unconditionally, so Escape while just checking your
+      // inventory dropped you out of the server entirely instead of
+      // closing it. Also what Android's back gesture ends up triggering
+      // (see android-back.ts) - it needs a menu to actually close, not an
+      // immediate disconnect.
+      if (optionsOpen) { toggleOptionsPanel(); return; }
+      if (tableOpen) { setTableOpen(false); return; }
+      if (furnaceOpenState) { setFurnaceOpen(false); return; }
+      if (chestOpenState) { setChestOpen(false); return; }
+      if (backpackOpen) { setBackpackOpen(false); return; }
+      disconnect('Disconnected');
+    }
     if (e.code === 'ControlLeft' && !e.repeat && (keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || touchMoveX !== 0 || touchMoveZ !== 0)) {
       sprintToggled = true;
     }
@@ -3072,7 +3086,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // stopped the world from being mined/moved through instead), and the
     // pause menu's buttons were unreachable because #touch-look intercepted
     // the tap first.
-    touchControls?.setGameplayVisible(!(backpackOpen || tableOpen || furnaceOpenState || chestOpenState || optionsOpen || chatOpen || isDead));
+    const mpMenuOpen = backpackOpen || tableOpen || furnaceOpenState || chestOpenState || optionsOpen || chatOpen || isDead;
+    touchControls?.setGameplayVisible(!mpMenuOpen);
+    // Same "give Android's back gesture something to catch" reasoning as
+    // main.ts's own armAndroidBack() call - see android-back.ts.
+    if (touchControls && mpMenuOpen) armAndroidBack();
     hand.setLightLevel(lightEngine.getRawBrightness(Math.round(lastServerPos.x), Math.round(lastServerPos.y), Math.round(lastServerPos.z)) / 15);
     hand.update(delta, viewBobOn ? {
       phase: viewBob.phase,
