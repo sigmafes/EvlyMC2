@@ -41,7 +41,23 @@ const RECT = {
   BOX_FRONT: [14, 33, 28, 43] as PixelRect,
   BOX_LEFT: [28, 33, 42, 43] as PixelRect,
   BOX_BACK: [42, 33, 56, 43] as PixelRect,
+  // The lock/latch nub ("el cosito de metal") - LCE's ChestModel.cpp has a
+  // THIRD box for this, origin (0,0) (same as the lid, but its own tiny
+  // w=2 h=4 d=1 footprint lands in the texture's top-left corner, the small
+  // grey/metal swatch that isn't part of the lid's own visible area at all).
+  // Same box-UV formula as above, with u=0,v=0,w=2,h=4,d=1.
+  LOCK_TOP: [1, 0, 3, 1] as PixelRect,
+  LOCK_BOTTOM: [3, 0, 5, 1] as PixelRect,
+  LOCK_RIGHT: [0, 1, 1, 5] as PixelRect,
+  LOCK_FRONT: [1, 1, 3, 5] as PixelRect,
+  LOCK_LEFT: [3, 1, 4, 5] as PixelRect,
+  LOCK_BACK: [4, 1, 6, 5] as PixelRect,
 };
+
+// Lock box dimensions (LCE addBox(-1,-2,-15, 2,4,1), in 1/16-block units).
+const LOCK_WIDTH = 2 / 16;
+const LOCK_HEIGHT = 4 / 16;
+const LOCK_DEPTH = 1 / 16;
 
 const BOX_HEIGHT = 0.625;    // 10/16 - vanilla chest box height
 const LID_HEIGHT = 0.3125;   // 5/16 - vanilla chest lid height
@@ -63,9 +79,10 @@ function setFaceUV(uv: THREE.BufferAttribute, faceIndex: number, rect: PixelRect
 
 /** Local -Z is this geometry's "front" (the latch/handle face) - group.rotation.y then points it at whichever world direction `facing` names, same convention block-data.ts's `facing` already uses for the furnace. */
 function buildBoxGeometry(
-  height: number, top: PixelRect, bottom: PixelRect, front: PixelRect, back: PixelRect, left: PixelRect, right: PixelRect,
+  width: number, height: number, depth: number,
+  top: PixelRect, bottom: PixelRect, front: PixelRect, back: PixelRect, left: PixelRect, right: PixelRect,
 ): THREE.BoxGeometry {
-  const geo = new THREE.BoxGeometry(WIDTH, height, WIDTH);
+  const geo = new THREE.BoxGeometry(width, height, depth);
   const uv = geo.attributes.uv as THREE.BufferAttribute;
   setFaceUV(uv, 0, right);
   setFaceUV(uv, 1, left);
@@ -86,6 +103,7 @@ type ChestEntry = {
 
 let boxGeometry: THREE.BoxGeometry | null = null;
 let lidGeometry: THREE.BoxGeometry | null = null;
+let lockGeometry: THREE.BoxGeometry | null = null;
 let material: THREE.MeshBasicMaterial | null = null;
 
 // MeshBasicMaterial, not Lambert/Standard - this voxel engine has no real
@@ -101,8 +119,9 @@ function ensureShared(): void {
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   material = new THREE.MeshBasicMaterial({ map: texture });
-  boxGeometry = buildBoxGeometry(BOX_HEIGHT, RECT.BOX_TOP, RECT.BOX_BOTTOM, RECT.BOX_FRONT, RECT.BOX_BACK, RECT.BOX_LEFT, RECT.BOX_RIGHT);
-  lidGeometry = buildBoxGeometry(LID_HEIGHT, RECT.LID_TOP, RECT.LID_BOTTOM, RECT.LID_FRONT, RECT.LID_BACK, RECT.LID_LEFT, RECT.LID_RIGHT);
+  boxGeometry = buildBoxGeometry(WIDTH, BOX_HEIGHT, WIDTH, RECT.BOX_TOP, RECT.BOX_BOTTOM, RECT.BOX_FRONT, RECT.BOX_BACK, RECT.BOX_LEFT, RECT.BOX_RIGHT);
+  lidGeometry = buildBoxGeometry(WIDTH, LID_HEIGHT, WIDTH, RECT.LID_TOP, RECT.LID_BOTTOM, RECT.LID_FRONT, RECT.LID_BACK, RECT.LID_LEFT, RECT.LID_RIGHT);
+  lockGeometry = buildBoxGeometry(LOCK_WIDTH, LOCK_HEIGHT, LOCK_DEPTH, RECT.LOCK_TOP, RECT.LOCK_BOTTOM, RECT.LOCK_FRONT, RECT.LOCK_BACK, RECT.LOCK_LEFT, RECT.LOCK_RIGHT);
 }
 
 /**
@@ -142,6 +161,19 @@ export class ChestRenderer {
     const lid = new THREE.Mesh(lidGeometry!, material!);
     lid.position.set(0, LID_HEIGHT / 2, -WIDTH / 2);
     lidPivot.add(lid);
+
+    // The lock/latch - LCE's own ChestModel::render sets `lock->xRot =
+    // lid->xRot` every frame (rigidly attached to the lid, swinging with
+    // it), so it's a child of lidPivot too, not the static box. Position is
+    // LCE's own part offsets (lock->x=8,y=7,z=15, lid->x=1,y=7,z=15, in
+    // 1/16-block units, Y measured DOWN from the model's top and Z from its
+    // front) converted into this pivot's local space and re-centred here:
+    // world y = 0.5 - 7/16 = 0.0625, world z = 0.5/16 - 0.5 = -0.46875,
+    // minus the pivot's own (0, BOX_HEIGHT-0.5, WIDTH/2).
+    const lock = new THREE.Mesh(lockGeometry!, material!);
+    lock.position.set(0, -0.0625, -0.90625);
+    lidPivot.add(lock);
+
     group.add(lidPivot);
 
     this.scene.add(group);

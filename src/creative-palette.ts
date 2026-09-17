@@ -47,10 +47,11 @@ export const BLOCK_CATALOG: InventorySlot[] = [
   { id: BlockId.EMERALD_BLOCK, name: 'Block of Emerald', sideTexture: 'blocks/emerald_block.png', topTexture: 'blocks/emerald_block.png' },
   { id: BlockId.COAL_BLOCK, name: 'Block of Coal', sideTexture: 'blocks/coal_block.png', topTexture: 'blocks/coal_block.png' },
   // The real in-world block uses ChestRenderer's own textured/animated model
-  // (see chest-renderer.ts) - this generic flat-cube preview (hotbar icon,
-  // held item, dropped-item mesh) just needs SOME reasonable wood texture,
-  // cropped from chest.png's clean lid-front tile.
-  { id: BlockId.CHEST, name: 'Chest', sideTexture: 'blocks/chest_icon.png', topTexture: 'blocks/chest_icon.png' },
+  // (see chest-renderer.ts) - this generic 2-texture cube preview (hotbar
+  // icon, held item, dropped-item mesh) can't show a true front-vs-side
+  // distinction like the real model, but a distinct top vs. side crop at
+  // least reads as a chest instead of a flat uniform brown box.
+  { id: BlockId.CHEST, name: 'Chest', sideTexture: 'blocks/chest_icon_side.png', topTexture: 'blocks/chest_icon_top.png' },
   { id: BlockId.WATER, name: 'Water', sideTexture: 'atlas/water_flow.png', topTexture: 'atlas/water_still.png', previewColor: 0x3f76e4 },
   { id: BlockId.LAVA, name: 'Lava', sideTexture: 'atlas/lava_flow.png', topTexture: 'atlas/lava_still.png', previewColor: 0xff6a00 },
   { id: BlockId.FIRE, name: 'Fire', sideTexture: 'atlas/fire_atlas.png', topTexture: 'atlas/fire_atlas.png' },
