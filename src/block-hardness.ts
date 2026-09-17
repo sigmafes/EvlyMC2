@@ -42,6 +42,14 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.OAK_FENCE]: 2,
   [BlockId.OAK_FENCE_GATE]: 2,
   [BlockId.COBBLESTONE_WALL]: 2,
+  // Mineral storage blocks - vanilla MC's 5.0 for all seven.
+  [BlockId.IRON_BLOCK]: 5,
+  [BlockId.GOLD_BLOCK]: 5,
+  [BlockId.DIAMOND_BLOCK]: 5,
+  [BlockId.LAPIS_BLOCK]: 5,
+  [BlockId.REDSTONE_BLOCK]: 5,
+  [BlockId.EMERALD_BLOCK]: 5,
+  [BlockId.COAL_BLOCK]: 5,
 };
 
 type BlockTool = {
@@ -80,6 +88,14 @@ const BLOCK_TOOL: Partial<Record<BlockId, BlockTool>> = {
   [BlockId.OAK_FENCE]: { kind: 'axe', harvest: 0, required: false },
   [BlockId.OAK_FENCE_GATE]: { kind: 'axe', harvest: 0, required: false },
   [BlockId.COBBLESTONE_WALL]: { kind: 'pickaxe', harvest: 0, required: true },
+  // Same harvest tier as each block's own ore (see the ore entries above).
+  [BlockId.IRON_BLOCK]: { kind: 'pickaxe', harvest: 1, required: true },
+  [BlockId.GOLD_BLOCK]: { kind: 'pickaxe', harvest: 2, required: true },
+  [BlockId.DIAMOND_BLOCK]: { kind: 'pickaxe', harvest: 2, required: true },
+  [BlockId.LAPIS_BLOCK]: { kind: 'pickaxe', harvest: 1, required: true },
+  [BlockId.REDSTONE_BLOCK]: { kind: 'pickaxe', harvest: 2, required: true },
+  [BlockId.EMERALD_BLOCK]: { kind: 'pickaxe', harvest: 2, required: true },
+  [BlockId.COAL_BLOCK]: { kind: 'pickaxe', harvest: 0, required: true },
 };
 
 export type BreakInfo = {

@@ -368,6 +368,13 @@ export function resolveFace(id: BlockId, faceIndex: number, liquidDistance: numb
   if (id === BlockId.EMERALD_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'emerald_ore' };
   if (id === BlockId.LAPIS_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'lapis_ore' };
   if (id === BlockId.REDSTONE_ORE) return { material: MATERIAL_OPAQUE, atlasKey: 'redstone_ore' };
+  if (id === BlockId.IRON_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'iron_block' };
+  if (id === BlockId.GOLD_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'gold_block' };
+  if (id === BlockId.DIAMOND_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'diamond_block' };
+  if (id === BlockId.LAPIS_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'lapis_block' };
+  if (id === BlockId.REDSTONE_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'redstone_block' };
+  if (id === BlockId.EMERALD_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'emerald_block' };
+  if (id === BlockId.COAL_BLOCK) return { material: MATERIAL_OPAQUE, atlasKey: 'coal_block' };
   if (id === BlockId.CRAFTING_TABLE) {
     if (faceIndex === 2) return { material: MATERIAL_OPAQUE, atlasKey: 'crafting_table_top' };  // +Y
     if (faceIndex === 3) return { material: MATERIAL_OPAQUE, atlasKey: 'oak_planks' };            // -Y (underside = planks)

@@ -41,6 +41,17 @@ export const blockSounds: Record<BlockId, BlockSoundSet> = {
   [BlockId.OAK_FENCE]: { hit: 'wood_hit', dig: 'wood_dig', mine: 'wood_mining' },
   [BlockId.OAK_FENCE_GATE]: { hit: 'wood_hit', dig: 'wood_dig', mine: 'wood_mining' },
   [BlockId.COBBLESTONE_WALL]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
+  // Iron/gold/diamond/emerald blocks get their own dedicated "mineral block"
+  // hit/step and break sounds ('mine' falls back to 'hit' automatically -
+  // see getBlockSound's callers). Lapis/redstone/coal blocks reuse the
+  // plain stone set instead, per the user's spec.
+  [BlockId.IRON_BLOCK]: { hit: 'mineralblock_step', dig: 'mineralblock_break' },
+  [BlockId.GOLD_BLOCK]: { hit: 'mineralblock_step', dig: 'mineralblock_break' },
+  [BlockId.DIAMOND_BLOCK]: { hit: 'mineralblock_step', dig: 'mineralblock_break' },
+  [BlockId.EMERALD_BLOCK]: { hit: 'mineralblock_step', dig: 'mineralblock_break' },
+  [BlockId.LAPIS_BLOCK]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
+  [BlockId.REDSTONE_BLOCK]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
+  [BlockId.COAL_BLOCK]: { hit: 'stone_hit', dig: 'stone_dig', mine: 'stone_mining' },
 };
 
 export function getBlockSound(blockId: BlockId, soundType: BlockSoundType): string | undefined {

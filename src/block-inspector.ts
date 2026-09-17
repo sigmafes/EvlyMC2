@@ -31,6 +31,13 @@ const blockNames: Record<number, string> = {
   24: 'GLASS',
   25: 'FURNACE',
   26: 'TORCH',
+  36: 'IRON_BLOCK',
+  37: 'GOLD_BLOCK',
+  38: 'DIAMOND_BLOCK',
+  39: 'LAPIS_BLOCK',
+  40: 'REDSTONE_BLOCK',
+  41: 'EMERALD_BLOCK',
+  42: 'COAL_BLOCK',
 };
 
 export class BlockInspector {

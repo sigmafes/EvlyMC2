@@ -27,6 +27,8 @@ const FUEL: Record<number, number> = {
   [ItemId.COAL]: 80,
   [ItemId.CHARCOAL]: 80,
 };
+// Block of Coal: x8 a single lump of coal's burn time, per spec.
+FUEL[BlockId.COAL_BLOCK] = FUEL[ItemId.COAL] * 8;
 
 export function smeltResult(id: number | null | undefined): SmeltOut | null {
   return id != null ? SMELT[id] ?? null : null;

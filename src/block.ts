@@ -38,6 +38,13 @@ export enum BlockId {
   OAK_FENCE = 33,
   OAK_FENCE_GATE = 34,
   COBBLESTONE_WALL = 35,
+  IRON_BLOCK = 36,
+  GOLD_BLOCK = 37,
+  DIAMOND_BLOCK = 38,
+  LAPIS_BLOCK = 39,
+  REDSTONE_BLOCK = 40,
+  EMERALD_BLOCK = 41,
+  COAL_BLOCK = 42,
 }
 
 export type VoxelBlock = {
@@ -120,6 +127,14 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.OAK_FENCE]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
   [BlockId.OAK_FENCE_GATE]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
   [BlockId.COBBLESTONE_WALL]: { opacity: 1, emission: 0, liquid: false, cull: false, flammable: null },
+  // Mineral storage blocks - plain full cubes, same as stone/cobblestone.
+  [BlockId.IRON_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.GOLD_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.DIAMOND_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.LAPIS_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.REDSTONE_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.EMERALD_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.COAL_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -175,6 +190,8 @@ export const BLOCK_ATLAS_TILES = [
   'emerald_ore', 'lapis_ore', 'redstone_ore', 'crafting_table_side1',
   'crafting_table_side2', 'crafting_table_top', 'glass', 'furnace_side',
   'furnace_off', 'furnace_on', 'furnace_top', 'torch', 'wool',
+  'iron_block', 'gold_block', 'diamond_block', 'lapis_block',
+  'redstone_block', 'emerald_block', 'coal_block',
 ] as const;
 export type BlockAtlasKey = (typeof BLOCK_ATLAS_TILES)[number];
 const BLOCK_ATLAS_COLS = 32;

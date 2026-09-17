@@ -28,6 +28,16 @@ function swordRecipe(m: number, sword: number): Recipe {
   return { kind: 'shaped', pattern: [[m], [m], [S]], out: { id: sword, count: 1 } };
 }
 
+/** Vanilla-style mineral <-> storage-block compression: 9 of `item` filling the
+ * whole 3x3 grid makes 1 `block`, and putting that block back in (alone, any
+ * slot) gives the 9 `item` back. */
+function blockRecipes(item: number, block: number): Recipe[] {
+  return [
+    { kind: 'shaped', pattern: [[item, item, item], [item, item, item], [item, item, item]], out: { id: block, count: 1 } },
+    { kind: 'shapeless', input: [block], out: { id: item, count: 9 } },
+  ];
+}
+
 export const RECIPES: Recipe[] = [
   { kind: 'shapeless', input: [BlockId.OAK_LOG], out: { id: BlockId.OAK_PLANKS, count: 4 } },
   { kind: 'shaped', pattern: [[P, P], [P, P]], out: { id: BlockId.CRAFTING_TABLE, count: 1 } },
@@ -75,6 +85,15 @@ export const RECIPES: Recipe[] = [
   { kind: 'shaped', pattern: [[S, P, S], [S, P, S]], out: { id: BlockId.OAK_FENCE_GATE, count: 1 } },
   // Cobblestone wall: 3x2 of cobblestone -> 6 (vanilla recipe).
   { kind: 'shaped', pattern: [[C, C, C], [C, C, C]], out: { id: BlockId.COBBLESTONE_WALL, count: 6 } },
+
+  // Mineral storage blocks: 9 of the mineral <-> 1 block, both ways.
+  ...blockRecipes(ItemId.IRON_INGOT, BlockId.IRON_BLOCK),
+  ...blockRecipes(ItemId.GOLD_INGOT, BlockId.GOLD_BLOCK),
+  ...blockRecipes(ItemId.DIAMOND, BlockId.DIAMOND_BLOCK),
+  ...blockRecipes(ItemId.LAPIS, BlockId.LAPIS_BLOCK),
+  ...blockRecipes(ItemId.REDSTONE, BlockId.REDSTONE_BLOCK),
+  ...blockRecipes(ItemId.EMERALD, BlockId.EMERALD_BLOCK),
+  ...blockRecipes(ItemId.COAL, BlockId.COAL_BLOCK),
 ];
 
 /**
