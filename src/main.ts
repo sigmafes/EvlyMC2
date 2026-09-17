@@ -296,6 +296,7 @@ const interaction = new BlockInteraction(
   () => hasArrowsFn?.() ?? false,
   (power) => shootBowFn?.(power),
   () => chestRenderer.getRaycastTargets(),
+  () => inventory.quickEquipArmor(),
 );
 interaction.attachHighlight(scene);
 
@@ -487,7 +488,9 @@ const playerHealth = new PlayerHealth(
     const gap = cause === 'fire' ? 400 : cause === 'drown' ? 900 : 0;
     if (now - (lastHurtSoundAt[cause] ?? 0) < gap) return;
     lastHurtSoundAt[cause] = now;
-    if (cause === 'fall') soundManager.playOne('player/Fall_damage', 0.7);
+    // Fall damage plays BOTH the fall-specific thud and the same generic
+    // "oof" hurt sound any other hit gets, not just the thud on its own.
+    if (cause === 'fall') { soundManager.playOne('player/Fall_damage', 0.7); soundManager.playRandom('player/Player_hurt', 3, 0.7); }
     else if (cause === 'fire') soundManager.playRandom('player/Player_fire', 3, 0.6);
     else if (cause === 'drown') soundManager.playRandom('player/Player_drowning', 3, 0.7);
     else soundManager.playRandom('player/Player_hurt', 3, 0.7);

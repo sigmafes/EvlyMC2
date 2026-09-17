@@ -195,6 +195,8 @@ export type ClientMessage =
   | { type: 'placeBlock'; x: number; y: number; z: number; blockId: BlockId; normal: Vec3; clickY: number; yaw: number }
   | { type: 'selectSlot'; index: number }
   | { type: 'useItem'; slotIndex: number }
+  /** Right-click-to-equip (LCE ArmorItem::useOn) - swaps the player's currently SELECTED hotbar item into its matching armor slot if it actually is armor, whatever was there going back to the hotbar. A no-op if the selected item isn't armor. */
+  | { type: 'quickEquipArmor' }
   /** Q - throws the selected hotbar slot's item(s) out in front of the player as a real ground entity (DroppedItemSnapshot), same as singleplayer's own Q. `dir` is the player's look direction, used for the throw arc; the server clamps/normalises it itself. `all` mirrors singleplayer's interaction.ts onDropSelected(ctrlKey): false (plain Q) drops a single item, true (Ctrl+Q) drops the whole stack. */
   | { type: 'dropItem'; dir: Vec3; all: boolean }
   /**
@@ -371,7 +373,7 @@ export type ServerMessage =
 export function isClientMessageType(type: string): type is ClientMessage['type'] {
   return (
     [
-      'join', 'input', 'breakStart', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'dropItem', 'craft', 'moveSlot',
+      'join', 'input', 'breakStart', 'breakBlock', 'placeBlock', 'selectSlot', 'useItem', 'quickEquipArmor', 'dropItem', 'craft', 'moveSlot',
       'craftOpen', 'craftClose', 'craftMove', 'craftTakeOutput',
       'invPickUp', 'invPlace', 'invCancel',
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',

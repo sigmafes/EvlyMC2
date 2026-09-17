@@ -377,6 +377,8 @@ export function buildArmMesh(group: THREE.Group, side: 'left' | 'right', slim: b
 export type PlayerModelParts = {
   /** The head's rotation PIVOT (at the neck, NECK_PIVOT_Y) - not the mesh itself, see buildPlayerModelParts's own doc comment. */
   head: THREE.Group;
+  /** The actual head mesh (offset from `head`'s pivot) - use this, not `head`, for anything that should visually wrap the head itself (e.g. a helmet overlay), or it ends up centred at the neck instead. */
+  headMesh: THREE.Mesh;
   torsoGroup: THREE.Group;
   torso: THREE.Mesh;
   armLeftGroup: THREE.Group;
@@ -488,5 +490,5 @@ export function buildPlayerModelParts(group: THREE.Group, materials?: PlayerSkin
   // Player position represents eye position (1.62 blocks above feet)
   group.position.y = 0; // No offset - position synced directly
 
-  return { head, torsoGroup, torso, armLeftGroup, armRightGroup, handAnchor, legLeftGroup, legLeft, legRightGroup, legRight };
+  return { head, headMesh, torsoGroup, torso, armLeftGroup, armRightGroup, handAnchor, legLeftGroup, legLeft, legRightGroup, legRight };
 }

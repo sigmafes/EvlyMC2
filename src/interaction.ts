@@ -121,6 +121,8 @@ export class BlockInteraction {
      * placing against it, and right-click-to-open all raycast the terrain
      * mesh only and would see straight through it. */
     private readonly getExtraMeshes?: () => THREE.Object3D[],
+    /** Holding an armor piece: right-click instantly swaps it into its own armor slot (LCE ArmorItem::useOn), same priority as the bow-draw/food-eat checks in useHeld(). Returns true if the selected item actually was armor (consumes the click either way, whether or not the swap changed anything). */
+    private readonly onQuickEquipArmor?: () => boolean,
   ) {
     this.raycast = new Raycast(4);
     this.highlight = new BlockHighlight();
@@ -528,6 +530,13 @@ export class BlockInteraction {
     // Holding a food item: start eating instead of placing / interacting.
     if (foodValue(this.selectedItemId) > 0 && (!this.canEat || this.canEat())) {
       this.startEating();
+      return;
+    }
+
+    // Holding armor: instant-equip instead of placing / interacting - same
+    // priority as the two checks above.
+    if (this.onQuickEquipArmor?.()) {
+      this.onSwing?.();
       return;
     }
 

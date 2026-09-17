@@ -193,21 +193,32 @@ export class PlayerModel {
   private buildArmorShells(slot: ArmorSlotIndex, material: 'iron' | 'gold' | 'diamond'): THREE.Mesh[] {
     const shells: THREE.Mesh[] = [];
     if (slot === 0) {
-      shells.push(addArmorOverlay(this.parts.head, 0.55, 0.55, 0.55, SKIN_UV.head, undefined, getArmorMaterial(material, 1)));
+      // The actual head MESH, not `this.parts.head` (the neck-rotation
+      // PIVOT) - attaching to the pivot centred the helmet at the neck,
+      // rendering it mostly inside the head instead of wrapping it.
+      shells.push(addArmorOverlay(this.parts.headMesh, 0.55, 0.55, 0.55, SKIN_UV.head, undefined, getArmorMaterial(material, 1)));
     } else if (slot === 1) {
       const mat = getArmorMaterial(material, 1);
       const armWidth = this.slimArms ? ARM_WIDTH_SLIM : ARM_WIDTH;
       shells.push(addArmorOverlay(this.parts.torso, 0.55, 0.76, 0.275, SKIN_UV.torso, undefined, mat));
+      // Both sleeves sample SKIN_UV.armRight (mirrored for the left) - the
+      // classic 64x32 armor sheet only HAS one arm region at all (unlike
+      // the skin's own 64x64 layout, which has a genuinely separate
+      // armLeft). Sampling SKIN_UV.armLeft's y=48-63 rows against a 32px-
+      // tall armor texture read past the bottom edge, which is what was
+      // rendering as a missing/garbled sleeve.
       if (this.armRight) shells.push(addArmorOverlay(this.armRight, armWidth, 0.76, 0.275, SKIN_UV.armRight, undefined, mat));
-      if (this.armLeft) shells.push(addArmorOverlay(this.armLeft, armWidth, 0.76, 0.275, SKIN_UV.armLeft, MIRROR_U, mat));
+      if (this.armLeft) shells.push(addArmorOverlay(this.armLeft, armWidth, 0.76, 0.275, SKIN_UV.armRight, MIRROR_U, mat));
     } else if (slot === 2) {
+      // Same "only one leg region exists in the classic sheet" reasoning as
+      // the arms above - both legs sample SKIN_UV.legRight, left mirrored.
       const mat = getArmorMaterial(material, 2);
       shells.push(addArmorOverlay(this.parts.legRight, 0.275, 0.76, 0.275, SKIN_UV.legRight, undefined, mat));
-      shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legLeft, MIRROR_U, mat));
+      shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legRight, MIRROR_U, mat));
     } else {
       const mat = getArmorMaterial(material, 1);
       shells.push(addArmorOverlay(this.parts.legRight, 0.275, 0.76, 0.275, SKIN_UV.legRight, undefined, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
-      shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legLeft, MIRROR_U, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
+      shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legRight, MIRROR_U, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
     }
     return shells;
   }

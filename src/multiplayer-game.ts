@@ -2114,6 +2114,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         startChewing();
         return true;
       }
+      // Same "instant use, no raycast needed" priority for armor - LCE
+      // ArmorItem::useOn. The server does the actual swap (session.inventory
+      // is authoritative); inventoryUpdate/armorSlots repaint themselves once
+      // it comes back.
+      if (heldSlot?.id != null && armorSlotFor(heldSlot.id) !== null) {
+        client.send({ type: 'quickEquipArmor' });
+        return true;
+      }
     }
     raycaster.setFromCamera(ndc, camera);
     // Entity hitboxes take priority over terrain at the same/closer distance -
@@ -3121,6 +3129,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const targetFov = unaimedFov - AIM_FOV_REDUCTION * aimProgress;
     camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 8, delta);
     camera.updateProjectionMatrix();
+    // The FOV zoom above already reacted to aimProgress - the hand's own
+    // bow_pull_0/1/2 texture swap (singleplayer's main.ts:811-812) never
+    // did, so the bow visually never showed its draw stages in mp.
+    hand.setBowDraw(aimProgress);
     for (let i = 0; i < RELIGHT_CHUNKS_PER_FRAME && relightQueue.length > 0; i++) {
       // rebuildDirty() alone only re-rebuilds subchunks already flagged dirty
       // by an actual block edit (chunk.ts:292-306) - a day/night skyDarken

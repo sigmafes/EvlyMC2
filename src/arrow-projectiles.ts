@@ -79,10 +79,20 @@ export function createArrowMesh(): THREE.Group {
   return getArrowMesh();
 }
 
-/** Point an arrow mesh along `yaw`/`pitch` - the same heading convention the server sends in ArrowSnapshot (forward is local -Z). */
+/**
+ * Point an arrow mesh along `yaw`/`pitch` - the same heading convention the
+ * server sends in ArrowSnapshot (forward is local -Z). Order matters: the
+ * default Euler order ('XYZ') composes yaw and pitch as two DIFFERENT axes
+ * in sequence, which only lines up with the actual velocity direction when
+ * one of them is ~0 - the same "camera"-style combined heading player.ts's
+ * own updateCamera() already uses 'YXZ' for (yaw around world Y first, THEN
+ * pitch around the now-rotated local X) is what a real trajectory needs
+ * too. Without it, any arrow arcing under gravity while also moving
+ * diagonally (i.e. almost always, once yaw isn't exactly 0/90/180/270)
+ * visibly twisted away from the direction it was actually flying in.
+ */
 export function orientArrowMesh(group: THREE.Object3D, yaw: number, pitch: number): void {
-  group.rotation.y = yaw;
-  group.rotation.x = pitch;
+  group.rotation.set(pitch, yaw, 0, 'YXZ');
 }
 
 function getArrowMesh(): THREE.Group {
@@ -112,7 +122,7 @@ function getArrowMesh(): THREE.Group {
   // at whoever just fired it, the same angle you're watching the arrow fly
   // away from you.
   if (!tailBarGeoH) {
-    const armLen = ARROW_THICKNESS * 2.2;
+    const armLen = ARROW_THICKNESS * 1.3;
     const armWidth = ARROW_THICKNESS * 0.15;
     tailBarGeoH = new THREE.PlaneGeometry(armLen, armWidth);
     tailBarGeoH.userData.shared = true;
@@ -212,10 +222,12 @@ export class ArrowProjectiles {
     });
   }
 
+  /** Same 'YXZ' order fix as orientArrowMesh's own doc comment - see there for why plain rotation.x/.y assignment (default 'XYZ') twisted the arrow away from its real velocity direction whenever both yaw and pitch were nonzero. */
   private orient(group: THREE.Group, vel: THREE.Vector3): void {
     const horiz = Math.hypot(vel.x, vel.z);
-    group.rotation.y = Math.atan2(-vel.x, -vel.z);
-    group.rotation.x = Math.atan2(vel.y, horiz);
+    const yaw = Math.atan2(-vel.x, -vel.z);
+    const pitch = Math.atan2(vel.y, horiz);
+    group.rotation.set(pitch, yaw, 0, 'YXZ');
   }
 
   update(delta: number): void {
@@ -242,13 +254,24 @@ export class ArrowProjectiles {
       // short, matches LCE's own per-tick segment check).
       if (this.checkEntityHit(a, from, to)) { this.removeAt(i); continue; }
 
-      // Block collision: stop at the first solid cell and embed there.
+      // Block collision: stop at the first solid cell and embed there - at
+      // the SURFACE, not wherever this frame's full step happened to land.
+      // A fast arrow (or one slow frame) can travel a good fraction of a
+      // block before this check ever runs, so embedding straight at `to`
+      // buried it visibly inside the block instead of sticking out of it.
       if (this.overlapsSolid(to)) {
+        const SUBSTEPS = 8;
+        let landing = from;
+        for (let s = 1; s <= SUBSTEPS; s++) {
+          const p = from.clone().lerp(to, s / SUBSTEPS);
+          if (this.overlapsSolid(p)) break;
+          landing = p;
+        }
         a.embedded = true;
         a.vel.set(0, 0, 0);
-        a.group.position.copy(to);
-        a.hitboxHelper.position.copy(to);
-        this.playHitSound('block', to);
+        a.group.position.copy(landing);
+        a.hitboxHelper.position.copy(landing);
+        this.playHitSound('block', landing);
         continue;
       }
 

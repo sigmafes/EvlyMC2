@@ -693,6 +693,9 @@ export class WorldDO implements DurableObject {
       case 'useItem':
         this.handleUseItem(session, msg.slotIndex);
         break;
+      case 'quickEquipArmor':
+        this.handleQuickEquipArmor(session);
+        break;
       case 'shootBow':
         this.handleShootBow(session, msg.power, msg.dir);
         break;
@@ -1022,6 +1025,18 @@ export class WorldDO implements DurableObject {
    * message); it's cancelled by changing slots, by the food leaving the slot,
    * or by dying - see finishEating().
    */
+  /** Right-click-to-equip (LCE ArmorItem::useOn) - server-authoritative twin of singleplayer's Inventory.quickEquipArmor(). No-op if the selected item isn't armor. */
+  private handleQuickEquipArmor(session: Session): void {
+    if (session.dead) return;
+    const selected = session.inventory[session.selectedSlot];
+    const slot = armorSlotFor(selected.id);
+    if (slot === null) return;
+    const previous = session.armor[slot];
+    session.armor[slot] = { ...selected };
+    session.inventory[session.selectedSlot] = previous.id === null ? createEmptySlot() : previous;
+    this.sendInventory(session);
+  }
+
   private handleUseItem(session: Session, slotIndex: number): void {
     if (session.dead) return;
     if (slotIndex < 0 || slotIndex >= session.inventory.length) return;

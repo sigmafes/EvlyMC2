@@ -222,20 +222,38 @@ export class Inventory {
     return this.armor;
   }
 
+  /** Right-click-to-equip (LCE ArmorItem::useOn): swaps the SELECTED hotbar item into its matching armor slot, and whatever was there back into the hotbar. Returns false (no-op) if the selected item isn't armor at all. */
+  quickEquipArmor(): boolean {
+    const selected = this.slots[this.selectedIndex];
+    const slot = armorSlotFor(selected.id);
+    if (slot === null) return false;
+    const previous = this.armor[slot];
+    this.armor[slot] = { ...selected };
+    this.setSlot(this.selectedIndex, previous.id === null ? null : previous);
+    const el = this.armorEls[slot];
+    if (el) renderSlot(el, this.armor[slot]);
+    this.onArmorChange?.(this.armor.map((a) => a.id));
+    return true;
+  }
+
   /** Spends `amount` durability on EVERY equipped armor piece (LCE Inventory::hurtArmor - each piece takes the full hit independently, not split between them), removing any that reach their max. Call with the amount from armorHurtAmount(rawDamage), not the reduced damage. */
   damageArmor(amount: number): void {
-    let changed = false;
+    // `broke` (an id actually changed - a piece hit 0 durability and
+    // vanished) is deliberately NOT the same as "a slot was touched": every
+    // hit taken wears durability without the id changing, and onArmorChange
+    // also fires the equip sound - without this distinction, just getting
+    // hit while wearing armor played the equip click on every single hit.
+    let broke = false;
     for (let slot = 0; slot < 4; slot++) {
       const item = this.armor[slot];
       const uses = armorDurability(item.id);
       if (uses <= 0) continue;
       const damage = (item.damage ?? 0) + amount;
-      this.armor[slot] = damage >= uses ? createEmptySlot() : { ...item, damage };
+      if (damage >= uses) { this.armor[slot] = createEmptySlot(); broke = true; } else { this.armor[slot] = { ...item, damage }; }
       const el = this.armorEls[slot];
       if (el) renderSlot(el, this.armor[slot]);
-      changed = true;
     }
-    if (changed) this.onArmorChange?.(this.armor.map((a) => a.id));
+    if (broke) this.onArmorChange?.(this.armor.map((a) => a.id));
   }
 
   /** Wire a crafting grid's DOM (inputs + result) into the shared held-item flow. */
