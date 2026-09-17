@@ -1859,6 +1859,7 @@ body.touch #mp-crosshair {
   width: min(900px, 92vw);
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   border-top: 2px solid rgba(0, 0, 0, 0.85);
   border-bottom: 2px solid rgba(0, 0, 0, 0.85);
   display: flex;
