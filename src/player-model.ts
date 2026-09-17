@@ -187,9 +187,9 @@ export class PlayerModel {
    * thing - otherwise it would sit exactly flush with leggings' own full-leg
    * shell and z-fight against it whenever both are worn together.
    */
-  // Slightly taller than before (was 0.28) - the boot shell reads too short/
-  // stubby at the old height, see this session's bugfix list.
-  private static readonly BOOT_HEIGHT = 0.34;
+  // Taller than before (was 0.28, then 0.34) - the boot shell reads too
+  // short/stubby otherwise, see this session's bugfix list.
+  private static readonly BOOT_HEIGHT = 0.42;
   private static readonly BOOT_Y_OFFSET = -(0.76 - PlayerModel.BOOT_HEIGHT) / 2;
   // Waist/hip piece leggings were missing entirely - a short shell around the
   // bottom of the torso, same idea as the boot shell being a short piece at
@@ -212,10 +212,13 @@ export class PlayerModel {
     } else if (slot === 1) {
       const mat = getArmorMaterial(material, 1);
       const armWidth = (this.slimArms ? ARM_WIDTH_SLIM : ARM_WIDTH) + 0.05;
-      // Chestplate + shoulder pads (sleeves) slightly bigger than before
-      // (was 0.55/0.275 torso, 0.275 sleeve depth) per this session's
-      // bugfix list.
-      shells.push(addArmorOverlay(this.parts.torso, 0.62, 0.76, 0.32, SKIN_UV.torso, undefined, mat));
+      // Chestplate a bit smaller than the previous pass (was 0.62/0.32) -
+      // sleeves keep their current (enlarged) size below, only the torso
+      // piece shrinks back down. Also keeps it from z-fighting the WAIST
+      // piece below (slot 2), which uses the torso's original 0.55/0.275
+      // footprint - matching sizes there made the two coplanar wherever
+      // both chestplate and leggings are worn together.
+      shells.push(addArmorOverlay(this.parts.torso, 0.58, 0.76, 0.30, SKIN_UV.torso, undefined, mat));
       // Both sleeves sample SKIN_UV.armRight (mirrored for the left) - the
       // classic 64x32 armor sheet only HAS one arm region at all (unlike
       // the skin's own 64x64 layout, which has a genuinely separate
@@ -230,8 +233,13 @@ export class PlayerModel {
       const mat = getArmorMaterial(material, 2);
       shells.push(addArmorOverlay(this.parts.legRight, 0.275, 0.76, 0.275, SKIN_UV.legRight, undefined, mat));
       shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legRight, MIRROR_U, mat));
-      // Waist/hip piece - see WAIST_HEIGHT's doc comment above.
-      shells.push(addArmorOverlay(this.parts.torso, 0.62, 0.76, 0.32, SKIN_UV.torso, undefined, mat, PlayerModel.WAIST_HEIGHT, PlayerModel.WAIST_Y_OFFSET));
+      // Waist/hip piece at the bottom of the torso - see WAIST_HEIGHT's doc
+      // comment above. Deliberately the torso's ORIGINAL (smaller) 0.55/
+      // 0.275 footprint, not the chestplate's own enlarged one above - a
+      // matching size there sat exactly coplanar with the chestplate shell
+      // whenever both are worn, z-fighting against it instead of just
+      // sitting cleanly underneath.
+      shells.push(addArmorOverlay(this.parts.torso, 0.55, 0.76, 0.275, SKIN_UV.torso, undefined, mat, PlayerModel.WAIST_HEIGHT, PlayerModel.WAIST_Y_OFFSET));
     } else {
       const mat = getArmorMaterial(material, 1);
       // Slightly bigger footprint than the leg itself (was 0.275/0.275) per
@@ -598,9 +606,13 @@ export class PlayerModel {
       // without the texture also swapping left-to-right.
       // Tools/swords read slightly bigger than other held items (was a flat
       // 0.72 for everything) per this session's bugfix list.
-      const s = isToolOrSword(id) ? 0.85 : 0.72;
+      const isTool = isToolOrSword(id);
+      const s = isTool ? 0.85 : 0.72;
       mesh.scale.set(s, -s, s);
-      mesh.position.set(0, 0.10, -0.18);
+      // Tools/swords sit a bit further forward (more negative Z, out and
+      // away from the fist) than other held items, per this session's
+      // bugfix list.
+      mesh.position.set(0, 0.10, isTool ? -0.26 : -0.18);
       // Edge-on to the arm (normal along its side) and tipped forward, like LCE.
       // Z is the sprite's own in-plane roll: -40 - 80 - 180 deg, clockwise.
       mesh.rotation.set(-15 * (Math.PI / 180), Math.PI / 2, -300 * (Math.PI / 180));
