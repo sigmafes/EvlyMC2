@@ -892,8 +892,14 @@ export class Inventory {
     el.addEventListener('click', (event) => {
       if (this.consumeClickSuppression()) return;
       if (ext.takeOnly) { this.takeFromExternal(ext, (event as MouseEvent).shiftKey); return; }
-      if (this.heldItem) this.placeHeld({ kind: 'ext', ext });
-      else this.pickUpFrom({ kind: 'ext', ext });
+      if (this.heldItem) {
+        // This bypassed onSlotClick's own canAccept check entirely (it
+        // calls placeHeld directly, not through onSlotClick) - an armor
+        // slot's restriction (armorSlotFor) was only ever actually enforced
+        // on right-click/paint-drag deposit, never a plain left-click place.
+        if (ext.canAccept && !ext.canAccept(this.heldItem)) return;
+        this.placeHeld({ kind: 'ext', ext });
+      } else this.pickUpFrom({ kind: 'ext', ext });
     });
     el.addEventListener('contextmenu', (event) => {
       event.preventDefault();
