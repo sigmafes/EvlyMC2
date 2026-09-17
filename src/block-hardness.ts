@@ -50,6 +50,7 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.REDSTONE_BLOCK]: 5,
   [BlockId.EMERALD_BLOCK]: 5,
   [BlockId.COAL_BLOCK]: 5,
+  [BlockId.CHEST]: 2.5,
 };
 
 type BlockTool = {
@@ -96,6 +97,7 @@ const BLOCK_TOOL: Partial<Record<BlockId, BlockTool>> = {
   [BlockId.REDSTONE_BLOCK]: { kind: 'pickaxe', harvest: 2, required: true },
   [BlockId.EMERALD_BLOCK]: { kind: 'pickaxe', harvest: 2, required: true },
   [BlockId.COAL_BLOCK]: { kind: 'pickaxe', harvest: 0, required: true },
+  [BlockId.CHEST]: { kind: 'axe', harvest: 0, required: false },
 };
 
 export type BreakInfo = {

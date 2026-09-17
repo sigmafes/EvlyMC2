@@ -1,6 +1,6 @@
 import { PROTOCOL_VERSION, isServerMessageType, type ClientMessage, type ServerMessage } from './protocol';
 import type { InventorySlot } from '../inventory';
-import type { FurnaceState } from '../block-data';
+import type { FurnaceState, ChestState } from '../block-data';
 
 export type MpClientHandlers = {
   onWelcome: (msg: Extract<ServerMessage, { type: 'welcome' }>) => void;
@@ -16,6 +16,9 @@ export type MpClientHandlers = {
   onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number) => void;
   onCraftableRecipes: (recipes: { index: number; out: { id: number; count: number } }[]) => void;
   onFurnaceState: (x: number, y: number, z: number, state: FurnaceState) => void;
+  onChestState: (x: number, y: number, z: number, state: ChestState) => void;
+  onEntityChestOpen: (x: number, y: number, z: number) => void;
+  onEntityChestClose: (x: number, y: number, z: number) => void;
   onCraftGridState: (side: 2 | 3, inputs: InventorySlot[], output: InventorySlot) => void;
   onCraftGridClosed: () => void;
   onInvHeld: (item: InventorySlot | null) => void;
@@ -69,6 +72,9 @@ export class MpClient {
         case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex); break;
         case 'craftableRecipes': handlers.onCraftableRecipes(msg.recipes); break;
         case 'furnaceState': handlers.onFurnaceState(msg.x, msg.y, msg.z, msg.state); break;
+        case 'chestState': handlers.onChestState(msg.x, msg.y, msg.z, msg.state); break;
+        case 'entityChestOpen': handlers.onEntityChestOpen(msg.x, msg.y, msg.z); break;
+        case 'entityChestClose': handlers.onEntityChestClose(msg.x, msg.y, msg.z); break;
         case 'craftGridState': handlers.onCraftGridState(msg.side, msg.inputs, msg.output); break;
         case 'craftGridClosed': handlers.onCraftGridClosed(); break;
         case 'invHeld': handlers.onInvHeld(msg.item); break;

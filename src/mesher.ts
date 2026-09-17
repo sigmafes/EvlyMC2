@@ -471,6 +471,9 @@ export function buildSubchunkGeometry(
         const worldZ = chunkMinZ + z;
         const id = readBlock(worldX, y, worldZ);
         if (id === BlockId.AIR) continue;
+        // Chest: full collision (default full-cube path elsewhere) but zero
+        // baked geometry here - see blockLightProperties[CHEST]'s doc comment.
+        if (id === BlockId.CHEST) continue;
 
         if (id === BlockId.FIRE) {
           const fireVertices = vertices[MATERIAL_FIRE];

@@ -21,7 +21,7 @@ import type { MobKind } from './game/mob-manager';
 import type { InventorySlot } from '../../src/inventory';
 import { RECIPES, matchRecipe, type Recipe } from '../../src/crafting';
 import { FurnaceManager } from '../../src/furnace';
-import { emptyFurnace, facingTowardPlayer, type FurnaceState, type BlockData } from '../../src/block-data';
+import { emptyFurnace, emptyChest, facingTowardPlayer, type FurnaceState, type ChestState, type BlockData } from '../../src/block-data';
 import { isStairs, isSlab } from '../../src/block-shapes';
 import { ServerDroppedItems } from './game/dropped-items';
 import { ServerArrows, powerToSpeed } from './game/arrow-projectiles';
@@ -161,6 +161,8 @@ type Session = {
   selectedSlot: number;
   /** Position of the furnace GUI this session currently has open, or null - drives which furnace's state gets pushed to it every tick (see the class's tick() and sendFurnaceState()). */
   openFurnace: { x: number; y: number; z: number } | null;
+  /** Position of the chest GUI this session currently has open, or null - unlike openFurnace this doesn't need a per-tick push (a chest has no cook/burn gauge to animate), just a resend whenever ITS OWN OR ANOTHER VIEWER'S mutation changes it - see flushIfChest(). */
+  openChest: { x: number; y: number; z: number } | null;
   /** Breath, run by src/player-air.ts unmodified (pure LCE tick math, no DOM) - drains while the head is submerged and deals drowning damage when it runs out. */
   air: PlayerAir;
   /** Seconds of contact accumulated toward the next lava/fire damage tick. Separate counters because lava and fire hit for different amounts, exactly as in singleplayer's own loop. */
@@ -634,6 +636,25 @@ export class WorldDO implements DurableObject {
       case 'furnaceTakeOutput':
         this.handleFurnaceTakeOutput(session, msg.x, msg.y, msg.z);
         break;
+      case 'chestOpen':
+        // Same trust level as furnaceOpen - anyone can peek at any chest.
+        if (this.getBlockAt(msg.x, msg.y, msg.z) !== BlockId.CHEST) return;
+        session.openChest = { x: msg.x, y: msg.y, z: msg.z };
+        this.sendChestState(session);
+        // Cosmetic-only lid animation for everyone else nearby, same trust
+        // level as `swing`/`breakStart` - it can't affect real game state,
+        // only local animation on other clients (see ChestRenderer).
+        this.broadcast({ type: 'entityChestOpen', x: msg.x, y: msg.y, z: msg.z }, session.ws);
+        break;
+      case 'chestClose': {
+        // Same reasoning as furnaceClose: whatever's on the cursor has to go
+        // back before the chest stops being addressable.
+        this.handleInvCancel(session);
+        const wasOpen = session.openChest;
+        session.openChest = null;
+        if (wasOpen) this.broadcast({ type: 'entityChestClose', x: wasOpen.x, y: wasOpen.y, z: wasOpen.z }, session.ws);
+        break;
+      }
       case 'chat':
         // A command is parsed and answered by the SERVER, never the client -
         // same trust boundary as breakBlock/placeBlock. Anyone connected can
@@ -772,6 +793,16 @@ export class WorldDO implements DurableObject {
     // simulating the whole ocean server-side, immediately fill this one
     // cell with water (as a real, now-tracked source) whenever it borders
     // existing water, instead of leaving it AIR forever.
+    // Spill the chest's contents before the block (and its data) are gone -
+    // same reasoning as singleplayer's interaction.ts finishMining(), just
+    // ported here since this server never runs that client code at all.
+    if (brokenId === BlockId.CHEST) {
+      const c = this.blockData.get(`${x},${y},${z}`)?.chest;
+      for (const slot of c?.items ?? []) {
+        if (slot?.id != null && slot.count > 0) this.droppedItems.spawn(slot.id, slot.count, new THREE.Vector3(x, y, z));
+      }
+    }
+
     const newId = brokenId !== BlockId.WATER && this.hasWaterNeighbor(x, y, z) ? BlockId.WATER : BlockId.AIR;
     this.setBlockFromPlayer(x, y, z, newId);
     // The drop lands as a real ground entity at the block's centre (matching
@@ -1086,6 +1117,7 @@ export class WorldDO implements DurableObject {
   private slotArrayFor(session: Session, ref: CraftSlotRef): InventorySlot[] {
     if (ref.zone === 'grid') return session.craft?.inputs ?? [];
     if (ref.zone === 'furnaceInput' || ref.zone === 'furnaceFuel') return this.furnaceSlotArray(session, ref.zone);
+    if (ref.zone === 'chest') return this.chestSlotArray(session);
     return session.inventory;
   }
 
@@ -1142,6 +1174,7 @@ export class WorldDO implements DurableObject {
     session.heldFrom = from;
     removeFromSlot(slot, take);
     this.flushIfFurnace(session, from, arr);
+    this.flushIfChest(session, from, arr);
     this.sendInventory(session);
     this.sendCraftGrid(session);
     this.sendHeld(session);
@@ -1188,12 +1221,14 @@ export class WorldDO implements DurableObject {
         const fromArr = this.slotArrayFor(session, from);
         if (from.index >= 0 && from.index < fromArr.length) fromArr[from.index] = previous;
         this.flushIfFurnace(session, from, fromArr);
+        this.flushIfChest(session, from, fromArr);
       }
       session.heldItem = null;
       session.heldFrom = null;
     }
 
     this.flushIfFurnace(session, to, arr);
+    this.flushIfChest(session, to, arr);
     this.sendInventory(session);
     this.sendCraftGrid(session);
     this.sendHeld(session);
@@ -1219,6 +1254,7 @@ export class WorldDO implements DurableObject {
           // dropped" - this server has no ground-drop fallback for it here).
         }
         this.flushIfFurnace(session, from, arr);
+        this.flushIfChest(session, from, arr);
       }
     }
     this.sendInventory(session);
@@ -1256,6 +1292,63 @@ export class WorldDO implements DurableObject {
     if (!session.openFurnace) return;
     const { x, y, z } = session.openFurnace;
     this.send(session.ws, { type: 'furnaceState', x, y, z, state: this.getOrCreateFurnace(x, y, z) });
+  }
+
+  /**
+   * A chest's 27 slots, backed by BlockData (this.blockData/`blockdata:`
+   * storage) instead of furnace's own separate non-persisted `furnaces` Map -
+   * unlike losing a furnace's mid-smelt progress on a DO eviction (a real,
+   * documented, accepted gap - see the FurnaceManager wiring above), losing
+   * a player's whole stored inventory would be a much worse bug, so this one
+   * is written through to durable storage immediately on every change.
+   */
+  private getOrCreateChest(x: number, y: number, z: number): ChestState {
+    const key = `${x},${y},${z}`;
+    const existing = this.blockData.get(key)?.chest;
+    if (existing) return existing;
+    const fresh = emptyChest();
+    this.mergeChestData(x, y, z, fresh);
+    return fresh;
+  }
+
+  private mergeChestData(x: number, y: number, z: number, chest: ChestState): void {
+    const key = `${x},${y},${z}`;
+    const merged: BlockData = { ...this.blockData.get(key), chest };
+    this.blockData.set(key, merged);
+    void this.state.storage.put(`blockdata:${key}`, merged);
+  }
+
+  /** Same idea as furnaceSlotArray() but all 27 generic slots at once - a chest has no per-slot semantics to enforce. */
+  private chestSlotArray(session: Session): InventorySlot[] {
+    if (!session.openChest) return [];
+    const { x, y, z } = session.openChest;
+    if (this.getBlockAt(x, y, z) !== BlockId.CHEST) return [];
+    const chest = this.getOrCreateChest(x, y, z);
+    return chest.items.map((ref) => {
+      if (ref === null) return createEmptySlot();
+      const desc = describeSlot(ref.id);
+      return { id: ref.id, name: desc.name, sideTexture: desc.sideTexture, count: ref.count };
+    });
+  }
+
+  /** Writes a chestSlotArray() result back into the real ChestState after handleInvPickUp/Place/Cancel mutated it, and re-pushes to EVERY session currently viewing this same chest (not just the one that just acted) - a real second viewer sees the change live, same as vanilla, without needing a per-tick push (see openChest's doc comment). */
+  private flushIfChest(session: Session, ref: CraftSlotRef, arr: InventorySlot[]): void {
+    if (ref.zone !== 'chest') return;
+    if (!session.openChest || arr.length === 0) return;
+    const { x, y, z } = session.openChest;
+    if (this.getBlockAt(x, y, z) !== BlockId.CHEST) return;
+    const chest = this.getOrCreateChest(x, y, z);
+    chest.items = arr.map((slot) => (slot.id === null ? null : { id: slot.id, count: slot.count ?? 0 }));
+    this.mergeChestData(x, y, z, chest);
+    for (const [, s] of this.sessions) {
+      if (s.openChest && s.openChest.x === x && s.openChest.y === y && s.openChest.z === z) this.sendChestState(s);
+    }
+  }
+
+  private sendChestState(session: Session): void {
+    if (!session.openChest) return;
+    const { x, y, z } = session.openChest;
+    this.send(session.ws, { type: 'chestState', x, y, z, state: this.getOrCreateChest(x, y, z) });
   }
 
   /**
@@ -1403,6 +1496,7 @@ export class WorldDO implements DurableObject {
       inventory: saved ? saved.slots.map((s) => ({ ...s })) : createEmptyInventory(),
       selectedSlot: saved?.selectedIndex ?? 0,
       openFurnace: null,
+      openChest: null,
       air: new PlayerAir(() => this.hurtPlayer(id, DROWN_DAMAGE, undefined, true)),
       lavaTimer: 0,
       fireTimer: 0,

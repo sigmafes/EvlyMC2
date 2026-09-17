@@ -20,10 +20,17 @@ export type FurnaceState = {
   litDuration: number;  // fuel burn total (for the flame gauge)
 };
 
+/** A chest's 27-slot inventory - no cook/burn progress, unlike a furnace, so
+ * just the slots themselves. */
+export type ChestState = {
+  items: SlotRef[];
+};
+
 export type BlockData = {
   facing?: 0 | 1 | 2 | 3;
   lit?: boolean;
   furnace?: FurnaceState;
+  chest?: ChestState;
   /** Which half of the cell a stair/slab occupies (LCE's UPSIDEDOWN_BIT / TOP_SLOT_BIT). */
   half?: 'bottom' | 'top';
   /** A slab that was doubled back into a full block (LCE's fullSize HalfSlabTile). */
@@ -36,6 +43,11 @@ export type BlockData = {
 
 export function emptyFurnace(): FurnaceState {
   return { input: null, fuel: null, output: null, cookTime: 0, litTime: 0, litDuration: 0 };
+}
+
+export const CHEST_SLOT_COUNT = 27;
+export function emptyChest(): ChestState {
+  return { items: new Array(CHEST_SLOT_COUNT).fill(null) };
 }
 
 const STORE = STORE_BLOCK_DATA;

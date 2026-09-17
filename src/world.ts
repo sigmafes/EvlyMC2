@@ -5,7 +5,7 @@ import { BlockCollider, CHUNK_HEIGHT, CHUNK_MAX_Y, CHUNK_SIZE, WATER_LEVEL } fro
 import { BlockStore } from './block-store';
 import { ChunkManager } from './chunk-manager';
 import { ChunkEditStore } from './chunk-edits';
-import { BlockDataStore, type BlockData, type FurnaceState } from './block-data';
+import { BlockDataStore, type BlockData, type FurnaceState, type ChestState } from './block-data';
 import { LeavesManager } from './leaves-manager';
 import { TerrainNoise } from './terrain-noise';
 import type { LightEngine } from './light-engine';
@@ -23,6 +23,8 @@ export type WorldBounds = {
 
 export class World {
   viewRadius = 5;
+  /** Fires from add()/remove() on a real change - main.ts uses this to keep ChestRenderer's animated per-position models in step with placement/breaking, the same way multiplayer-game.ts's applyBlockChange() does from its own single choke point. Optional/unset changes nothing for anyone who doesn't need it. */
+  onBlockChanged?: (x: number, y: number, z: number, id: BlockId, oldId: BlockId) => void;
   // Infinite world: kept only so PlayerPhysics' optional clamp stays a no-op.
   readonly bounds: WorldBounds = { minX: -1e7, maxX: 1e7, minZ: -1e7, maxZ: 1e7 };
 
@@ -120,6 +122,18 @@ export class World {
 
   eachFurnace(cb: (x: number, y: number, z: number, state: FurnaceState) => void): void {
     this.blockDataStore.forEach((x, y, z, d) => { if (d.furnace) cb(x, y, z, d.furnace); });
+  }
+
+  // --- Chest contents (27 slots, no cook/burn progress) - same no-remesh
+  //     shortcut as the furnace methods above: a chest's look never changes
+  //     with its contents, only ChestRenderer's lid animation does. ----------
+
+  getChestState(x: number, y: number, z: number): ChestState | undefined {
+    return this.blockDataStore.get(x, y, z)?.chest;
+  }
+
+  setChestState(x: number, y: number, z: number, state: ChestState | undefined): void {
+    this.blockDataStore.set(x, y, z, { chest: state });
   }
 
   /**
@@ -315,10 +329,12 @@ export class World {
 
   add(x: number, y: number, z: number, id: BlockId) {
     if (!this.isInsideWorld(x, z)) return false;
+    const oldId = this.getBlock(x, y, z);
     const oldSkyLight = this.getLight('skyLight', x, y, z);
     const oldBlockLight = this.getLight('blockLight', x, y, z);
     const changed = this.blockStore.addBlockRaw(x, y, z, id);
     if (changed) {
+      this.onBlockChanged?.(x, y, z, id, oldId);
       const reason = id === BlockId.GLOWSTONE ? 'glowstone-place' : id === BlockId.FIRE ? 'fire-place' : 'block-place';
       this.pendingLightReason = reason;
       this.lightEngine?.queueBlockUpdate(x, y, z, oldSkyLight, oldBlockLight, reason);
@@ -342,6 +358,7 @@ export class World {
     const oldBlockLight = this.getLight('blockLight', x, y, z);
     const changed = this.blockStore.removeBlockRaw(x, y, z);
     if (changed) {
+      this.onBlockChanged?.(x, y, z, BlockId.AIR, oldBlock);
       const reason = oldBlockLight > 0 ? 'glowstone-break' : 'block-break';
       this.pendingLightReason = reason;
       this.lightEngine?.queueBlockUpdate(x, y, z, oldSkyLight, oldBlockLight, reason);

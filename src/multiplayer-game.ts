@@ -47,6 +47,7 @@ import { WorldMusic } from './world-music';
 import { ParticleSystem } from './particles';
 import { updateFireOverlayAnimation } from './fire-overlay';
 import { SmokeParticles } from './smoke-particles';
+import { ChestRenderer } from './chest-renderer';
 import { UnderwaterManager } from './underwater-manager';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot, DroppedItemSnapshot, ArrowSnapshot, CraftSlotRef } from './net/protocol';
@@ -411,6 +412,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   let particles: ParticleSystem | null = null;
   const smokeParticles = new SmokeParticles();
   smokeParticles.attachToScene(scene);
+  const chestRenderer = new ChestRenderer(scene);
   const worldMusic = new WorldMusic(0.35);
   const ambient = new AmbientSoundEngine(soundManager, { getBlock: (x, y, z) => getBlock(x, y, z) });
   const underwater = new UnderwaterManager(
@@ -717,6 +719,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       }
     }
     edits.set(`${x},${y},${z}`, id);
+    // Chest's real visual is a separate animated model, not baked terrain
+    // mesh (see chest-renderer.ts) - keep it in step with every edit this
+    // function already sees, ours and everyone else's alike.
+    if (previousId === BlockId.CHEST && id !== BlockId.CHEST) chestRenderer.despawn(x, y, z);
+    else if (id === BlockId.CHEST && previousId !== BlockId.CHEST) chestRenderer.spawn(x, y, z, data?.facing ?? 0);
     const [cx, cz] = chunkCoordOf(x, z);
     const chunk = chunks.get(`${cx},${cz}`);
     if (!chunk) return;
@@ -1370,6 +1377,68 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
   }
 
+  /**
+   * Chest GUI: same DOM-building/zone-ref pattern as the furnace panel just
+   * above, but 27 identical generic slots (zone:'chest') instead of 3 named
+   * ones - no gauges, no output-slot special case.
+   */
+  const chestEl = document.createElement('div');
+  chestEl.id = 'mp-chest';
+  chestEl.hidden = true;
+  const chestSlotsEl = document.createElement('div');
+  chestSlotsEl.id = 'mp-chest-slots';
+  const chestSlotEls: HTMLButtonElement[] = [];
+  for (let i = 0; i < 27; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'inventory-slot';
+    btn.type = 'button';
+    const ref: CraftSlotRef = { zone: 'chest', index: i };
+    slotRefByEl.set(btn, ref);
+    btn.addEventListener('click', () => onSlotClick(ref));
+    btn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); onSlotRightClick(ref, btn); });
+    chestSlotsEl.appendChild(btn);
+    chestSlotEls.push(btn);
+  }
+  const chestBackpackEl = document.createElement('div');
+  chestBackpackEl.id = 'mp-chest-backpack';
+  const chestBackpackEls = makeInventorySlotButtons(TOTAL_SLOTS - HOTBAR_SIZE, HOTBAR_SIZE);
+  chestBackpackEls.forEach((el) => chestBackpackEl.appendChild(el));
+  const chestHotbarEl = document.createElement('div');
+  chestHotbarEl.id = 'mp-chest-hotbar';
+  const chestHotbarEls = makeInventorySlotButtons(HOTBAR_SIZE, 0);
+  chestHotbarEls.forEach((el) => chestHotbarEl.appendChild(el));
+  const chestPanel = document.createElement('div');
+  chestPanel.id = 'mp-chest-panel';
+  chestPanel.append(chestSlotsEl, chestBackpackEl, chestHotbarEl);
+  chestEl.appendChild(chestPanel);
+  document.body.appendChild(chestEl);
+  chestEl.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('button')) playClick();
+  });
+  let chestPos: { x: number; y: number; z: number } | null = null;
+  let chestOpenState = false;
+  function renderChest(state: { items: ({ id: number; count: number } | null)[] }): void {
+    for (let i = 0; i < chestSlotEls.length; i++) renderSlot(chestSlotEls[i], furnaceSlotToInventorySlot(state.items[i] ?? null));
+    for (let i = 0; i < chestBackpackEls.length; i++) renderSlot(chestBackpackEls[i], inventorySlots[HOTBAR_SIZE + i] ?? createEmptySlot());
+    for (let i = 0; i < chestHotbarEls.length; i++) renderSlot(chestHotbarEls[i], inventorySlots[i] ?? createEmptySlot());
+  }
+  function setChestOpen(open: boolean, pos?: { x: number; y: number; z: number }): void {
+    chestOpenState = open;
+    chestEl.hidden = !open;
+    if (open && pos) {
+      chestPos = pos;
+      client.send({ type: 'chestOpen', x: pos.x, y: pos.y, z: pos.z });
+      chestRenderer.setOpen(pos.x, pos.y, pos.z, true);
+      unlockPointerForGui();
+    } else {
+      if (heldItem) client.send({ type: 'invCancel' });
+      if (chestPos) { client.send({ type: 'chestClose' }); chestRenderer.setOpen(chestPos.x, chestPos.y, chestPos.z, false); }
+      chestPos = null;
+      lockPointer(canvas);
+      hideTooltip();
+    }
+  }
+
   let yaw = 0;
   let pitch = 0;
   let seq = 0;
@@ -1724,7 +1793,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // Don't stack it on top of another panel - closing is always allowed
       // (getting back OUT of options can't be blocked by anything), opening
       // is refused while backpack/table/furnace already have the pointer.
-      if (optionsOpen || !(tableOpen || backpackOpen || furnaceOpenState)) toggleOptionsPanel();
+      if (optionsOpen || !(tableOpen || backpackOpen || furnaceOpenState || chestOpenState)) toggleOptionsPanel();
       return;
     }
     if (e.code === 'KeyE' && !optionsOpen) {
@@ -1735,10 +1804,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // covers "personal crafting", matching singleplayer's own E.
       if (tableOpen) { setTableOpen(false); return; }
       if (furnaceOpenState) { setFurnaceOpen(false); return; }
+      if (chestOpenState) { setChestOpen(false); return; }
       setBackpackOpen(!backpackOpen);
       return;
     }
-    if (tableOpen || backpackOpen || furnaceOpenState || optionsOpen) return; // don't move/select slots while a menu has the pointer
+    if (tableOpen || backpackOpen || furnaceOpenState || chestOpenState || optionsOpen) return; // don't move/select slots while a menu has the pointer
     const digitIndex = DIGIT_CODES.indexOf(e.code);
     if (digitIndex !== -1) client.send({ type: 'selectSlot', index: digitIndex });
     if (e.code === 'KeyQ') {
@@ -1765,7 +1835,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   // (src/inventory.ts:814-828), just re-derived here since this client keeps
   // its own selectedSlotIndex/panel-open flags instead of that class.
   const onWheel = (e: WheelEvent) => {
-    if (tableOpen || backpackOpen || furnaceOpenState || optionsOpen || chatOpen) return;
+    if (tableOpen || backpackOpen || furnaceOpenState || chestOpenState || optionsOpen || chatOpen) return;
     if (document.pointerLockElement !== canvas) return;
     e.preventDefault();
     const direction = e.deltaY > 0 ? 1 : -1;
@@ -2046,6 +2116,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       setTableOpen(true, { x: existing.x, y: existing.y, z: existing.z });
       return true;
     }
+    // Same "blocked by a solid ceiling" restriction singleplayer's
+    // interaction.ts applies (LCE ChestTile::use) - purely a client-side
+    // no-op here (the server would just never get a chestOpen either way).
+    if (getBlock(existing.x, existing.y, existing.z) === BlockId.CHEST) {
+      if (isSolidBlock(getBlock(existing.x, existing.y + 1, existing.z))) return true;
+      setChestOpen(true, { x: existing.x, y: existing.y, z: existing.z });
+      return true;
+    }
     // The server ignores this blockId for ordinary placement and places
     // whatever is actually in the player's selected inventory slot
     // (world-do.ts's handlePlaceBlock doc comment) - it's only read there
@@ -2159,6 +2237,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
           // open furnace instead of closing it.
           if (tableOpen) { setTableOpen(false); return; }
           if (furnaceOpenState) { setFurnaceOpen(false); return; }
+          if (chestOpenState) { setChestOpen(false); return; }
           setBackpackOpen(!backpackOpen);
         },
         onThirdPerson: () => cycleCameraMode(),
@@ -2169,7 +2248,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         // rather than disconnecting outright - matches singleplayer's own
         // touch pause button (pauseMenu.toggle()), which was never a
         // one-tap quit either.
-        onPause: () => { if (!(tableOpen || backpackOpen || furnaceOpenState)) toggleOptionsPanel(); },
+        onPause: () => { if (!(tableOpen || backpackOpen || furnaceOpenState || chestOpenState)) toggleOptionsPanel(); },
       }, document.body) // not #game-shell (default) - that's hidden entirely above, which would hide these controls too
     : null;
 
@@ -2473,6 +2552,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // below doesn't free those on its own, so a reconnect in the same page
     // session would otherwise leak VRAM for every streamed-in chunk.
     for (const chunk of chunks.values()) chunk.dispose();
+    chestRenderer.dispose();
     // SkyRenderer builds a handful of its own GPU resources (star field
     // geometry, cloud/glow canvas textures, sun/moon planes) that - like the
     // chunk geometries above - renderer.dispose() below doesn't reach; a
@@ -2735,6 +2815,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onFurnaceState: (x, y, z, state) => {
       if (furnacePos && furnacePos.x === x && furnacePos.y === y && furnacePos.z === z) renderFurnace(state);
     },
+    onChestState: (x, y, z, state) => {
+      if (chestPos && chestPos.x === x && chestPos.y === y && chestPos.z === z) renderChest(state);
+    },
+    // Cosmetic-only lid animation cue for a chest someone ELSE opened/closed - see protocol.ts's entityChestOpen/Close doc comment.
+    onEntityChestOpen: (x, y, z) => chestRenderer.setOpen(x, y, z, true),
+    onEntityChestClose: (x, y, z) => chestRenderer.setOpen(x, y, z, false),
     onChat: (from, text) => addChatLine(`<${from}> ${text}`),
     onPong: (clientTimeMs) => { pingMs = performance.now() - clientTimeMs; },
     onClose: (reason) => disconnect(reason),
@@ -2846,6 +2932,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // singleplayer, but multiplayer's own frame loop never did, so any
     // burning mob/player here showed a static (non-scrolling) fire frame.
     updateFireOverlayAnimation(now / 1000);
+    chestRenderer.update(delta);
     // Position is always the server's last confirmed value (no local
     // prediction yet - see the module doc comment); look direction is local
     // for a responsive camera despite network latency on movement itself.
@@ -2885,7 +2972,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // Same visibility gate as main.ts's cameraDistance<=0.5 check - first
     // person only, and hidden behind any full-screen panel that already
     // takes the pointer.
-    hand.setVisible(cameraMode === 0 && !backpackOpen && !tableOpen && !furnaceOpenState && !optionsOpen && !chatOpen && !isDead);
+    hand.setVisible(cameraMode === 0 && !backpackOpen && !tableOpen && !furnaceOpenState && !chestOpenState && !optionsOpen && !chatOpen && !isDead);
     // Same main.ts:591-595 gate (touchControls.setGameplayVisible/
     // interaction.setTouchActive) - was never ported here at all, so the
     // dpad/look/mine/attack touch layer kept accepting input (and sat on top
@@ -2894,7 +2981,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // stopped the world from being mined/moved through instead), and the
     // pause menu's buttons were unreachable because #touch-look intercepted
     // the tap first.
-    touchControls?.setGameplayVisible(!(backpackOpen || tableOpen || furnaceOpenState || optionsOpen || chatOpen || isDead));
+    touchControls?.setGameplayVisible(!(backpackOpen || tableOpen || furnaceOpenState || chestOpenState || optionsOpen || chatOpen || isDead));
     hand.setLightLevel(lightEngine.getRawBrightness(Math.round(lastServerPos.x), Math.round(lastServerPos.y), Math.round(lastServerPos.z)) / 15);
     hand.update(delta, viewBobOn ? {
       phase: viewBob.phase,

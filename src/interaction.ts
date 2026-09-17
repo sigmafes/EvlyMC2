@@ -424,6 +424,13 @@ export class BlockInteraction {
         if (slot?.id != null && slot.count > 0) this.onDrop?.(slot.id, slot.count, pos.clone());
       }
     }
+    if (id === BlockId.CHEST) {
+      // Same idea as the furnace above, just 27 generic slots instead of 3 named ones.
+      const c = this.world.getBlockData(pos.x, pos.y, pos.z)?.chest;
+      for (const slot of c?.items ?? []) {
+        if (slot?.id != null && slot.count > 0) this.onDrop?.(slot.id, slot.count, pos.clone());
+      }
+    }
     const wasDouble = this.world.getBlockData(pos.x, pos.y, pos.z)?.double === true;
     this.world.remove(pos.x, pos.y, pos.z);
     this.particles?.burst(pos, id, light);
@@ -523,6 +530,13 @@ export class BlockInteraction {
     // Right-clicking an interactive block (crafting table) opens its GUI instead of placing.
     const clicked = this.world.getBlock(hit.blockPosition.x, hit.blockPosition.y, hit.blockPosition.z);
     if (isInteractive(clicked)) {
+      // LCE ChestTile::use - a solid block sitting directly on top blocks the
+      // lid from swinging open, so right-clicking just does nothing instead
+      // of opening the GUI (no cats to check for in this game).
+      if (clicked === BlockId.CHEST) {
+        const b = hit.blockPosition;
+        if (isSolidBlock(this.world.getBlock(b.x, b.y + 1, b.z))) return;
+      }
       this.onInteract?.(clicked, hit.blockPosition.clone());
       return;
     }

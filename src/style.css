@@ -332,6 +332,50 @@ body {
 }
 #furnace-backpack { top: 168px; }
 #furnace-hotbar { top: 284px; }
+
+/* ===== Chest GUI (chest_gui.png, same standard 176x166 layout x2 as the furnace) ===== */
+#chest {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  --inv-scale: 1.18;
+}
+#chest[hidden] { display: none; }
+#chest-panel {
+  position: relative;
+  width: 352px;
+  height: 332px;
+  background: url('../gui/chest_gui.png') 0 0 / 512px 512px no-repeat;
+  image-rendering: pixelated;
+  transform: scale(var(--inv-scale, 1.18));
+  filter: drop-shadow(4px 4px 0 rgba(0, 0, 0, .5));
+}
+#chest-slots {
+  position: absolute;
+  left: 16px;
+  top: 36px;
+  display: grid;
+  grid-template-columns: repeat(9, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#chest .inventory-slot { width: 32px; height: 32px; background: none; }
+#chest .inventory-block { top: 1px; left: 1px; width: 30px; height: 30px; }
+#chest-backpack,
+#chest-hotbar {
+  position: absolute;
+  left: 16px;
+  display: grid;
+  grid-template-columns: repeat(9, 32px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+#chest-backpack { top: 168px; }
+#chest-hotbar { top: 284px; }
 #creative-grid {
   left: 18px;
   top: 36px;

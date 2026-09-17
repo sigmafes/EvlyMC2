@@ -1,7 +1,7 @@
 import type { BlockId } from '../block';
 import type { InventorySlot } from '../inventory';
 import type { MobKind } from '../mob-manager';
-import type { FurnaceState, BlockData } from '../block-data';
+import type { FurnaceState, ChestState, BlockData } from '../block-data';
 
 /**
  * Fase 4 of the multiplayer migration plan: the wire contract between a
@@ -38,8 +38,12 @@ export type Vec3 = { x: number; y: number; z: number };
  * Session.openFurnace) - `index` is unused/0 for those, there's only one of
  * each. The furnace's output slot isn't addressable here at all: it's
  * take-only, still handled by the older, simpler `furnaceTakeOutput`.
+ * `chest` addresses the currently-open chest's 27 slots by `index` (0..26) -
+ * unlike the furnace, a chest has no special per-slot semantics (anything
+ * goes anywhere), so it rides the exact same generic invPickUp/invPlace/
+ * invCancel messages instead of needing its own chestInsert/chestTake pair.
  */
-export type CraftSlotRef = { zone: 'inventory' | 'grid' | 'furnaceInput' | 'furnaceFuel'; index: number };
+export type CraftSlotRef = { zone: 'inventory' | 'grid' | 'furnaceInput' | 'furnaceFuel' | 'chest'; index: number };
 
 /**
  * An item lying on the ground (Fase 1 del plan de porteo): what a broken block
@@ -240,6 +244,9 @@ export type ClientMessage =
   | { type: 'furnaceInsert'; x: number; y: number; z: number; target: 'input' | 'fuel' }
   /** Collects the furnace's finished output stack into the player's inventory. */
   | { type: 'furnaceTakeOutput'; x: number; y: number; z: number }
+  /** Right-clicking a placed chest opens its GUI - the server starts including this position in the periodic `chestState` pushes to this session (see world-do.ts's Session.openChest) until chestClose. */
+  | { type: 'chestOpen'; x: number; y: number; z: number }
+  | { type: 'chestClose' }
   /** Melee swing at an entity: negative ids are mobs, positive ones other players (PvP - see world-do.ts's spawn-protection check). */
   | { type: 'attack'; targetId: number }
   /**
@@ -325,6 +332,11 @@ export type ServerMessage =
   | { type: 'craftableRecipes'; recipes: { index: number; out: { id: number; count: number } }[] }
   /** Pushed periodically (every tick, while the session has this furnace open via furnaceOpen) so the GUI's cook/fuel gauges animate smoothly - see world-do.ts's Session.openFurnace. */
   | { type: 'furnaceState'; x: number; y: number; z: number; state: FurnaceState }
+  /** Same idea as `furnaceState`, pushed every tick while the session has this chest open via chestOpen (see world-do.ts's Session.openChest). */
+  | { type: 'chestState'; x: number; y: number; z: number; state: ChestState }
+  /** Someone else opened/closed this chest - cosmetic-only lid animation cue for every other client (see the `swing`/`entitySwing` doc comment for the trust reasoning), never echoed back to whoever actually sent chestOpen/chestClose. */
+  | { type: 'entityChestOpen'; x: number; y: number; z: number }
+  | { type: 'entityChestClose'; x: number; y: number; z: number }
   /**
    * The open crafting grid's contents and what they currently make. Pushed on
    * every change rather than polled, same as the furnace. `output` is derived
@@ -357,6 +369,7 @@ export function isClientMessageType(type: string): type is ClientMessage['type']
       'craftOpen', 'craftClose', 'craftMove', 'craftTakeOutput',
       'invPickUp', 'invPlace', 'invCancel',
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
+      'chestOpen', 'chestClose',
       'attack', 'swing', 'breakCancel', 'respawn', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);
@@ -367,7 +380,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'entitySwing', 'entityBreakStart', 'entityBreakCancel', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState',
+      'inventoryUpdate', 'entityRemoved', 'entitySwing', 'entityBreakStart', 'entityBreakCancel', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState', 'chestState', 'entityChestOpen', 'entityChestClose',
       'craftGridState', 'craftGridClosed', 'invHeld', 'toolBroke', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);

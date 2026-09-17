@@ -45,6 +45,7 @@ export enum BlockId {
   REDSTONE_BLOCK = 40,
   EMERALD_BLOCK = 41,
   COAL_BLOCK = 42,
+  CHEST = 43,
 }
 
 export type VoxelBlock = {
@@ -135,6 +136,12 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   [BlockId.REDSTONE_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.EMERALD_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
   [BlockId.COAL_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  // The chest's real visual is a separate animated model (ChestRenderer),
+  // never baked into the terrain mesh (mesher.ts skips it entirely, same as
+  // AIR) because its lid has to rotate open/closed every frame - a static
+  // greedy-meshed cube can't do that. cull:false so its neighbours still
+  // draw their own faces instead of assuming this cell visually seals them.
+  [BlockId.CHEST]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -153,7 +160,7 @@ export function isSolidBlock(id: BlockId): boolean {
 }
 
 /** Blocks that respond to right-click (open a GUI) instead of being placed against. */
-export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE, BlockId.FURNACE]);
+export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE, BlockId.FURNACE, BlockId.CHEST]);
 
 /** Blocks that carry side-table state (facing / lit / half / axis / open) the mesher must read. */
 export const STATEFUL_BLOCKS = new Set<BlockId>([
@@ -163,7 +170,7 @@ export const STATEFUL_BLOCKS = new Set<BlockId>([
 ]);
 
 /** Blocks whose `facing` is set from the player's yaw when placed. */
-export const ORIENTABLE_BLOCKS = new Set<BlockId>([BlockId.FURNACE, BlockId.OAK_FENCE_GATE]);
+export const ORIENTABLE_BLOCKS = new Set<BlockId>([BlockId.FURNACE, BlockId.OAK_FENCE_GATE, BlockId.CHEST]);
 
 /** Blocks that toggle open/closed on right-click instead of placing/opening a GUI. */
 export const TOGGLEABLE_BLOCKS = new Set<BlockId>([BlockId.OAK_FENCE_GATE]);

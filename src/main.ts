@@ -38,6 +38,8 @@ import { loadPlayerSave, savePlayerSave } from './player-store';
 import { playClick } from './ui-sound';
 import { CraftingTableUI } from './crafting-table-ui';
 import { FurnaceUI } from './furnace-ui';
+import { ChestUI } from './chest-ui';
+import { ChestRenderer } from './chest-renderer';
 import { TouchControls } from './touch-controls';
 import { lockPointer } from './is-touch';
 import { keepFullscreenOnGesture, linkPwaManifest } from './fullscreen';
@@ -264,6 +266,7 @@ const interaction = new BlockInteraction(
   (id, pos) => {
     if (id === BlockId.CRAFTING_TABLE) craftingTableUI.open();
     else if (id === BlockId.FURNACE) furnaceUI.open(pos);
+    else if (id === BlockId.CHEST) chestUI.open(pos);
   },
   (id, count, pos) => droppedItems.spawn(id, count, pos),
   (heal) => {
@@ -325,6 +328,20 @@ const furnaceUI = new FurnaceUI(inventory, world, (open) => {
   player.setMovementLocked(open);
   if (!open) persistPlayer();
 });
+// Keeps the chest's animated model in step with placement/breaking - see
+// World.onBlockChanged's doc comment. Doesn't cover a chest placed in a
+// PREVIOUS session reappearing on load (edits are replayed as raw chunk
+// writes, not through add()/remove()) - a real follow-up, not wired yet.
+const chestRenderer = new ChestRenderer(scene);
+world.onBlockChanged = (x, y, z, id, oldId) => {
+  if (oldId === BlockId.CHEST && id !== BlockId.CHEST) chestRenderer.despawn(x, y, z);
+  else if (id === BlockId.CHEST && oldId !== BlockId.CHEST) chestRenderer.spawn(x, y, z, world.getBlockData(x, y, z)?.facing ?? 0);
+};
+const chestUI = new ChestUI(inventory, world, (open) => {
+  inventoryOpen = open;
+  player.setMovementLocked(open);
+  if (!open) persistPlayer();
+}, (x, y, z, open) => chestRenderer.setOpen(x, y, z, open));
 const hud = new Hud();
 
 // Block icons rendered during startup can come out dark before the shared
@@ -798,6 +815,7 @@ function animate() {
   smokeParticles.update(delta);
   blockInspector.update();
   furnaceUI.update();
+  chestRenderer.update(delta);
   chat.update(delta);
 
   // Rendering
