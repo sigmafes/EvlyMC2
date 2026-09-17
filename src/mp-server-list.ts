@@ -1,6 +1,6 @@
 import { playClick } from './ui-sound';
 import {
-  MpServerEntry, loadServers, addServer, updateServer, deleteServer, fetchServerStatus,
+  MpServerEntry, loadServers, addServer, updateServer, deleteServer, fetchServerStatus, resolveWorldUrl,
 } from './mp-servers';
 
 type MpServerListHandlers = {
@@ -82,9 +82,15 @@ export class MpServerList {
       case 'mp-add': {
         const name = window.prompt('Server name:', '')?.trim();
         if (!name) break;
-        const url = window.prompt('Server address (wss://host/world/id):', '')?.trim();
-        if (!url) break;
-        const entry = addServer({ name, url });
+        const rawUrl = window.prompt('Server address (wss://host/world/id):', '')?.trim();
+        if (!rawUrl) break;
+        // Resolved (not the raw text) - saving "xatatestserver" verbatim let
+        // Join still work (joinServer/onJoin resolves it too) but
+        // fetchServerStatus's /stats lookup needs a real wss://host/world/id
+        // and silently failed on the shortcut, always reading "Offline".
+        const resolved = resolveWorldUrl(rawUrl);
+        if (!resolved) { window.alert('Enter a URL ending in /world/<id>, e.g. wss://host/world/myworld'); break; }
+        const entry = addServer({ name, url: resolved.url });
         this.servers = loadServers();
         this.selectedId = entry.id;
         this.renderList();
@@ -95,9 +101,11 @@ export class MpServerList {
         if (!current) break;
         const name = window.prompt('Server name:', current.name)?.trim();
         if (!name) break;
-        const url = window.prompt('Server address:', current.url)?.trim();
-        if (!url) break;
-        updateServer(current.id, { name, url });
+        const rawUrl = window.prompt('Server address:', current.url)?.trim();
+        if (!rawUrl) break;
+        const resolved = resolveWorldUrl(rawUrl);
+        if (!resolved) { window.alert('Enter a URL ending in /world/<id>, e.g. wss://host/world/myworld'); break; }
+        updateServer(current.id, { name, url: resolved.url });
         this.servers = loadServers();
         this.renderList();
         this.refreshStatus();
@@ -130,6 +138,15 @@ export class MpServerList {
     for (const server of this.servers) {
       const id = server.id;
       this.status.delete(id);
+      // Self-heal an older entry saved before mp-add/mp-edit resolved the
+      // shortcut at save time (see their own doc comments) - a raw
+      // "xatatestserver" saved verbatim always read "Offline" here even
+      // though Join itself worked fine (joinServer resolves it too).
+      const resolved = resolveWorldUrl(server.url);
+      if (resolved && resolved.url !== server.url) {
+        updateServer(id, { url: resolved.url });
+        server.url = resolved.url;
+      }
       void fetchServerStatus(server.url).then((result) => {
         this.status.set(id, result ?? 'offline');
         if (this.root.hidden) return; // navigated away while this was in flight
