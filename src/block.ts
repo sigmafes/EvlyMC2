@@ -46,6 +46,10 @@ export enum BlockId {
   EMERALD_BLOCK = 41,
   COAL_BLOCK = 42,
   CHEST = 43,
+  /** Multiplayer-only, Admin+ exclusive - see world-do.ts's ControlZone doc comment. Right-click opens a config panel (protocol.ts's controlBlockOpen/Set) instead of placing against it. */
+  CONTROL_BLOCK = 44,
+  /** Multiplayer-only, Admin+ exclusive - teleports whoever steps on it to a configured destination (world-do.ts's applyEnvironmentDamage). Right-click opens a config panel (protocol.ts's tpBlockOpen/Set). */
+  TP_BLOCK = 45,
 }
 
 export type VoxelBlock = {
@@ -142,6 +146,10 @@ export const blockLightProperties: Record<BlockId, BlockLightProperties> = {
   // greedy-meshed cube can't do that. cull:false so its neighbours still
   // draw their own faces instead of assuming this cell visually seals them.
   [BlockId.CHEST]: { opacity: 15, emission: 0, liquid: false, cull: false, flammable: { catchOdds: 5, burnOdds: 20 } },
+  // Plain opaque cubes with their own dedicated art (textures/blocks/
+  // control_block.png, tp_block.png).
+  [BlockId.CONTROL_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
+  [BlockId.TP_BLOCK]: { opacity: 15, emission: 0, liquid: false, cull: true, flammable: null },
 };
 
 /** True if a block can catch fire / be consumed by it (wood, log, leaves). */
@@ -160,7 +168,9 @@ export function isSolidBlock(id: BlockId): boolean {
 }
 
 /** Blocks that respond to right-click (open a GUI) instead of being placed against. */
-export const INTERACTIVE_BLOCKS = new Set<BlockId>([BlockId.CRAFTING_TABLE, BlockId.FURNACE, BlockId.CHEST]);
+export const INTERACTIVE_BLOCKS = new Set<BlockId>([
+  BlockId.CRAFTING_TABLE, BlockId.FURNACE, BlockId.CHEST, BlockId.CONTROL_BLOCK, BlockId.TP_BLOCK,
+]);
 
 /** Blocks that carry side-table state (facing / lit / half / axis / open) the mesher must read. */
 export const STATEFUL_BLOCKS = new Set<BlockId>([
@@ -199,6 +209,7 @@ export const BLOCK_ATLAS_TILES = [
   'furnace_off', 'furnace_on', 'furnace_top', 'torch', 'wool',
   'iron_block', 'gold_block', 'diamond_block', 'lapis_block',
   'redstone_block', 'emerald_block', 'coal_block', 'chest_icon_top', 'chest_icon_side',
+  'control_block', 'tp_block',
 ] as const;
 export type BlockAtlasKey = (typeof BLOCK_ATLAS_TILES)[number];
 const BLOCK_ATLAS_COLS = 32;

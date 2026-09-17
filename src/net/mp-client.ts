@@ -1,6 +1,6 @@
-import { PROTOCOL_VERSION, isServerMessageType, type ClientMessage, type ServerMessage } from './protocol';
+import { PROTOCOL_VERSION, isServerMessageType, type ClientMessage, type ServerMessage, type Vec3 } from './protocol';
 import type { InventorySlot } from '../inventory';
-import type { FurnaceState, ChestState } from '../block-data';
+import type { FurnaceState, ChestState, ControlFlags } from '../block-data';
 
 export type MpClientHandlers = {
   onWelcome: (msg: Extract<ServerMessage, { type: 'welcome' }>) => void;
@@ -20,6 +20,9 @@ export type MpClientHandlers = {
   onChestState: (x: number, y: number, z: number, state: ChestState) => void;
   onEntityChestOpen: (x: number, y: number, z: number) => void;
   onEntityChestClose: (x: number, y: number, z: number) => void;
+  onControlBlockState: (x: number, y: number, z: number, controlId: number, flags: ControlFlags) => void;
+  onControlBlockDenied: () => void;
+  onTpBlockState: (x: number, y: number, z: number, target: Vec3) => void;
   onCraftGridState: (side: 2 | 3, inputs: InventorySlot[], output: InventorySlot) => void;
   onCraftGridClosed: () => void;
   onInvHeld: (item: InventorySlot | null) => void;
@@ -77,6 +80,9 @@ export class MpClient {
         case 'chestState': handlers.onChestState(msg.x, msg.y, msg.z, msg.state); break;
         case 'entityChestOpen': handlers.onEntityChestOpen(msg.x, msg.y, msg.z); break;
         case 'entityChestClose': handlers.onEntityChestClose(msg.x, msg.y, msg.z); break;
+        case 'controlBlockState': handlers.onControlBlockState(msg.x, msg.y, msg.z, msg.controlId, msg.flags); break;
+        case 'controlBlockDenied': handlers.onControlBlockDenied(); break;
+        case 'tpBlockState': handlers.onTpBlockState(msg.x, msg.y, msg.z, msg.target); break;
         case 'craftGridState': handlers.onCraftGridState(msg.side, msg.inputs, msg.output); break;
         case 'craftGridClosed': handlers.onCraftGridClosed(); break;
         case 'invHeld': handlers.onInvHeld(msg.item); break;

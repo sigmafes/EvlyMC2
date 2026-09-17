@@ -26,6 +26,9 @@ export type ChestState = {
   items: SlotRef[];
 };
 
+/** A control zone's 4 toggleable protections - see BlockData.controlFlags's own doc comment. */
+export type ControlFlags = { grief: boolean; pvp: boolean; mobDamage: boolean; mobSpawn: boolean };
+
 export type BlockData = {
   facing?: 0 | 1 | 2 | 3;
   lit?: boolean;
@@ -39,7 +42,18 @@ export type BlockData = {
   axis?: 'x' | 'y' | 'z';
   /** A fence gate swung open (LCE FenceGateTile's OPEN_BIT) - passable and drawn out of the way. */
   open?: boolean;
+  /** CONTROL_BLOCK only - links two control blocks into one rectangular zone (world-do.ts's ControlZone/rebuildControlZones). Unset = not yet linked to anything. */
+  controlId?: number;
+  /** CONTROL_BLOCK only - this zone's 4 toggleable protections, mirrored onto BOTH ends of the pair whenever either is configured (see protocol.ts's controlBlockSet). */
+  controlFlags?: ControlFlags;
+  /** TP_BLOCK only - the exact destination this pad teleports whoever steps on it to. Unset = no destination configured yet (stepping on it does nothing). */
+  tpTarget?: { x: number; y: number; z: number };
 };
+
+/** A freshly-placed, unconfigured CONTROL_BLOCK's flags - no protection at all until an Admin actually sets them (see protocol.ts's controlBlockSet). */
+export function defaultControlFlags(): ControlFlags {
+  return { grief: true, pvp: true, mobDamage: true, mobSpawn: true };
+}
 
 export function emptyFurnace(): FurnaceState {
   return { input: null, fuel: null, output: null, cookTime: 0, litTime: 0, litDuration: 0 };

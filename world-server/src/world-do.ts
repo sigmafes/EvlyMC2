@@ -22,7 +22,10 @@ import type { MobKind } from './game/mob-manager';
 import type { InventorySlot } from '../../src/inventory';
 import { RECIPES, matchRecipe, type Recipe } from '../../src/crafting';
 import { FurnaceManager } from '../../src/furnace';
-import { emptyFurnace, emptyChest, facingTowardPlayer, type FurnaceState, type ChestState, type BlockData } from '../../src/block-data';
+import {
+  emptyFurnace, emptyChest, facingTowardPlayer, defaultControlFlags,
+  type FurnaceState, type ChestState, type BlockData, type ControlFlags,
+} from '../../src/block-data';
 import { isStairs, isSlab } from '../../src/block-shapes';
 import { ServerDroppedItems } from './game/dropped-items';
 import { ServerArrows, powerToSpeed } from './game/arrow-projectiles';
@@ -318,6 +321,18 @@ export class WorldDO implements DurableObject {
   private readonly mutedNames = new Map<string, number>();
   /** Per-account rank, lowercased names, persisted under `rank:<name>` - see PlayerRank's own doc comment. Absent means the default 'User', so a brand new account needs no entry written at all. */
   private readonly playerRanks = new Map<string, PlayerRank>();
+  /**
+   * Every active CONTROL_BLOCK zone (two placed control blocks sharing the
+   * same controlId, see BlockData.controlId's own doc comment) - a plain
+   * rectangular XZ bounding box between the pair, spanning every Y (a
+   * vertical column, not just the blocks' own layer), so a lobby built
+   * upward inside the marked footprint is protected floor to sky the same
+   * way a claimed area in most survival servers is. Rebuilt from scratch
+   * (rebuildControlZones) whenever a control block is placed, broken, or
+   * (re)configured - cheap enough (there are only ever a handful of control
+   * blocks in a world) to not need incremental updates.
+   */
+  private controlZones: (ControlFlags & { minX: number; maxX: number; minZ: number; maxZ: number })[] = [];
   /** Real terrain (same deterministic Chunk/TerrainNoise generator the client uses) - see terrain.ts. Seeded once, from the first request's worldId. */
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
@@ -475,6 +490,7 @@ export class WorldDO implements DurableObject {
         const [x, y, z] = key.split(',').map(Number);
         this.fire.adopt(x, y, z);
       }
+      this.rebuildControlZones();
     }
     if (!this.terrain) {
       // index.ts forwards the original request unchanged (see its comment) -
@@ -704,6 +720,18 @@ export class WorldDO implements DurableObject {
         if (wasOpen) this.broadcast({ type: 'entityChestClose', x: wasOpen.x, y: wasOpen.y, z: wasOpen.z }, session.ws);
         break;
       }
+      case 'controlBlockOpen':
+        this.handleControlBlockOpen(session, msg.x, msg.y, msg.z);
+        break;
+      case 'controlBlockSet':
+        this.handleControlBlockSet(session, msg.x, msg.y, msg.z, msg.controlId, msg.flags);
+        break;
+      case 'tpBlockOpen':
+        this.handleTpBlockOpen(session, msg.x, msg.y, msg.z);
+        break;
+      case 'tpBlockSet':
+        this.handleTpBlockSet(session, msg.x, msg.y, msg.z, msg.target);
+        break;
       case 'chat':
         // A command is parsed and answered by the SERVER, never the client -
         // same trust boundary as breakBlock/placeBlock. Anyone connected can
@@ -833,6 +861,21 @@ export class WorldDO implements DurableObject {
     session.mining = null;
     if (brokenId === BlockId.AIR) return;
     if (!mining || mining.x !== x || mining.y !== y || mining.z !== z) return;
+    const isAdmin = this.isAdminOrOwner(session.name);
+    // Grief protection: a zone with grief off can't be broken into by
+    // anyone below Admin, full stop - this check has to come before the
+    // hardness-based one below, since a control/tp block's own -1 hardness
+    // would otherwise reject an Admin's break here too before ever
+    // reaching their bypass.
+    if (!isAdmin && this.controlZoneAt(x, z)?.grief === false) return;
+    // Control/tp blocks are hardness -1 (unbreakable) so an ordinary dig
+    // never finishes one regardless of the check below - Admin+ removing
+    // one is a separate, instant bypass rather than a real timed dig.
+    if (brokenId === BlockId.CONTROL_BLOCK || brokenId === BlockId.TP_BLOCK) {
+      if (!isAdmin) return;
+      this.setBlockFromPlayer(x, y, z, BlockId.AIR);
+      return;
+    }
 
     const { time, canHarvest } = breakTime(brokenId, mining.itemId);
     const elapsedSeconds = (Date.now() - mining.startedAtMs) / 1000;
@@ -922,6 +965,10 @@ export class WorldDO implements DurableObject {
       return;
     }
     if (slot.id === null || !isBlock(slot.id)) return;
+    // Admin+ only, regardless of how the slot got this block (even /give is
+    // already Admin-gated, but this is the actual enforcement point - a
+    // client can't place one just by claiming to hold it).
+    if ((slot.id === BlockId.CONTROL_BLOCK || slot.id === BlockId.TP_BLOCK) && !this.isAdminOrOwner(session.name)) return;
     // Same self-collision guard as singleplayer's BlockPlacer.placeBlock()
     // (block-placer.ts:38, via player.intersectsBlock - player-physics.ts's
     // overlapsHorizontally/overlapsVertically): never let a player wedge a
@@ -935,6 +982,57 @@ export class WorldDO implements DurableObject {
     this.setBlockFromPlayer(x, y, z, slot.id, this.computePlacementData(slot.id, normal, clickY, yaw));
     removeFromSlot(slot, 1);
     this.sendInventory(session);
+  }
+
+  /** Right-click on a CONTROL_BLOCK - Admin+ only, denied (not silently ignored) otherwise so the client can tell the difference from "this isn't actually a control block". */
+  private handleControlBlockOpen(session: Session, x: number, y: number, z: number): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.CONTROL_BLOCK) return;
+    if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
+    const data = this.blockData.get(`${x},${y},${z}`);
+    this.send(session.ws, { type: 'controlBlockState', x, y, z, controlId: data?.controlId ?? 0, flags: data?.controlFlags ?? defaultControlFlags() });
+  }
+
+  /** Saves this control block's link id + flags, mirrors them onto its paired block (if one with the same id already exists), and rebuilds the active zone list. */
+  private handleControlBlockSet(session: Session, x: number, y: number, z: number, controlId: number, flags: ControlFlags): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.CONTROL_BLOCK) return;
+    if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
+    const id = Math.trunc(controlId);
+    if (!Number.isFinite(id) || id < 0) return;
+    const data: BlockData = { controlId: id, controlFlags: flags };
+    this.blockData.set(`${x},${y},${z}`, data);
+    void this.state.storage.put(`blockdata:${x},${y},${z}`, data);
+    // Find the paired block (same controlId, a different CONTROL_BLOCK cell)
+    // and mirror the same flags onto it too - a zone has one set of flags,
+    // not one per physical block, so whichever end an Admin edits from
+    // should always update BOTH.
+    for (const [key, blockId] of this.edits) {
+      if (blockId !== BlockId.CONTROL_BLOCK || key === `${x},${y},${z}`) continue;
+      const other = this.blockData.get(key);
+      if (other?.controlId !== id) continue;
+      const otherData: BlockData = { controlId: id, controlFlags: flags };
+      this.blockData.set(key, otherData);
+      void this.state.storage.put(`blockdata:${key}`, otherData);
+    }
+    this.rebuildControlZones();
+    this.send(session.ws, { type: 'controlBlockState', x, y, z, controlId: id, flags });
+  }
+
+  /** Right-click on a TP_BLOCK - Admin+ only, same denial trust level as handleControlBlockOpen above. Defaults the panel to the pad's OWN position (a harmless no-op teleport) rather than leaving it blank when nothing has been configured yet. */
+  private handleTpBlockOpen(session: Session, x: number, y: number, z: number): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.TP_BLOCK) return;
+    if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
+    const target = this.blockData.get(`${x},${y},${z}`)?.tpTarget ?? { x, y, z };
+    this.send(session.ws, { type: 'tpBlockState', x, y, z, target });
+  }
+
+  private handleTpBlockSet(session: Session, x: number, y: number, z: number, target: Vec3): void {
+    if (this.getBlockAt(x, y, z) !== BlockId.TP_BLOCK) return;
+    if (!this.isAdminOrOwner(session.name)) { this.send(session.ws, { type: 'controlBlockDenied' }); return; }
+    if (![target.x, target.y, target.z].every(Number.isFinite)) return;
+    const data: BlockData = { tpTarget: { x: target.x, y: target.y, z: target.z } };
+    this.blockData.set(`${x},${y},${z}`, data);
+    void this.state.storage.put(`blockdata:${x},${y},${z}`, data);
+    this.send(session.ws, { type: 'tpBlockState', x, y, z, target: data.tpTarget! });
   }
 
   /**
@@ -1608,6 +1706,7 @@ export class WorldDO implements DurableObject {
         isActiveAt: (x, z) => this.activeRegion.isActiveAt(x, z),
         isNight: () => this.isNight(),
         approxBrightnessAt: (x, y, z) => this.approxBrightnessAt(x, y, z),
+        isMobSpawnBlocked: (x, z) => this.controlZoneAt(x, z)?.mobSpawn === false,
         mobs: this.mobs,
       }),
     };
@@ -1976,6 +2075,17 @@ export class WorldDO implements DurableObject {
     const inLava = atFeet === BlockId.LAVA || atChest === BlockId.LAVA;
     const inFire = !inLava && (atFeet === BlockId.FIRE || atChest === BlockId.FIRE);
 
+    // TP pad: standing on one teleports instantly to its configured target
+    // (defaults to its own position - a no-op - if never configured, see
+    // handleTpBlockOpen). Checked at the block directly under the feet, not
+    // the knee/chest samples above (those exist to catch a body PARTLY in
+    // lava/fire; a teleport pad only triggers by actually standing on it).
+    const groundBlock = this.getBlockAt(bx, Math.round(pos.y - 1.62), bz);
+    if (groundBlock === BlockId.TP_BLOCK) {
+      const target = this.blockData.get(`${bx},${Math.round(pos.y - 1.62)},${bz}`)?.tpTarget;
+      if (target) session.physics.setSpawn(target.x, target.y, target.z);
+    }
+
     // Jumping a fresh timer straight to its threshold makes the FIRST frame of
     // contact hurt immediately, instead of granting a free half second inside
     // the lava - the else branches reset it the moment contact is lost.
@@ -2030,6 +2140,7 @@ export class WorldDO implements DurableObject {
     const mobPos = this.mobs.getPos(targetId);
     if (!mobPos) return; // already dead/gone
     if (attacker.physics.state.position.distanceTo(mobPos) > PLAYER_MELEE_RANGE) return;
+    if (this.controlZoneAt(mobPos.x, mobPos.z)?.mobDamage === false) return;
     attacker.lastAttackAtMs = now;
     this.mobs.damage(targetId, PLAYER_MELEE_DAMAGE, attacker.physics.state.position);
     // LCE DiggerItem::hurtEnemy - hitting something costs two uses, not one.
@@ -2051,6 +2162,11 @@ export class WorldDO implements DurableObject {
     const to = target.physics.state.position;
     if (from.distanceTo(to) > PLAYER_MELEE_RANGE) return;
     if (this.inSpawnProtection(from) || this.inSpawnProtection(to)) return;
+    // Zone PvP flag: off blocks the hit if EITHER party is inside it, same
+    // "checking the attacker too" reasoning the spawn-protection check above
+    // already uses (otherwise someone could stand safe in a pvp-off zone
+    // and pick off people walking past its edge).
+    if (this.controlZoneAt(from.x, from.z)?.pvp === false || this.controlZoneAt(to.x, to.z)?.pvp === false) return;
     attacker.lastAttackAtMs = now;
     this.hurtPlayer(target.id, PLAYER_MELEE_DAMAGE, attacker.name, false, attacker.physics.state.position);
     this.damageTool(attacker, 2);
@@ -2462,6 +2578,54 @@ export class WorldDO implements DurableObject {
     return this.playerRanks.get(lower) ?? 'User';
   }
 
+  /** Admin or the owner - the permission level both control/tp blocks require to place, break, or configure, and that lets a zone's grief flag be bypassed. */
+  private isAdminOrOwner(name: string): boolean {
+    const rank = this.rankOf(name);
+    return rank === 'sigmafes' || rank === 'Admin';
+  }
+
+  /**
+   * Rebuilds `controlZones` from every placed CONTROL_BLOCK cell currently
+   * in `this.edits`, grouped by their BlockData.controlId. A group needs at
+   * least 2 members to actually form a zone - a single placed-but-unpaired
+   * control block (or a freshly placed one with no controlId set at all
+   * yet) contributes nothing. 3+ sharing the same id is a misconfiguration
+   * (not something the /control UI can even produce, since it only ever
+   * links two at a time) - only the first two found are used, silently.
+   * Called after anything that could change the answer: placing/breaking a
+   * control block (setBlock) or configuring one (handleControlBlockSet).
+   */
+  private rebuildControlZones(): void {
+    const byId = new Map<number, { x: number; z: number; flags: ControlFlags }[]>();
+    for (const [key, id] of this.edits) {
+      if (id !== BlockId.CONTROL_BLOCK) continue;
+      const data = this.blockData.get(key);
+      if (data?.controlId == null) continue;
+      const [x, , z] = key.split(',').map(Number);
+      const list = byId.get(data.controlId) ?? [];
+      list.push({ x, z, flags: data.controlFlags ?? defaultControlFlags() });
+      byId.set(data.controlId, list);
+    }
+    this.controlZones = [];
+    for (const points of byId.values()) {
+      if (points.length < 2) continue;
+      const [a, b] = points;
+      this.controlZones.push({
+        minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x),
+        minZ: Math.min(a.z, b.z), maxZ: Math.max(a.z, b.z),
+        ...a.flags,
+      });
+    }
+  }
+
+  /** The active zone (if any) covering this XZ column, every Y - see controlZones' own doc comment. `null` outside every zone. */
+  private controlZoneAt(x: number, z: number): (ControlFlags & { minX: number; maxX: number; minZ: number; maxZ: number }) | null {
+    for (const zone of this.controlZones) {
+      if (x >= zone.minX && x <= zone.maxX && z >= zone.minZ && z <= zone.maxZ) return zone;
+    }
+    return null;
+  }
+
   /**
    * Parses a /ban or /mute duration argument (`10m`, `2h`, `3d`, case-
    * insensitive) into an absolute expiry epoch-ms timestamp - `undefined`
@@ -2533,6 +2697,10 @@ export class WorldDO implements DurableObject {
       this.leaves.removeLeaf(x, y, z);
       if (oldId === BlockId.OAK_LOG) this.leaves.onLogRemoved(x, y, z, (bx, by, bz) => this.getBlockAt(bx, by, bz));
     }
+    // A control block appearing, disappearing, or being overwritten by
+    // something else all change the answer controlZoneAt() gives - see its
+    // own doc comment for why a full rebuild is cheap enough here.
+    if (id === BlockId.CONTROL_BLOCK || oldId === BlockId.CONTROL_BLOCK) this.rebuildControlZones();
   }
 
   /**

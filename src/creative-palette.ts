@@ -55,4 +55,8 @@ export const BLOCK_CATALOG: InventorySlot[] = [
   { id: BlockId.WATER, name: 'Water', sideTexture: 'atlas/water_flow.png', topTexture: 'atlas/water_still.png', previewColor: 0x3f76e4 },
   { id: BlockId.LAVA, name: 'Lava', sideTexture: 'atlas/lava_flow.png', topTexture: 'atlas/lava_still.png', previewColor: 0xff6a00 },
   { id: BlockId.FIRE, name: 'Fire', sideTexture: 'atlas/fire_atlas.png', topTexture: 'atlas/fire_atlas.png' },
+  // Admin-only mp blocks (see block.ts's own doc comments) - listed here
+  // purely so /give <control_block|tp_block> can find them by name.
+  { id: BlockId.CONTROL_BLOCK, name: 'Control Block', sideTexture: 'blocks/control_block.png', topTexture: 'blocks/control_block.png' },
+  { id: BlockId.TP_BLOCK, name: 'Teleport Block', sideTexture: 'blocks/tp_block.png', topTexture: 'blocks/tp_block.png' },
 ];

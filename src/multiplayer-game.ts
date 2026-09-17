@@ -53,7 +53,7 @@ import { UnderwaterManager } from './underwater-manager';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot, DroppedItemSnapshot, ArrowSnapshot, CraftSlotRef } from './net/protocol';
 import { armorSlotFor, totalArmorValue } from './armor';
-import type { BlockData } from './block-data';
+import type { BlockData, ControlFlags } from './block-data';
 
 /**
  * Fase 6 of the multiplayer migration plan: the client side of the world
@@ -2209,6 +2209,20 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       setChestOpen(true, { x: existing.x, y: existing.y, z: existing.z });
       return true;
     }
+    // Admin-only mp blocks (block.ts's own doc comments) - right-click opens
+    // their config panel instead of placing against them. The server is the
+    // real permission gate (controlBlockDenied/tp's own denial reply below);
+    // this just always TRIES to open rather than pre-filtering by rank
+    // client-side, so a non-admin gets the same clear "you can't do this"
+    // feedback everyone else's admin-only commands already give.
+    if (getBlock(existing.x, existing.y, existing.z) === BlockId.CONTROL_BLOCK) {
+      client.send({ type: 'controlBlockOpen', x: existing.x, y: existing.y, z: existing.z });
+      return true;
+    }
+    if (getBlock(existing.x, existing.y, existing.z) === BlockId.TP_BLOCK) {
+      client.send({ type: 'tpBlockOpen', x: existing.x, y: existing.y, z: existing.z });
+      return true;
+    }
     // The server ignores this blockId for ordinary placement and places
     // whatever is actually in the player's selected inventory slot
     // (world-do.ts's handlePlaceBlock doc comment) - it's only read there
@@ -2630,6 +2644,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     chatEl.remove();
     diagnosticsEl.remove();
     optionsEl.remove();
+    controlBlockEl.remove();
+    tpBlockEl.remove();
     if (localPlayerModel) {
       scene.remove(localPlayerModel.group);
       disposeGroupGeometries(localPlayerModel.group);
@@ -2664,6 +2680,83 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   }
 
   const client = new MpClient();
+
+  // --- Admin-only block config panels (CONTROL_BLOCK / TP_BLOCK) ---------
+  // Both are simple modal popups over a one-shot open/state/set round trip
+  // (see protocol.ts's own doc comments) - no periodic push like furnace/
+  // chest, so there's no matching "close" message, just a client-side hide.
+  let controlBlockPos: { x: number; y: number; z: number } | null = null;
+  const controlBlockEl = document.createElement('div');
+  controlBlockEl.className = 'mp-block-config';
+  controlBlockEl.hidden = true;
+  const controlPanel = document.createElement('div');
+  controlPanel.className = 'mp-config-panel';
+  const controlHeading = document.createElement('h2');
+  controlHeading.textContent = 'Control Block';
+  const controlIdRow = document.createElement('label');
+  controlIdRow.className = 'mp-config-row';
+  const controlIdInput = document.createElement('input');
+  controlIdInput.type = 'number';
+  controlIdInput.min = '0';
+  controlIdInput.step = '1';
+  controlIdRow.append('Zone ID: ', controlIdInput);
+  // Rebuilt fresh every time a controlBlockState arrives (see below) rather
+  // than reused - makeToggle's own `enabled` lives in a closure with no way
+  // to reset it from outside, so a fresh set of buttons is the simplest way
+  // to reflect whatever the server just said this block's flags actually are.
+  const controlTogglesEl = document.createElement('div');
+  let controlFlags: ControlFlags = { grief: true, pvp: true, mobDamage: true, mobSpawn: true };
+  function renderControlToggles(): void {
+    controlTogglesEl.replaceChildren(
+      makeToggle('Grief', controlFlags.grief, (v) => { controlFlags.grief = v; }),
+      makeToggle('PvP', controlFlags.pvp, (v) => { controlFlags.pvp = v; }),
+      makeToggle('Mob Damage', controlFlags.mobDamage, (v) => { controlFlags.mobDamage = v; }),
+      makeToggle('Mob Spawn', controlFlags.mobSpawn, (v) => { controlFlags.mobSpawn = v; }),
+    );
+  }
+  const controlSaveBtn = makeButton('Save', () => {
+    if (!controlBlockPos) return;
+    const id = Math.max(0, Math.trunc(Number(controlIdInput.value) || 0));
+    client.send({ type: 'controlBlockSet', x: controlBlockPos.x, y: controlBlockPos.y, z: controlBlockPos.z, controlId: id, flags: controlFlags });
+    controlBlockEl.hidden = true;
+  });
+  const controlCloseBtn = makeButton('Close', () => { controlBlockEl.hidden = true; });
+  controlPanel.append(controlHeading, controlIdRow, controlTogglesEl, controlSaveBtn, controlCloseBtn);
+  controlBlockEl.appendChild(controlPanel);
+  document.body.appendChild(controlBlockEl);
+
+  let tpBlockPos: { x: number; y: number; z: number } | null = null;
+  const tpBlockEl = document.createElement('div');
+  tpBlockEl.className = 'mp-block-config';
+  tpBlockEl.hidden = true;
+  const tpPanel = document.createElement('div');
+  tpPanel.className = 'mp-config-panel';
+  const tpHeading = document.createElement('h2');
+  tpHeading.textContent = 'Teleport Block';
+  const makeCoordInput = (label: string) => {
+    const row = document.createElement('label');
+    row.className = 'mp-config-row';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = '0.1';
+    row.append(`${label}: `, input);
+    return { row, input };
+  };
+  const tpX = makeCoordInput('X');
+  const tpY = makeCoordInput('Y');
+  const tpZ = makeCoordInput('Z');
+  const tpSaveBtn = makeButton('Save', () => {
+    if (!tpBlockPos) return;
+    const target = { x: Number(tpX.input.value), y: Number(tpY.input.value), z: Number(tpZ.input.value) };
+    if (![target.x, target.y, target.z].every(Number.isFinite)) return;
+    client.send({ type: 'tpBlockSet', x: tpBlockPos.x, y: tpBlockPos.y, z: tpBlockPos.z, target });
+    tpBlockEl.hidden = true;
+  });
+  const tpCloseBtn = makeButton('Close', () => { tpBlockEl.hidden = true; });
+  tpPanel.append(tpHeading, tpX.row, tpY.row, tpZ.row, tpSaveBtn, tpCloseBtn);
+  tpBlockEl.appendChild(tpPanel);
+  document.body.appendChild(tpBlockEl);
+
   client.connect(serverUrl, worldId, loadPlayToken(), {
     onWelcome: (msg) => {
       localPlayerId = msg.playerId;
@@ -2955,6 +3048,21 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onEntityChestClose: (x, y, z) => {
       chestRenderer.setOpen(x, y, z, false);
       if (new THREE.Vector3(x, y, z).distanceTo(camera.position) <= MOB_SOUND_RADIUS) soundManager.playSound('chest_close', 0.5);
+    },
+    onControlBlockState: (x, y, z, controlId, flags) => {
+      controlBlockPos = { x, y, z };
+      controlIdInput.value = String(controlId);
+      controlFlags = { ...flags };
+      renderControlToggles();
+      controlBlockEl.hidden = false;
+    },
+    onControlBlockDenied: () => addChatLine('You do not have permission to configure this block.'),
+    onTpBlockState: (x, y, z, target) => {
+      tpBlockPos = { x, y, z };
+      tpX.input.value = String(target.x);
+      tpY.input.value = String(target.y);
+      tpZ.input.value = String(target.z);
+      tpBlockEl.hidden = false;
     },
     onChat: (from, text) => addChatLine(`<${from}> ${text}`),
     onPong: (clientTimeMs) => { pingMs = performance.now() - clientTimeMs; },

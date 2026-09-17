@@ -1588,6 +1588,52 @@ body.touch #crosshair {
 #mp-options[hidden],
 #mp-options [hidden] { display: none !important; }
 
+/* ===== Control/TP block config panels (mp, Admin+ only) ===== */
+.mp-block-config {
+  position: fixed;
+  inset: 0;
+  z-index: 980; /* above #mp-options's 970 - can be opened while paused */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+}
+.mp-block-config[hidden] { display: none; }
+.mp-config-panel {
+  width: min(320px, 88vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  background-image: url('../gui/bg.png');
+  background-repeat: repeat;
+  border: 2px solid #6f6f6f;
+}
+.mp-config-panel h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  text-align: center;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+}
+.mp-config-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.mp-config-row input {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+  font-size: 14px;
+}
+
 /* Touch aims freeform from wherever the finger is, same reasoning as
    singleplayer's own #crosshair rule above - a fixed centre crosshair would
    be misleading once TouchControls is driving multiplayer-game.ts. */

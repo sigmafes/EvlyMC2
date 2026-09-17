@@ -51,6 +51,11 @@ const HARDNESS: Record<BlockId, number> = {
   [BlockId.EMERALD_BLOCK]: 5,
   [BlockId.COAL_BLOCK]: 5,
   [BlockId.CHEST]: 2.5,
+  // -1 (unbreakable) like bedrock - an ordinary dig can never remove these
+  // regardless of the zone's own grief flag; world-do.ts's handleBreakBlock
+  // has a separate Admin+-only bypass for actually removing one.
+  [BlockId.CONTROL_BLOCK]: -1,
+  [BlockId.TP_BLOCK]: -1,
 };
 
 type BlockTool = {

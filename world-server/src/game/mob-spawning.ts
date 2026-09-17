@@ -59,6 +59,8 @@ export type MobSpawningDeps = {
   isNight: () => boolean;
   /** See the module doc comment above - a bounded approximation, not real light propagation. */
   approxBrightnessAt: (x: number, y: number, z: number) => number;
+  /** A CONTROL_BLOCK zone's mobSpawn flag turned off at this column (world-do.ts's controlZoneAt) - blocks every kind of spawn there, ambient and hostile alike. */
+  isMobSpawnBlocked: (x: number, z: number) => boolean;
   mobs: SpawnableMobManager;
 };
 
@@ -81,14 +83,14 @@ export type MobSpawning = { update(delta: number): void; ownedMobIds(): number[]
  * ServerMobManager's MAX_MOBS cap and starving everyone still connected.
  */
 export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
-  const { getPlayerPos, isSolidAt, getBlockAt, surfaceHeight, isActiveAt, isNight, approxBrightnessAt, mobs } = deps;
+  const { getPlayerPos, isSolidAt, getBlockAt, surfaceHeight, isActiveAt, isNight, approxBrightnessAt, isMobSpawnBlocked, mobs } = deps;
 
   const animalSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
   const surfaceHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
   const caveHostileSlots: SpawnSlot[] = Array.from({ length: 4 }, () => ({ mobId: null, cooldown: 0 }));
 
   function isValidMobSpawnColumn(x: number, gy: number, z: number): boolean {
-    if (!isActiveAt(x, z)) return false;
+    if (!isActiveAt(x, z) || isMobSpawnBlocked(x, z)) return false;
     if (getBlockAt(x, gy, z) !== BlockId.GRASS) return false;
     return !isSolidAt(x, gy + 1, z) && !isSolidAt(x, gy + 2, z);
   }
@@ -102,7 +104,7 @@ export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
    * would never actually reject anything this one doesn't already reject.
    */
   function isValidHostileSurfaceColumn(x: number, gy: number, z: number): boolean {
-    if (!isActiveAt(x, z)) return false;
+    if (!isActiveAt(x, z) || isMobSpawnBlocked(x, z)) return false;
     if (gy < WATER_LEVEL) return false;
     const ground = getBlockAt(x, gy, z);
     if (ground === BlockId.AIR || ground === BlockId.WATER || ground === BlockId.LAVA) return false;
@@ -113,7 +115,7 @@ export function createMobSpawning(deps: MobSpawningDeps): MobSpawning {
   }
 
   function isValidHostileCaveColumn(x: number, y: number, z: number): boolean {
-    if (!isActiveAt(x, z)) return false;
+    if (!isActiveAt(x, z) || isMobSpawnBlocked(x, z)) return false;
     if (!isSolidAt(x, y, z)) return false;
     if (isSolidAt(x, y + 1, z) || isSolidAt(x, y + 2, z)) return false;
     if (getBlockAt(x, y + 1, z) === BlockId.WATER || getBlockAt(x, y + 2, z) === BlockId.WATER) return false;

@@ -1,7 +1,7 @@
 import type { BlockId } from '../block';
 import type { InventorySlot } from '../inventory';
 import type { MobKind } from '../mob-manager';
-import type { FurnaceState, ChestState, BlockData } from '../block-data';
+import type { FurnaceState, ChestState, BlockData, ControlFlags } from '../block-data';
 
 /**
  * Fase 4 of the multiplayer migration plan: the wire contract between a
@@ -261,6 +261,22 @@ export type ClientMessage =
   /** Right-clicking a placed chest opens its GUI - the server starts including this position in the periodic `chestState` pushes to this session (see world-do.ts's Session.openChest) until chestClose. */
   | { type: 'chestOpen'; x: number; y: number; z: number }
   | { type: 'chestClose' }
+  /**
+   * Right-clicking a CONTROL_BLOCK - Admin+ only (world-do.ts checks the
+   * sender's own rank, never trusts a client-side gate). The server replies
+   * with a single `controlBlockState` (this block's current controlId/
+   * flags, or defaultControlFlags() if it was never configured) - unlike
+   * furnace/chest there's no periodic per-tick push, so no matching
+   * controlBlockClose exists either; the panel is just a client-side modal
+   * over a one-shot read.
+   */
+  | { type: 'controlBlockOpen'; x: number; y: number; z: number }
+  /** Saves this control block's link id + flags, and mirrors the same flags onto whichever OTHER control block currently shares that id (see world-do.ts's rebuildControlZones) - a zone only ever has one set of flags, not one per physical block. */
+  | { type: 'controlBlockSet'; x: number; y: number; z: number; controlId: number; flags: ControlFlags }
+  /** Right-clicking a TP_BLOCK - Admin+ only, same trust level as controlBlockOpen above. Replies with `tpBlockState`. */
+  | { type: 'tpBlockOpen'; x: number; y: number; z: number }
+  /** Saves this pad's teleport destination. */
+  | { type: 'tpBlockSet'; x: number; y: number; z: number; target: Vec3 }
   /** Melee swing at an entity: negative ids are mobs, positive ones other players (PvP - see world-do.ts's spawn-protection check). */
   | { type: 'attack'; targetId: number }
   /**
@@ -353,6 +369,12 @@ export type ServerMessage =
   /** Someone else opened/closed this chest - cosmetic-only lid animation cue for every other client (see the `swing`/`entitySwing` doc comment for the trust reasoning), never echoed back to whoever actually sent chestOpen/chestClose. */
   | { type: 'entityChestOpen'; x: number; y: number; z: number }
   | { type: 'entityChestClose'; x: number; y: number; z: number }
+  /** Reply to `controlBlockOpen`/echoed after a `controlBlockSet` - this block's current link id + protections. */
+  | { type: 'controlBlockState'; x: number; y: number; z: number; controlId: number; flags: ControlFlags }
+  /** Sent instead of `controlBlockState`/`tpBlockState` when the sender doesn't have permission (not Admin+) - the client shows this as an error rather than opening the panel at all. */
+  | { type: 'controlBlockDenied' }
+  /** Reply to `tpBlockOpen`/echoed after a `tpBlockSet` - this pad's current destination (defaults to its own position if never configured). */
+  | { type: 'tpBlockState'; x: number; y: number; z: number; target: Vec3 }
   /**
    * The open crafting grid's contents and what they currently make. Pushed on
    * every change rather than polled, same as the furnace. `output` is derived
@@ -386,6 +408,7 @@ export function isClientMessageType(type: string): type is ClientMessage['type']
       'invPickUp', 'invPlace', 'invCancel',
       'furnaceOpen', 'furnaceClose', 'furnaceInsert', 'furnaceTakeOutput',
       'chestOpen', 'chestClose',
+      'controlBlockOpen', 'controlBlockSet', 'tpBlockOpen', 'tpBlockSet',
       'attack', 'swing', 'breakCancel', 'respawn', 'shootBow', 'chat', 'ping',
     ] as const
   ).includes(type as ClientMessage['type']);
@@ -397,6 +420,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
       'inventoryUpdate', 'entityRemoved', 'entitySwing', 'entityBreakStart', 'entityBreakCancel', 'playerSkin', 'entityEat', 'dayTime', 'craftableRecipes', 'furnaceState', 'chestState', 'entityChestOpen', 'entityChestClose',
+      'controlBlockState', 'controlBlockDenied', 'tpBlockState',
       'craftGridState', 'craftGridClosed', 'invHeld', 'toolBroke', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);
