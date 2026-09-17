@@ -1748,27 +1748,34 @@ export class WorldDO implements DurableObject {
     const droppedItems = this.droppedItems.snapshots();
     const arrows = this.arrows.snapshots();
 
+    // `entities`/`droppedItems`/`arrows` are now IDENTICAL for every
+    // connected client (each session's own `.filter((e) => e.id !==
+    // session.id)` copy used to make this per-session, at the cost of
+    // JSON.stringify-ing those same arrays once per connected player, every
+    // tick, inside this single-threaded DO - real, wasted CPU that directly
+    // competes with the same tick's physics/AI for time. Serializing the
+    // shared portion exactly once and splicing each session's small `self`
+    // object into the pre-built string turns that into O(1) big-array
+    // stringify + O(sessions) cheap ones. The client now skips its own id
+    // out of `entities` itself (see multiplayer-game.ts's localPlayerId).
+    const entitiesJson = JSON.stringify(entities);
+    const droppedItemsJson = JSON.stringify(droppedItems);
+    const arrowsJson = JSON.stringify(arrows);
+
     for (const [ws, session] of this.sessions) {
       const p = session.physics.state;
-      this.send(ws, {
-        type: 'state',
-        tick: this.tickCount,
-        ackSeq: session.lastSeq,
-        droppedItems,
-        arrows,
-        self: {
-          pos: { x: p.position.x, y: p.position.y, z: p.position.z },
-          velocity: { x: p.velocity.x, y: p.velocity.y, z: p.velocity.z },
-          yaw: session.yaw,
-          pitch: session.pitch,
-          grounded: p.grounded,
-          health: session.health,
-          air: session.air.points,
-          onFire: session.onFire,
-        },
-        // Every other player - not this connection's own entry (it already has `self`).
-        entities: entities.filter((e) => e.id !== session.id),
+      const selfJson = JSON.stringify({
+        pos: { x: p.position.x, y: p.position.y, z: p.position.z },
+        velocity: { x: p.velocity.x, y: p.velocity.y, z: p.velocity.z },
+        yaw: session.yaw,
+        pitch: session.pitch,
+        grounded: p.grounded,
+        health: session.health,
+        air: session.air.points,
+        onFire: session.onFire,
       });
+      const payload = `{"type":"state","tick":${this.tickCount},"ackSeq":${session.lastSeq},"self":${selfJson},"entities":${entitiesJson},"droppedItems":${droppedItemsJson},"arrows":${arrowsJson}}`;
+      try { ws.send(payload); } catch { /* socket already gone */ }
     }
   }
 

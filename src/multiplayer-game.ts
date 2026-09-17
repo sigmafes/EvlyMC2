@@ -1375,6 +1375,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   let seq = 0;
   let running = true;
   const lastServerPos = new THREE.Vector3(0, 2, 0);
+  // Set once from `welcome` - the server's `state.entities` now includes
+  // every player (itself too, see world-do.ts's tick()'s doc comment on the
+  // shared-JSON optimization), so the client has to skip its own id itself
+  // instead of relying on the server to have already filtered it out.
+  let localPlayerId = -1;
   /** World-space movement since the last server tick, for the local third-person body's walk animation - see onState below for why this is a position delta rather than the server's raw velocity. */
   let localMoveDeltaX = 0;
   let localMoveDeltaZ = 0;
@@ -2490,6 +2495,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const client = new MpClient();
   client.connect(serverUrl, worldId, loadPlayToken(), {
     onWelcome: (msg) => {
+      localPlayerId = msg.playerId;
       lastServerPos.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
       camera.position.copy(lastServerPos);
       joinedAtMs = performance.now();
@@ -2547,6 +2553,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       fireOverlayEl.classList.toggle('active', msg.self.onFire);
       const seen = new Set<number>();
       for (const e of msg.entities as EntitySnapshot[]) {
+        if (e.id === localPlayerId) continue; // see localPlayerId's doc comment - the server no longer filters this out itself
         seen.add(e.id);
         let op = remoteEntities.get(e.id);
         if (!op) {
