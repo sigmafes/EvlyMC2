@@ -129,10 +129,23 @@ const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep', 'zombie', 'skeleton'];
 /** Same list src/chat-commands.ts's /time validates against. */
 const TIME_PHASES = ['day', 'night', 'sunset', 'sunrise'] as const;
 
-/** Usernames allowed to run the world-affecting admin commands (/time, /seed, /fly) - everyone else gets a "no permission" reply. Lowercased for a case-insensitive match against session.name. */
-const ADMIN_NAMES = new Set(['sigmafes', 'dummy']);
-/** Moderation commands (/kick, /ban, /mute) - a stricter, separate allowlist from ADMIN_NAMES: only sigmafes has these for now, not Dummy. */
-const MOD_ADMIN_NAMES = new Set(['sigmafes']);
+/**
+ * Four-tier rank hierarchy (replaces the old fixed ADMIN_NAMES/MOD_ADMIN_NAMES
+ * allowlists): 'sigmafes' is the hardcoded owner override (this exact account
+ * name, case-insensitive - never stored, never demotable via /rank), then
+ * Admin/Mod/User are per-account ranks persisted to storage (see
+ * this.playerRanks) and assigned with /rank. A brand new player who has
+ * never been granted a rank is 'User' by default.
+ *
+ * Admin: moderation commands (mute/ban/unban/kick) AND the special commands
+ * (give/time/seed/fly/clean/tp/rank Mod-or-User).
+ * Mod: moderation commands only.
+ * User: nothing.
+ * sigmafes: every command everywhere, unconditionally.
+ */
+type PlayerRank = 'Admin' | 'Mod' | 'User';
+const PLAYER_RANKS: PlayerRank[] = ['Admin', 'Mod', 'User'];
+const OWNER_NAME = 'sigmafes';
 
 /** Same normalisation as src/chat-commands.ts's /give, duplicated (not imported) because that file pulls in THREE/Chat/DOM-adjacent types this headless server doesn't have. */
 function slugifyItemName(s: string): string {
@@ -290,9 +303,21 @@ export class WorldDO implements DurableObject {
    * setBlock()'s handling below.
    */
   private readonly blockData = new Map<string, BlockData>();
-  /** Moderation state - lowercased names, persisted to DO storage (`ban:<name>`/`mute:<name>`) alongside edits, loaded in fetch(). A ban rejects the join outright (see onJoin); a mute silently drops that player's chat messages before they're broadcast. */
-  private readonly bannedNames = new Set<string>();
-  private readonly mutedNames = new Set<string>();
+  /**
+   * Moderation state - lowercased names, persisted to DO storage
+   * (`ban:<name>`/`mute:<name>`) alongside edits, loaded in fetch(). A ban
+   * rejects the join outright (see onJoin); a mute silently drops that
+   * player's chat messages before they're broadcast. The value is the
+   * expiry as an epoch-ms timestamp, or `Infinity` for a permanent ban/mute
+   * (no /unmute exists yet - it wasn't asked for, only /unban - so a timed
+   * mute expiring on its own or a permanent one are the only ways a mute
+   * ever lifts). Storage.put can serialise Infinity directly (structured
+   * clone, not JSON), so no separate "permanent" sentinel is needed.
+   */
+  private readonly bannedNames = new Map<string, number>();
+  private readonly mutedNames = new Map<string, number>();
+  /** Per-account rank, lowercased names, persisted under `rank:<name>` - see PlayerRank's own doc comment. Absent means the default 'User', so a brand new account needs no entry written at all. */
+  private readonly playerRanks = new Map<string, PlayerRank>();
   /** Real terrain (same deterministic Chunk/TerrainNoise generator the client uses) - see terrain.ts. Seeded once, from the first request's worldId. */
   private terrain: ServerTerrain | null = null;
   private worldSeed = 0;
@@ -430,10 +455,15 @@ export class WorldDO implements DurableObject {
       for (const [key, value] of stored) this.edits.set(key.slice('edit:'.length), value);
       const storedData = await this.state.storage.list<BlockData>({ prefix: 'blockdata:' });
       for (const [key, value] of storedData) this.blockData.set(key.slice('blockdata:'.length), value);
-      const storedBans = await this.state.storage.list<true>({ prefix: 'ban:' });
-      for (const key of storedBans.keys()) this.bannedNames.add(key.slice('ban:'.length));
-      const storedMutes = await this.state.storage.list<true>({ prefix: 'mute:' });
-      for (const key of storedMutes.keys()) this.mutedNames.add(key.slice('mute:'.length));
+      // Pre-existing entries from before timed bans/mutes existed stored a
+      // plain `true`, not an expiry - treated as permanent (Infinity) here,
+      // matching what "listed at all" used to mean.
+      const storedBans = await this.state.storage.list<number | true>({ prefix: 'ban:' });
+      for (const [key, expiry] of storedBans) this.bannedNames.set(key.slice('ban:'.length), typeof expiry === 'number' ? expiry : Infinity);
+      const storedMutes = await this.state.storage.list<number | true>({ prefix: 'mute:' });
+      for (const [key, expiry] of storedMutes) this.mutedNames.set(key.slice('mute:'.length), typeof expiry === 'number' ? expiry : Infinity);
+      const storedRanks = await this.state.storage.list<PlayerRank>({ prefix: 'rank:' });
+      for (const [key, rank] of storedRanks) this.playerRanks.set(key.slice('rank:'.length), rank);
       this.editsLoaded = true;
       // Adopt any FIRE block that outlived the engine that lit it. Engine
       // state is in-memory, so a DO that gets evicted mid-blaze wakes up with
@@ -683,7 +713,7 @@ export class WorldDO implements DurableObject {
         // A muted player's own message is silently dropped - not even
         // echoed back to them - same as a real chat mute rather than a
         // visible "you can't talk" wall that just confirms the mute worked.
-        else if (!this.mutedNames.has(session.name.toLowerCase())) this.broadcast({ type: 'chat', from: session.name, text: msg.text });
+        else if (!this.isMuted(session.name)) this.broadcast({ type: 'chat', from: session.name, text: msg.text });
         break;
       case 'attack':
         // Mob ids are always negative (ServerMobManager), session ids always
@@ -1470,7 +1500,7 @@ export class WorldDO implements DurableObject {
       ws.close();
       return;
     }
-    if (this.bannedNames.has(verifiedName.toLowerCase())) {
+    if (this.isBanned(verifiedName)) {
       this.send(ws, { type: 'rejected', reason: 'You are banned from this world' });
       ws.close();
       return;
@@ -2127,9 +2157,10 @@ export class WorldDO implements DurableObject {
    * Reduced port of src/chat-commands.ts's /summon, /give, /time, /seed and
    * /fly (Fase 6/7 of PLAN-MULTIPLAYER-BUGFIXES.md /
    * PLAN-MULTIPLAYER-MISSING-FEATURES.md), plus multiplayer-only commands
-   * with no singleplayer equivalent: /clean <inv|mobs> (a single-player
+   * with no singleplayer equivalent: /clean <inv|mob> (a single-player
    * world has no reason to nuke every mob at once, or clear an inventory
-   * it's just as easy to empty by hand) and /kick, /ban, /mute <player> -
+   * it's just as easy to empty by hand), /tp <player> <player>, /rank
+   * <player> <rank>, and /kick, /ban, /unban, /mute <player> [duration] -
    * moderation only makes sense once other real people are in the world.
    * /panorama and /mobstatus stay singleplayer-only (purely client-side
    * capture, or a debug readout of client-only spawning state that doesn't
@@ -2137,20 +2168,22 @@ export class WorldDO implements DurableObject {
    * caller ONLY, as a `from: 'server'` chat line - never broadcast, same as
    * a real Minecraft server's command output.
    *
-   * /time, /seed, /fly and /clean mobs are gated to ADMIN_NAMES - unlike
-   * /summon, /give and /clean inv (which only affect the caller's own
-   * inventory/immediate surroundings), these change or reveal something for
-   * every player in the world, so an arbitrary joiner shouldn't get them
-   * for free. /kick, /ban and /mute are gated to the even stricter
-   * MOD_ADMIN_NAMES (sigmafes only, for now) - not even Dummy, who has
-   * every other admin command.
+   * Permission comes from rankOf(session.name) (see PlayerRank's own doc
+   * comment): /kick, /ban, /unban and /mute need Mod or above; /give,
+   * /time, /seed, /fly, /clean, /tp and /rank <player> Mod|User need Admin
+   * or above; /rank <player> Admin needs the 'sigmafes' owner override
+   * specifically, not even a plain Admin can hand that rank out. /summon
+   * and /clean inv (no target) stay unrestricted - they only ever affect
+   * the caller's own mobs-in-front-of-them/inventory.
    */
   private handleChatCommand(session: Session, raw: string): void {
     const args = raw.trim().split(/\s+/).filter(Boolean);
     const cmd = (args.shift() ?? '').toLowerCase();
     const reply = (text: string) => this.send(session.ws, { type: 'chat', from: 'server', text });
-    const isAdmin = ADMIN_NAMES.has(session.name.toLowerCase());
-    const isModAdmin = MOD_ADMIN_NAMES.has(session.name.toLowerCase());
+    const rank = this.rankOf(session.name);
+    const isOwner = rank === 'sigmafes';
+    const isAdmin = isOwner || rank === 'Admin';
+    const isMod = isAdmin || rank === 'Mod';
 
     if (cmd === 'time') {
       if (!isAdmin) { reply('You do not have permission to use /time.'); return; }
@@ -2187,51 +2220,102 @@ export class WorldDO implements DurableObject {
     if (cmd === 'clean') {
       const target = (args[0] ?? '').toLowerCase();
       if (target === 'inv') {
-        // Self-only (same as /give), so no admin gate - only affects the
-        // caller's own inventory.
+        // With a second argument, clears THAT player's inventory instead of
+        // the caller's own - admin-gated, since it reaches into someone
+        // else's stuff. No argument stays the original self-only, ungated
+        // behaviour (same as /give used to be).
+        const targetName = args[1];
+        if (targetName) {
+          if (!isAdmin) { reply('You do not have permission to use /clean inv on another player.'); return; }
+          const targetSession = this.sessionByName(targetName);
+          if (!targetSession) { reply(`${targetName} is not online.`); return; }
+          for (let i = 0; i < targetSession.inventory.length; i++) targetSession.inventory[i] = createEmptySlot();
+          this.sendInventory(targetSession);
+          reply(`Cleared ${targetSession.name}'s inventory.`);
+          return;
+        }
         for (let i = 0; i < session.inventory.length; i++) session.inventory[i] = createEmptySlot();
         this.sendInventory(session);
         reply('Inventory cleared.');
         return;
       }
-      if (target === 'mobs') {
+      if (target === 'mob' || target === 'mobs') {
         // World-wide (every player's animals AND hostiles), so admin-gated
         // like /time - one player shouldn't be able to wipe everyone else's
         // spawned mobs on a whim.
-        if (!isAdmin) { reply('You do not have permission to use /clean mobs.'); return; }
+        if (!isAdmin) { reply('You do not have permission to use /clean mob.'); return; }
         const ids = this.mobs.snapshots().map((s) => s.id);
         for (const id of ids) this.mobs.forceRemove(id);
         this.mobsDirty = true;
         reply(`Removed ${ids.length} mob${ids.length === 1 ? '' : 's'}.`);
         return;
       }
-      reply('Usage: /clean inv|mobs');
+      reply('Usage: /clean inv [player] | mob');
       return;
     }
 
-    if (cmd === 'kick' || cmd === 'ban' || cmd === 'mute') {
-      if (!isModAdmin) { reply(`You do not have permission to use /${cmd}.`); return; }
+    if (cmd === 'kick' || cmd === 'ban' || cmd === 'unban' || cmd === 'mute') {
+      if (!isMod) { reply(`You do not have permission to use /${cmd}.`); return; }
       const targetName = args[0];
-      if (!targetName) { reply(`Usage: /${cmd} <player>`); return; }
-      const target = this.sessionByName(targetName);
+      if (!targetName) { reply(`Usage: /${cmd} <player>${cmd === 'ban' || cmd === 'mute' ? ' [10m|2h|3d]' : ''}`); return; }
+      const lower = targetName.toLowerCase();
 
-      if (cmd === 'mute') {
-        this.mutedNames.add(targetName.toLowerCase());
-        void this.state.storage.put(`mute:${targetName.toLowerCase()}`, true);
-        reply(`Muted ${targetName}.`);
+      if (cmd === 'unban') {
+        if (!this.bannedNames.has(lower)) { reply(`${targetName} is not banned.`); return; }
+        this.bannedNames.delete(lower);
+        void this.state.storage.delete(`ban:${lower}`);
+        reply(`Unbanned ${targetName}.`);
         return;
       }
-      if (cmd === 'ban') {
-        this.bannedNames.add(targetName.toLowerCase());
-        void this.state.storage.put(`ban:${targetName.toLowerCase()}`, true);
+      let durationText = '';
+      if (cmd === 'mute' || cmd === 'ban') {
+        const expiry = this.parseDuration(args[1]);
+        if (expiry === null) { reply('Duration must look like 10m, 2h, or 3d.'); return; }
+        const map = cmd === 'mute' ? this.mutedNames : this.bannedNames;
+        map.set(lower, expiry);
+        void this.state.storage.put(`${cmd}:${lower}`, expiry);
+        durationText = expiry === Infinity ? ' permanently' : ` until ${new Date(expiry).toISOString()}`;
+        if (cmd === 'mute') { reply(`Muted ${targetName}${durationText}.`); return; }
       }
       // /kick and /ban both disconnect anyone currently online under that
       // name - /ban would otherwise only take effect on their NEXT join
       // attempt, leaving them connected until then.
-      if (!target) { reply(`${targetName} is not online.${cmd === 'ban' ? ' Banned for next time.' : ''}`); return; }
+      const target = this.sessionByName(targetName);
+      if (!target) { reply(`${targetName} is not online.${cmd === 'ban' ? ` Banned${durationText}.` : ''}`); return; }
       this.send(target.ws, { type: 'rejected', reason: cmd === 'ban' ? 'You have been banned from this world' : 'You have been kicked from this world' });
       target.ws.close();
-      reply(`${cmd === 'ban' ? 'Banned' : 'Kicked'} ${target.name}.`);
+      reply(cmd === 'ban' ? `Banned ${target.name}${durationText}.` : `Kicked ${target.name}.`);
+      return;
+    }
+
+    if (cmd === 'tp') {
+      if (!isAdmin) { reply('You do not have permission to use /tp.'); return; }
+      const [fromName, toName] = args;
+      if (!fromName || !toName) { reply('Usage: /tp <player> <destination player>'); return; }
+      const from = this.sessionByName(fromName);
+      const to = this.sessionByName(toName);
+      if (!from) { reply(`${fromName} is not online.`); return; }
+      if (!to) { reply(`${toName} is not online.`); return; }
+      const p = to.physics.state.position;
+      from.physics.setSpawn(p.x, p.y, p.z);
+      reply(`Teleported ${from.name} to ${to.name}.`);
+      return;
+    }
+
+    if (cmd === 'rank') {
+      const [targetName, wantedRank] = args;
+      if (!targetName || !wantedRank) { reply(`Usage: /rank <player> <${PLAYER_RANKS.join('|')}>`); return; }
+      const normalized = PLAYER_RANKS.find((r) => r.toLowerCase() === wantedRank.toLowerCase());
+      if (!normalized) { reply(`Usage: /rank <player> <${PLAYER_RANKS.join('|')}>`); return; }
+      // Handing out Admin is the owner's call alone - even an existing Admin
+      // can't promote a third player to their own level, only Mod/User.
+      if (normalized === 'Admin' ? !isOwner : !isAdmin) { reply('You do not have permission to use /rank.'); return; }
+      const lower = targetName.toLowerCase();
+      if (lower === OWNER_NAME) { reply(`${targetName} is the owner and always has every permission.`); return; }
+      this.playerRanks.set(lower, normalized);
+      void this.state.storage.put(`rank:${lower}`, normalized);
+      const targetSession = this.sessionByName(targetName);
+      reply(`Set ${targetSession?.name ?? targetName}'s rank to ${normalized}.`);
       return;
     }
 
@@ -2252,6 +2336,7 @@ export class WorldDO implements DurableObject {
     }
 
     if (cmd === 'give') {
+      if (!isAdmin) { reply('You do not have permission to use /give.'); return; }
       if (args.length === 0) { reply('Usage: /give <item|block> [count]'); return; }
 
       // Trailing pure-number argument is the count; the rest is the item name.
@@ -2349,6 +2434,49 @@ export class WorldDO implements DurableObject {
       if (session.name.toLowerCase() === lower) return session;
     }
     return null;
+  }
+
+  /** `/ban`'s and `/mute`'s shared "is this name still under its expiry" check - lazily lifts (map + storage) whichever one has expired instead of waiting for a separate sweep, since the only two places that ever need the answer (onJoin, chat) already check it on demand. */
+  private isRestricted(map: Map<string, number>, prefix: 'ban' | 'mute', name: string): boolean {
+    const lower = name.toLowerCase();
+    const expiry = map.get(lower);
+    if (expiry === undefined) return false;
+    if (Date.now() < expiry) return true;
+    map.delete(lower);
+    void this.state.storage.delete(`${prefix}:${lower}`);
+    return false;
+  }
+
+  private isBanned(name: string): boolean {
+    return this.isRestricted(this.bannedNames, 'ban', name);
+  }
+
+  private isMuted(name: string): boolean {
+    return this.isRestricted(this.mutedNames, 'mute', name);
+  }
+
+  /** 'sigmafes' (case-insensitive) is the hardcoded, non-persisted owner override - see PlayerRank's own doc comment. Everyone else's rank comes from playerRanks, defaulting to 'User'. */
+  private rankOf(name: string): 'sigmafes' | PlayerRank {
+    const lower = name.toLowerCase();
+    if (lower === OWNER_NAME) return 'sigmafes';
+    return this.playerRanks.get(lower) ?? 'User';
+  }
+
+  /**
+   * Parses a /ban or /mute duration argument (`10m`, `2h`, `3d`, case-
+   * insensitive) into an absolute expiry epoch-ms timestamp - `undefined`
+   * (no argument at all) means permanent (Infinity), matching how /ban and
+   * /mute always worked before timed durations existed. Returns `null` for
+   * a present-but-malformed argument, so the caller can tell "no duration
+   * given" apart from "duration given wrong" and reply accordingly.
+   */
+  private parseDuration(arg: string | undefined): number | null {
+    if (arg === undefined) return Infinity;
+    const match = arg.match(/^(\d+)([mhd])$/i);
+    if (!match) return null;
+    const amount = parseInt(match[1], 10);
+    const unitMs = match[2].toLowerCase() === 'm' ? 60_000 : match[2].toLowerCase() === 'h' ? 3_600_000 : 86_400_000;
+    return Date.now() + amount * unitMs;
   }
 
   /** Only WATER/LAVA carry a spread distance worth sending - see protocol.ts's blockChanged doc comment. `undefined` for every other block, including AIR, so the client can tell "not a liquid" apart from "a liquid at distance 0" (a real, meaningful value). */
