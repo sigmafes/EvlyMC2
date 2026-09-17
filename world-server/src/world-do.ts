@@ -15,6 +15,7 @@ import { getDrops } from '../../src/drops';
 import { breakTime } from '../../src/block-hardness';
 import { isBlock, maxStackOf, foodValue, ITEMS } from '../../src/item';
 import { isTool, maxDurability } from '../../src/tools';
+import { armorSlotFor, totalArmorValue, reduceDamageByArmor, armorHurtAmount, armorDurability } from '../../src/armor';
 import { BLOCK_CATALOG } from '../../src/creative-palette';
 import { LeavesManager } from '../../src/leaves-manager';
 import type { MobKind } from './game/mob-manager';
@@ -65,6 +66,8 @@ const PLAYER_SAVE_INTERVAL = 30;
 type PlayerRecord = {
   slots: InventorySlot[];
   selectedIndex: number;
+  /** [helmet, chestplate, leggings, boots] - absent on saves from before armor existed. */
+  armor?: InventorySlot[];
   health: number;
   x: number; y: number; z: number;
   yaw: number; pitch: number;
@@ -159,6 +162,10 @@ type Session = {
   /** Server-authoritative inventory - see game/inventory.ts's doc comment for why it's a hand-rolled minimal helper set instead of importing src/inventory.ts's own (DOM-heavy) Inventory class. */
   inventory: InventorySlot[];
   selectedSlot: number;
+  /** [helmet, chestplate, leggings, boots] - LCE's own ArmorItem slot order. */
+  armor: InventorySlot[];
+  /** Fractional remainder carried between hits - see armor.ts's reduceDamageByArmor doc comment. */
+  armorSpill: number;
   /** Position of the furnace GUI this session currently has open, or null - drives which furnace's state gets pushed to it every tick (see the class's tick() and sendFurnaceState()). */
   openFurnace: { x: number; y: number; z: number } | null;
   /** Position of the chest GUI this session currently has open, or null - unlike openFurnace this doesn't need a per-tick push (a chest has no cook/burn gauge to animate), just a resend whenever ITS OWN OR ANOTHER VIEWER'S mutation changes it - see flushIfChest(). */
@@ -953,7 +960,7 @@ export class WorldDO implements DurableObject {
   }
 
   private sendInventory(session: Session): void {
-    this.send(session.ws, { type: 'inventoryUpdate', slots: session.inventory, selectedIndex: session.selectedSlot });
+    this.send(session.ws, { type: 'inventoryUpdate', slots: session.inventory, selectedIndex: session.selectedSlot, armor: session.armor });
     this.sendCraftableRecipes(session);
   }
 
@@ -1118,6 +1125,7 @@ export class WorldDO implements DurableObject {
     if (ref.zone === 'grid') return session.craft?.inputs ?? [];
     if (ref.zone === 'furnaceInput' || ref.zone === 'furnaceFuel') return this.furnaceSlotArray(session, ref.zone);
     if (ref.zone === 'chest') return this.chestSlotArray(session);
+    if (ref.zone === 'armor') return session.armor;
     return session.inventory;
   }
 
@@ -1185,6 +1193,10 @@ export class WorldDO implements DurableObject {
     const held = session.heldItem;
     if (!held) return;
     if (to.zone === 'grid' && !session.craft) return;
+    // Server-authoritative version of inventory.ts's canAccept - a modified
+    // client claiming a sword goes in the helmet slot gets refused here
+    // regardless of what it rendered locally.
+    if (to.zone === 'armor' && armorSlotFor(held.id) !== to.index) return;
     const arr = this.slotArrayFor(session, to);
     if (to.index < 0 || to.index >= arr.length) return;
     const dst = arr[to.index];
@@ -1495,9 +1507,11 @@ export class WorldDO implements DurableObject {
       // say) would otherwise write into the very same slot objects.
       inventory: saved ? saved.slots.map((s) => ({ ...s })) : createEmptyInventory(),
       selectedSlot: saved?.selectedIndex ?? 0,
+      armor: saved?.armor ? saved.armor.map((s) => ({ ...s })) : Array.from({ length: 4 }, createEmptySlot),
+      armorSpill: 0,
       openFurnace: null,
       openChest: null,
-      air: new PlayerAir(() => this.hurtPlayer(id, DROWN_DAMAGE, undefined, true)),
+      air: new PlayerAir(() => this.hurtPlayer(id, DROWN_DAMAGE, undefined, true, undefined, true)),
       lavaTimer: 0,
       fireTimer: 0,
       fireTicksLeft: 0,
@@ -1835,6 +1849,7 @@ export class WorldDO implements DurableObject {
         pitch: s.pitch,
         sneaking: s.intent.sneaking,
         heldItem: s.inventory[s.selectedSlot]?.id ?? null,
+        armor: s.armor.map((a) => a.id),
       })),
       ...this.mobs.snapshots(),
     ];
@@ -2009,11 +2024,38 @@ export class WorldDO implements DurableObject {
    * i-frame window a hostile hit just started - same split singleplayer
    * makes at main.ts's own damage() call sites.
    */
-  private hurtPlayer(playerId: number, damage: number, killedBy?: string, ignoreInvuln = false, fromPos?: THREE.Vector3): void {
+  /** Spends `amount` durability on every equipped armor piece independently (LCE Inventory::hurtArmor), removing any that reach their max, and pushing the result to the client. */
+  private damageArmor(session: Session, amount: number): void {
+    let changed = false;
+    for (let slot = 0; slot < 4; slot++) {
+      const item = session.armor[slot];
+      const uses = armorDurability(item.id);
+      if (uses <= 0) continue;
+      const damage = (item.damage ?? 0) + amount;
+      session.armor[slot] = damage >= uses ? createEmptySlot() : { ...item, damage };
+      changed = true;
+    }
+    if (changed) this.sendInventory(session);
+  }
+
+  private hurtPlayer(playerId: number, rawDamage: number, killedBy?: string, ignoreInvuln = false, fromPos?: THREE.Vector3, bypassArmor = false): void {
     const session = this.sessionById(playerId);
     if (!session || session.dead) return; // a corpse can't be hurt again
     const now = Date.now();
     if (!ignoreInvuln && now < session.invulnUntilMs) return;
+    // LCE Mob::getDamageAfterArmorAbsorb/Inventory::hurtArmor - drowning
+    // (bypassArmor) skips both the defense reduction and the durability
+    // loss, same as vanilla's magic/drown damage sources.
+    let damage = rawDamage;
+    if (!bypassArmor) {
+      const armorValue = totalArmorValue(session.armor.map((s) => s.id));
+      if (armorValue > 0) {
+        const reduced = reduceDamageByArmor(rawDamage, armorValue, session.armorSpill);
+        damage = reduced.damage;
+        session.armorSpill = reduced.spill;
+        this.damageArmor(session, armorHurtAmount(rawDamage));
+      }
+    }
     session.health = Math.max(0, session.health - damage);
     if (!ignoreInvuln) session.invulnUntilMs = now + PLAYER_HURT_INVULN_MS;
     // Same shove as main.ts's hurtPlayerFromMob - only for a real attack
@@ -2229,6 +2271,7 @@ export class WorldDO implements DurableObject {
     const record: PlayerRecord = {
       slots: session.inventory,
       selectedIndex: session.selectedSlot,
+      armor: session.armor,
       health: session.health,
       x: p.x, y: p.y, z: p.z,
       yaw: session.yaw, pitch: session.pitch,

@@ -33,7 +33,8 @@ import { ItemId } from './item';
 import { PlayerAir } from './player-air';
 import { InventoryDoll } from './inventory-doll';
 import { FirstPersonHand } from './first-person-hand';
-import { PlayerHealth } from './player-health';
+import { PlayerHealth, type DamageOptions } from './player-health';
+import { totalArmorValue, reduceDamageByArmor, armorHurtAmount } from './armor';
 import { loadPlayerSave, savePlayerSave } from './player-store';
 import { playClick } from './ui-sound';
 import { CraftingTableUI } from './crafting-table-ui';
@@ -318,6 +319,12 @@ const inventory = new Inventory(
     inventoryDoll.setActive(open);
     if (!open) persistPlayer();
   },
+  (equipped) => {
+    playerModel.setArmor(equipped);
+    inventoryDoll.setArmor(equipped);
+    hud.setArmor(totalArmorValue(equipped));
+    soundManager.playRandom('items/Equip_armor', 3, 0.6);
+  },
 );
 const craftingTableUI = new CraftingTableUI(inventory, (open) => {
   inventoryOpen = open;
@@ -383,7 +390,7 @@ const PLAYER_KNOCKBACK_UP = 4;
 // feel as the knockback a hit mob already gets, KNOCKBACK_SPEED/UP in
 // mob-manager.ts).
 function hurtPlayerFromMob(damage: number, fromPos: THREE.Vector3): void {
-  playerHealth.damage(damage, { cause: 'generic' });
+  dealDamage(damage, { cause: 'generic' });
   hud.setHealth(playerHealth.current);
   const dx = player.state.position.x - fromPos.x;
   const dz = player.state.position.z - fromPos.z;
@@ -486,6 +493,32 @@ const playerHealth = new PlayerHealth(
     else soundManager.playRandom('player/Player_hurt', 3, 0.7);
   },
 );
+/**
+ * Every real damage source funnels through here instead of calling
+ * playerHealth.damage() directly, so armor (LCE Mob::getDamageAfterArmorAbsorb
+ * / Inventory::hurtArmor) is applied uniformly: reduces the amount that
+ * actually lands, carries the fractional remainder into the next hit
+ * (reduceDamageByArmor's `spill`), and spends durability on every equipped
+ * piece independently. Drowning bypasses armor entirely, same as vanilla's
+ * magic/drown damage sources.
+ */
+let armorSpill = 0;
+function dealDamage(rawAmount: number, opts: DamageOptions = {}): void {
+  if ((opts.cause ?? 'generic') === 'drown') {
+    playerHealth.damage(rawAmount, opts);
+    return;
+  }
+  const armorValue = totalArmorValue(inventory.getArmor().map((s) => s.id));
+  if (armorValue > 0) {
+    const { damage, spill } = reduceDamageByArmor(rawAmount, armorValue, armorSpill);
+    armorSpill = spill;
+    inventory.damageArmor(armorHurtAmount(rawAmount));
+    playerHealth.damage(damage, opts);
+  } else {
+    playerHealth.damage(rawAmount, opts);
+  }
+}
+
 const lastHurtSoundAt: Record<string, number> = {};
 let lavaTimer = 0;
 let fireTimer = 0;
@@ -499,7 +532,7 @@ let playerOnFire = false;
 
 // Breath: drowning damage while the head is underwater (LCE Mob::aiStep).
 const playerAir = new PlayerAir(() => {
-  playerHealth.damage(2, { ignoreInvuln: true, cause: 'drown' });
+  dealDamage(2, { ignoreInvuln: true, cause: 'drown' });
   hud.setHealth(playerHealth.current);
 });
 
@@ -543,6 +576,7 @@ function persistPlayer() {
     health: playerHealth.current,
     selectedIndex: inv.selectedIndex,
     slots: inv.slots,
+    armor: inv.armor,
     dayTime: dayNightCycle.getCycleTime(),
   });
 }
@@ -562,7 +596,7 @@ if (playerSave) {
       slot.sideTexture = 'blocks/wool.png';
     }
   }
-  inventory.load({ slots: playerSave.slots, selectedIndex: playerSave.selectedIndex });
+  inventory.load({ slots: playerSave.slots, selectedIndex: playerSave.selectedIndex, armor: playerSave.armor });
   if (savedAlive && typeof playerSave.health === 'number') {
     playerHealth.current = Math.min(20, playerSave.health);
   }
@@ -681,7 +715,7 @@ function animate() {
 
     const fall = player.consumeFallImpact();
     if (fall > 3.5) {
-      playerHealth.damage(Math.ceil(fall - 3), { cause: 'fall' });
+      dealDamage(Math.ceil(fall - 3), { cause: 'fall' });
       hud.setHealth(playerHealth.current);
     }
 
@@ -703,14 +737,14 @@ function animate() {
       // immediately instead of waiting out a full 0.5s tick before the first hit.
       if (lavaTimer === 0) lavaTimer = 0.5;
       lavaTimer += delta;
-      if (lavaTimer >= 0.5) { lavaTimer -= 0.5; playerHealth.damage(2, { ignoreInvuln: true, cause: 'fire' }); hud.setHealth(playerHealth.current); }
+      if (lavaTimer >= 0.5) { lavaTimer -= 0.5; dealDamage(2, { ignoreInvuln: true, cause: 'fire' }); hud.setHealth(playerHealth.current); }
     } else {
       lavaTimer = 0;
     }
     if (inFire) {
       if (fireTimer === 0) fireTimer = 0.5;
       fireTimer += delta;
-      if (fireTimer >= 0.5) { fireTimer -= 0.5; playerHealth.damage(1, { ignoreInvuln: true, cause: 'fire' }); hud.setHealth(playerHealth.current); }
+      if (fireTimer >= 0.5) { fireTimer -= 0.5; dealDamage(1, { ignoreInvuln: true, cause: 'fire' }); hud.setHealth(playerHealth.current); }
     } else {
       fireTimer = 0;
     }
@@ -729,7 +763,7 @@ function animate() {
       if (playerFireTickTimer >= PLAYER_FIRE_TICK_INTERVAL) {
         playerFireTickTimer -= PLAYER_FIRE_TICK_INTERVAL;
         playerFireTicksLeft -= 1;
-        playerHealth.damage(1, { ignoreInvuln: true, cause: 'fire' });
+        dealDamage(1, { ignoreInvuln: true, cause: 'fire' });
         hud.setHealth(playerHealth.current);
       }
     } else {

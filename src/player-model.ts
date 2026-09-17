@@ -7,7 +7,10 @@ import {
   getAtlasMaterial, getOverlayMaterial, getSkinAtlasMaterial, applySkinTexture, resetSkinTexture,
   buildArmGeometry, buildArmMesh, buildPlayerModelParts, type PlayerModelParts,
   createSkinMaterials, disposeSkinMaterials, type PlayerSkinMaterials, NECK_PIVOT_Y,
+  addArmorOverlay, getArmorMaterial, SKIN_UV, ARM_WIDTH, ARM_WIDTH_SLIM,
 } from './player-model-geometry';
+import { MIRROR_U } from './atlas-box';
+import { armorSpec, type ArmorSlotIndex } from './armor';
 import { createFireOverlay } from './fire-overlay';
 import { Cape } from './cape';
 
@@ -51,6 +54,9 @@ export class PlayerModel {
   private readonly parts: PlayerModelParts;
   private armLeft?: THREE.Mesh;
   private armRight?: THREE.Mesh;
+  /** Armor shells currently attached, indexed [helmet, chestplate, leggings, boots] - see setArmor(). */
+  private readonly armorShells: THREE.Mesh[][] = [[], [], [], []];
+  private readonly equippedArmorIds: (number | null)[] = [null, null, null, null];
   private armLeftRotation = 0;
   private armRightRotation = 0;
   private heldMesh?: THREE.Group;
@@ -145,6 +151,65 @@ export class PlayerModel {
     this.slimArms = slim;
     this.armLeft = buildArmMesh(this.parts.armLeftGroup, 'left', slim, this.armLeft, this.materials);
     this.armRight = buildArmMesh(this.parts.armRightGroup, 'right', slim, this.armRight, this.materials);
+    // buildArmMesh disposed the old arm meshes wholesale (traversing every
+    // child, including any chestplate sleeve shell attached to them) - if a
+    // chestplate is worn, its sleeves just got thrown away with the old arms
+    // and need rebuilding onto the new ones.
+    const chestId = this.equippedArmorIds[1];
+    if (chestId != null) {
+      const spec = armorSpec(chestId);
+      this.armorShells[1] = spec ? this.buildArmorShells(1, spec.material) : [];
+    }
+  }
+
+  /**
+   * Equips/unequips the 4 armor slots (helmet, chestplate, leggings, boots -
+   * LCE's own ArmorItem slot order) by item id, building/removing the
+   * matching textured shell(s) on the head/torso/arms/legs. `null` = empty.
+   */
+  setArmor(equipped: readonly (number | null)[]): void {
+    for (let slot = 0; slot < 4; slot++) {
+      const id = equipped[slot] ?? null;
+      if (id === this.equippedArmorIds[slot]) continue;
+      this.equippedArmorIds[slot] = id;
+      for (const shell of this.armorShells[slot]) {
+        shell.parent?.remove(shell);
+        shell.geometry.dispose();
+      }
+      const spec = armorSpec(id);
+      this.armorShells[slot] = spec ? this.buildArmorShells(slot as ArmorSlotIndex, spec.material) : [];
+    }
+  }
+
+  /**
+   * Boots use a shorter shell anchored at the bottom of the leg (see
+   * addArmorOverlay's heightOverride/yOffset) instead of covering the whole
+   * thing - otherwise it would sit exactly flush with leggings' own full-leg
+   * shell and z-fight against it whenever both are worn together.
+   */
+  private static readonly BOOT_HEIGHT = 0.28;
+  private static readonly BOOT_Y_OFFSET = -(0.76 - PlayerModel.BOOT_HEIGHT) / 2;
+
+  private buildArmorShells(slot: ArmorSlotIndex, material: 'iron' | 'gold' | 'diamond'): THREE.Mesh[] {
+    const shells: THREE.Mesh[] = [];
+    if (slot === 0) {
+      shells.push(addArmorOverlay(this.parts.head, 0.55, 0.55, 0.55, SKIN_UV.head, undefined, getArmorMaterial(material, 1)));
+    } else if (slot === 1) {
+      const mat = getArmorMaterial(material, 1);
+      const armWidth = this.slimArms ? ARM_WIDTH_SLIM : ARM_WIDTH;
+      shells.push(addArmorOverlay(this.parts.torso, 0.55, 0.76, 0.275, SKIN_UV.torso, undefined, mat));
+      if (this.armRight) shells.push(addArmorOverlay(this.armRight, armWidth, 0.76, 0.275, SKIN_UV.armRight, undefined, mat));
+      if (this.armLeft) shells.push(addArmorOverlay(this.armLeft, armWidth, 0.76, 0.275, SKIN_UV.armLeft, MIRROR_U, mat));
+    } else if (slot === 2) {
+      const mat = getArmorMaterial(material, 2);
+      shells.push(addArmorOverlay(this.parts.legRight, 0.275, 0.76, 0.275, SKIN_UV.legRight, undefined, mat));
+      shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legLeft, MIRROR_U, mat));
+    } else {
+      const mat = getArmorMaterial(material, 1);
+      shells.push(addArmorOverlay(this.parts.legRight, 0.275, 0.76, 0.275, SKIN_UV.legRight, undefined, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
+      shells.push(addArmorOverlay(this.parts.legLeft, 0.275, 0.76, 0.275, SKIN_UV.legLeft, MIRROR_U, mat, PlayerModel.BOOT_HEIGHT, PlayerModel.BOOT_Y_OFFSET));
+    }
+    return shells;
   }
 
   /**
@@ -615,6 +680,13 @@ export class PlayerModel {
     }
     this.lightLevel = level01;
     if (this.heldMesh) tintByLight(this.heldMesh, level01);
+    // Armor materials are shared/cached (getArmorMaterial), same tradeoff
+    // atlas/overlay above already make - tinting one player's gear also
+    // affects everyone else wearing the same material+layer, acceptable for
+    // now since armor colour doesn't otherwise change per-player.
+    for (const shells of this.armorShells) {
+      for (const shell of shells) (shell.material as THREE.MeshBasicMaterial).color.setScalar(b);
+    }
   }
 
   /**

@@ -1,5 +1,6 @@
 import { renderBlockPreview, renderItemIcon } from './block-preview';
 import { isBlock, maxStackOf } from './item';
+import { armorSlotFor, armorDurability } from './armor';
 import { maxDurability } from './tools';
 import { showTooltip, hideTooltip } from './tooltip';
 import { showHeldItemName } from './held-item-name';
@@ -80,6 +81,8 @@ export type ExtSlot = {
   read: () => InventorySlot;
   write: (slot: InventorySlot | null) => void;
   takeOnly?: boolean;                          // e.g. a furnace output slot
+  /** Refuses placing a stack that fails this check (e.g. an armor slot only taking its own piece) - a no-op click/deposit instead of accepting it. */
+  canAccept?: (item: InventorySlot) => boolean;
 };
 
 type SlotSource =
@@ -117,6 +120,10 @@ export class Inventory {
   private heldFrom: SlotSource = null;
   private ghostElement: HTMLElement | null = null;
 
+  /** [helmet, chestplate, leggings, boots] - LCE's own ArmorItem slot order. */
+  private readonly armor: InventorySlot[] = Array.from({ length: 4 }, createEmptySlot);
+  private readonly armorEls: (HTMLElement | null)[] = [null, null, null, null];
+
   /** True while an external GUI (crafting table) owns the screen; suppresses the E toggle. */
   private externalUiOpen = false;
   private externalUiCloser: (() => void) | null = null;
@@ -137,6 +144,8 @@ export class Inventory {
   constructor(
     private readonly onSelect: (id: number | null) => void,
     private readonly onToggle?: (open: boolean) => void,
+    /** Fired with the 4 equipped item ids (null = empty) whenever one actually changes - drives PlayerModel.setArmor(), the armor HUD row, and the equip sound. */
+    private readonly onArmorChange?: (equipped: (number | null)[]) => void,
   ) {
     const hotbarRoot = document.querySelector<HTMLElement>('#inventory')!;
     const backpackGrid = document.querySelector<HTMLElement>('#backpack-grid')!;
@@ -159,6 +168,7 @@ export class Inventory {
     });
 
     this.setupCraftGrid();
+    this.setupArmorSlots();
 
     // Listen on the document, not the hotbar element: while the pointer is
     // locked during gameplay the wheel event's target stays wherever the
@@ -183,6 +193,49 @@ export class Inventory {
     );
     const outputEl = this.backpackPanel.querySelector<HTMLButtonElement>('#backpack-panel .craft-result');
     if (inputEls.length >= 4 && outputEl) this.bindCraftGrid(this.craftGrid, inputEls, outputEl);
+  }
+
+  /** The 4 armor slots next to the paper doll (index.html's #armor-slot-0..3, 0=helmet..3=boots) - each only accepts its own piece (LCE ArmorSlot.cpp). */
+  private setupArmorSlots() {
+    for (let slot = 0; slot < 4; slot++) {
+      const el = this.backpackPanel.querySelector<HTMLElement>(`#armor-slot-${slot}`);
+      if (!el) continue;
+      this.armorEls[slot] = el;
+      renderSlot(el, this.armor[slot]);
+      this.bindExternalSlot(el, {
+        id: `armor:${slot}`,
+        canAccept: (item) => armorSlotFor(item.id) === slot,
+        read: () => this.armor[slot],
+        write: (s) => {
+          const next = s ?? createEmptySlot();
+          const changed = (this.armor[slot].id ?? null) !== (next.id ?? null);
+          this.armor[slot] = next;
+          renderSlot(el, next);
+          if (changed) this.onArmorChange?.(this.armor.map((a) => a.id));
+        },
+      });
+    }
+  }
+
+  /** Read-only view of the 4 equipped armor slots (helmet, chestplate, leggings, boots). */
+  getArmor(): readonly InventorySlot[] {
+    return this.armor;
+  }
+
+  /** Spends `amount` durability on EVERY equipped armor piece (LCE Inventory::hurtArmor - each piece takes the full hit independently, not split between them), removing any that reach their max. Call with the amount from armorHurtAmount(rawDamage), not the reduced damage. */
+  damageArmor(amount: number): void {
+    let changed = false;
+    for (let slot = 0; slot < 4; slot++) {
+      const item = this.armor[slot];
+      const uses = armorDurability(item.id);
+      if (uses <= 0) continue;
+      const damage = (item.damage ?? 0) + amount;
+      this.armor[slot] = damage >= uses ? createEmptySlot() : { ...item, damage };
+      const el = this.armorEls[slot];
+      if (el) renderSlot(el, this.armor[slot]);
+      changed = true;
+    }
+    if (changed) this.onArmorChange?.(this.armor.map((a) => a.id));
   }
 
   /** Wire a crafting grid's DOM (inputs + result) into the shared held-item flow. */
@@ -227,6 +280,10 @@ export class Inventory {
       for (const el of this.elementsByIndex[i] ?? []) renderSlot(el, this.slots[i]);
     }
     this.craftGrid.refresh();
+    for (let slot = 0; slot < 4; slot++) {
+      const el = this.armorEls[slot];
+      if (el) renderSlot(el, this.armor[slot]);
+    }
   }
 
   /**
@@ -431,15 +488,16 @@ export class Inventory {
   }
 
   /** Snapshot of every slot + the selected hotbar index, for world save. */
-  serialize(): { slots: InventorySlot[]; selectedIndex: number } {
+  serialize(): { slots: InventorySlot[]; selectedIndex: number; armor: InventorySlot[] } {
     return {
       slots: this.slots.map((s) => ({ ...s })),
       selectedIndex: this.selectedIndex,
+      armor: this.armor.map((s) => ({ ...s })),
     };
   }
 
-  /** Restore a snapshot from serialize() (used when a world is loaded). */
-  load(data: { slots: InventorySlot[]; selectedIndex?: number }) {
+  /** Restore a snapshot from serialize() (used when a world is loaded). `armor` is optional - absent on saves from before armor existed. */
+  load(data: { slots: InventorySlot[]; selectedIndex?: number; armor?: InventorySlot[] }) {
     for (let i = 0; i < TOTAL_SLOTS; i++) {
       this.slots[i] = normalizeSlot(data.slots[i] ?? null);
       for (const element of this.elementsByIndex[i] ?? []) {
@@ -447,6 +505,12 @@ export class Inventory {
       }
     }
     this.select(Math.min(Math.max(data.selectedIndex ?? 0, 0), HOTBAR_SIZE - 1));
+    for (let slot = 0; slot < 4; slot++) {
+      this.armor[slot] = normalizeSlot(data.armor?.[slot] ?? null);
+      const el = this.armorEls[slot];
+      if (el) renderSlot(el, this.armor[slot]);
+    }
+    this.onArmorChange?.(this.armor.map((a) => a.id));
   }
 
   /** Pick up a full stack from the creative palette (infinite supply). */
@@ -565,8 +629,10 @@ export class Inventory {
 
   private onSlotClick(src: NonNullable<SlotSource>) {
     if (this.consumeClickSuppression()) return;
-    if (this.heldItem) this.placeHeld(src);
-    else this.pickUpFrom(src);
+    if (this.heldItem) {
+      if (src.kind === 'ext' && src.ext.canAccept && !src.ext.canAccept(this.heldItem)) return;
+      this.placeHeld(src);
+    } else this.pickUpFrom(src);
   }
 
   private onSlotRightClick(src: NonNullable<SlotSource>) {
@@ -580,6 +646,7 @@ export class Inventory {
   private depositOne(src: NonNullable<SlotSource>): boolean {
     if (!this.heldItem) return false;
     if (src.kind === 'ext' && src.ext.takeOnly) return false;
+    if (src.kind === 'ext' && src.ext.canAccept && !src.ext.canAccept(this.heldItem)) return false;
     const held = this.heldItem;
     const slot = this.readSlot(src);
     if (slot.id === null) {

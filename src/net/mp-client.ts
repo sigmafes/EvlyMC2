@@ -13,7 +13,7 @@ export type MpClientHandlers = {
   onEntityBreakCancel: (id: number) => void;
   onPlayerSkin: (playerId: number, skin: string | null) => void;
   onDayTime: (elapsed: number) => void;
-  onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number) => void;
+  onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number, armor: InventorySlot[]) => void;
   onCraftableRecipes: (recipes: { index: number; out: { id: number; count: number } }[]) => void;
   onFurnaceState: (x: number, y: number, z: number, state: FurnaceState) => void;
   onChestState: (x: number, y: number, z: number, state: ChestState) => void;
@@ -69,7 +69,7 @@ export class MpClient {
         case 'entityBreakCancel': handlers.onEntityBreakCancel(msg.id); break;
         case 'playerSkin': handlers.onPlayerSkin(msg.playerId, msg.skin); break;
         case 'dayTime': handlers.onDayTime(msg.elapsed); break;
-        case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex); break;
+        case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex, msg.armor); break;
         case 'craftableRecipes': handlers.onCraftableRecipes(msg.recipes); break;
         case 'furnaceState': handlers.onFurnaceState(msg.x, msg.y, msg.z, msg.state); break;
         case 'chestState': handlers.onChestState(msg.x, msg.y, msg.z, msg.state); break;

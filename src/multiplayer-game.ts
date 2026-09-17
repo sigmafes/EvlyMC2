@@ -45,12 +45,13 @@ import { createArrowMesh, orientArrowMesh } from './arrow-projectiles';
 import { AmbientSoundEngine } from './ambient-sound';
 import { WorldMusic } from './world-music';
 import { ParticleSystem } from './particles';
-import { updateFireOverlayAnimation } from './fire-overlay';
+import { updateFireOverlayAnimation, getFireFrameIndex } from './fire-overlay';
 import { SmokeParticles } from './smoke-particles';
 import { ChestRenderer } from './chest-renderer';
 import { UnderwaterManager } from './underwater-manager';
 import { computeDayNightState, resolveCycleTime, NIGHT_SKY_DARKEN } from './day-night-math';
 import type { EntitySnapshot, DroppedItemSnapshot, ArrowSnapshot, CraftSlotRef } from './net/protocol';
+import { armorSlotFor, totalArmorValue } from './armor';
 import type { BlockData } from './block-data';
 
 /**
@@ -206,11 +207,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   hudEl.hidden = true;
   hudEl.innerHTML = [
     '<div id="mp-hud-bubbles" hidden></div>',
+    '<div id="mp-hud-armor" hidden></div>',
     '<div id="mp-hud-hearts"></div>',
     '<div id="mp-hud-xp"><div id="mp-hud-xp-fill"></div></div>',
   ].join('');
   document.body.appendChild(hudEl);
-  const hud = new Hud({ hearts: '#mp-hud-hearts', bubbles: '#mp-hud-bubbles', xpFill: '#mp-hud-xp-fill' });
+  const hud = new Hud({ hearts: '#mp-hud-hearts', bubbles: '#mp-hud-bubbles', xpFill: '#mp-hud-xp-fill', armor: '#mp-hud-armor' });
   const menu = document.querySelector<HTMLElement>('#main-menu')!;
   const connectScreen = document.querySelector<HTMLElement>('#multiplayer-connect')!;
   // #game-shell (singleplayer's HUD/hotbar/crosshair/chat/game-canvas) is
@@ -870,6 +872,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   }
   document.body.appendChild(hotbarEl);
   let inventorySlots: InventorySlot[] = Array.from({ length: TOTAL_SLOTS }, createEmptySlot);
+  /** [helmet, chestplate, leggings, boots] - server-authoritative, same "local mirror" reasoning as inventorySlots/heldItem above. */
+  let armorSlots: InventorySlot[] = Array.from({ length: 4 }, createEmptySlot);
   let selectedSlotIndex = 0;
   /** Same key scheme as singleplayer's Inventory.announceHeld - `index:id`, so a stack-count-only change (mining, placing) doesn't re-flash the name. */
   let lastHeldKey: string | null = null;
@@ -1041,7 +1045,33 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const backpackDollEl = document.createElement('canvas');
   backpackDollEl.id = 'mp-backpack-doll';
   backpackDollEl.setAttribute('aria-hidden', 'true');
-  backpackPanelEl.append(backpackDollEl, backpackCraftEl, backpackCraftResultEl, backpackGridEl, backpackHotbarEl);
+  // 4 armor slots to the left of the doll - same #armor-slot-N ids/CSS
+  // singleplayer's own #backpack-panel uses (style.css), each only
+  // accepting its own piece (server-enforced too, see world-do.ts's
+  // handleInvPlace armorSlotFor check - this client-side one is just so a
+  // rejected drop doesn't leave a stale ghost cursor).
+  const armorSlotsEl = document.createElement('div');
+  armorSlotsEl.id = 'armor-slots';
+  const armorSlotEls: HTMLButtonElement[] = [];
+  for (let slot = 0; slot < 4; slot++) {
+    const btn = document.createElement('button');
+    btn.className = 'inventory-slot armor-slot';
+    btn.type = 'button';
+    const ref: CraftSlotRef = { zone: 'armor', index: slot };
+    slotRefByEl.set(btn, ref);
+    btn.addEventListener('click', () => {
+      if (heldItem && armorSlotFor(heldItem.id) !== slot) return;
+      onSlotClick(ref);
+    });
+    btn.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (heldItem && armorSlotFor(heldItem.id) !== slot) return;
+      onSlotRightClick(ref, btn);
+    });
+    armorSlotsEl.appendChild(btn);
+    armorSlotEls.push(btn);
+  }
+  backpackPanelEl.append(backpackDollEl, armorSlotsEl, backpackCraftEl, backpackCraftResultEl, backpackGridEl, backpackHotbarEl);
   backpackEl.appendChild(backpackPanelEl);
   document.body.appendChild(backpackEl);
   // Same delegated UI click as pause-menu.ts's own root listener.
@@ -1065,6 +1095,9 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     }
     for (let i = 0; i < backpackHotbarEls.length; i++) {
       renderSlot(backpackHotbarEls[i], inventorySlots[i] ?? createEmptySlot());
+    }
+    for (let i = 0; i < armorSlotEls.length; i++) {
+      renderSlot(armorSlotEls[i], armorSlots[i] ?? createEmptySlot());
     }
   }
   function setBackpackOpen(open: boolean): void {
@@ -2673,6 +2706,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
           op.lastPitch = e.pitch ?? 0;
           op.sneaking = e.sneaking ?? false;
           op.heldItem = e.heldItem ?? null;
+          op.playerModel.setArmor(e.armor ?? [null, null, null, null]);
         }
         // A player respawns in place (unlike a mob, which is gone for good
         // once its topple finishes) - the server's snapshot goes back to
@@ -2791,9 +2825,22 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       if (backpackOpen) setBackpackOpen(false); // force-close if it happened to be open the moment death landed
     },
     onDayTime: (elapsed) => { clientDayTime = elapsed; },
-    onInventoryUpdate: (slots, selectedIndex) => {
+    onInventoryUpdate: (slots, selectedIndex, armor) => {
       inventorySlots = slots;
       selectedSlotIndex = selectedIndex;
+      // Compare before overwriting - a real equip/unequip (not just the
+      // furnace-output-style resend) plays the same click LCE uses for both
+      // directions, and re-poses the local body + doll + HUD row.
+      const prevIds = armorSlots.map((s) => s.id);
+      const nextIds = armor.map((s) => s.id);
+      const armorChanged = prevIds.some((id, i) => id !== nextIds[i]);
+      armorSlots = armor;
+      if (armorChanged) {
+        localPlayerModel?.setArmor(nextIds);
+        backpackDoll.setArmor(nextIds);
+        hud.setArmor(totalArmorValue(nextIds));
+        soundManager.playRandom('items/Equip_armor', 3, 0.6);
+      }
       announceHeldIfChanged();
       // Wait for the block/item atlas (see terrainReady's doc comment) so a
       // slot never renders before it can show its real texture.
@@ -2957,6 +3004,17 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // singleplayer, but multiplayer's own frame loop never did, so any
     // burning mob/player here showed a static (non-scrolling) fire frame.
     updateFireOverlayAnimation(now / 1000);
+    // The full-screen fire overlay (#mp-fire-overlay) never got the same
+    // background-size/position math main.ts:749-751 applies for its own
+    // #fire-screen-overlay - without it, the element fell back to the raw
+    // fire_atlas.png strip's intrinsic size (32 stacked frames) instead of
+    // one frame cropped to the element's own height, painting huge blown-up
+    // black/orange chunks of the atlas across the whole screen while on fire.
+    if (fireOverlayEl.classList.contains('active')) {
+      const h = fireOverlayEl.clientHeight;
+      fireOverlayEl.style.backgroundSize = `100% ${h * 32}px`;
+      fireOverlayEl.style.backgroundPositionY = `-${getFireFrameIndex(now / 1000) * h}px`;
+    }
     chestRenderer.update(delta);
     // Position is always the server's last confirmed value (no local
     // prediction yet - see the module doc comment); look direction is local

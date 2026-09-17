@@ -177,6 +177,7 @@
       </div>
       <div id="hud" aria-hidden="true">
         <div id="hud-bubbles" hidden></div>
+        <div id="hud-armor" hidden></div>
         <div id="hud-hearts"></div>
         <div id="hud-xp"><div id="hud-xp-fill"></div></div>
       </div>
@@ -184,6 +185,12 @@
       <section id="backpack" hidden aria-label="Inventario">
         <div id="backpack-panel">
           <canvas id="backpack-doll" aria-hidden="true"></canvas>
+          <div id="armor-slots" aria-label="Armor">
+            <button class="inventory-slot armor-slot" id="armor-slot-0" type="button" aria-label="Helmet"></button>
+            <button class="inventory-slot armor-slot" id="armor-slot-1" type="button" aria-label="Chestplate"></button>
+            <button class="inventory-slot armor-slot" id="armor-slot-2" type="button" aria-label="Leggings"></button>
+            <button class="inventory-slot armor-slot" id="armor-slot-3" type="button" aria-label="Boots"></button>
+          </div>
           <div id="backpack-craft" aria-label="Crafting 2x2">
             <button class="inventory-slot craft-slot" type="button" data-craft="0"></button>
             <button class="inventory-slot craft-slot" type="button" data-craft="1"></button>

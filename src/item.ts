@@ -65,6 +65,19 @@ export const ItemId = {
   BOW: 147,
   STRING: 148,
   BONE: 149,
+
+  IRON_HELMET: 150,
+  IRON_CHESTPLATE: 151,
+  IRON_LEGGINGS: 152,
+  IRON_BOOTS: 153,
+  GOLDEN_HELMET: 154,
+  GOLDEN_CHESTPLATE: 155,
+  GOLDEN_LEGGINGS: 156,
+  GOLDEN_BOOTS: 157,
+  DIAMOND_HELMET: 158,
+  DIAMOND_CHESTPLATE: 159,
+  DIAMOND_LEGGINGS: 160,
+  DIAMOND_BOOTS: 161,
 } as const;
 export type ItemId = (typeof ItemId)[keyof typeof ItemId];
 
@@ -123,6 +136,19 @@ export const ITEMS: Record<number, ItemDef> = {
   [ItemId.GOLDEN_SWORD]: TOOL('Golden Sword', 'items/gold_sword.png'),
   [ItemId.DIAMOND_SWORD]: TOOL('Diamond Sword', 'items/diamond_sword.png'),
   [ItemId.FLINT_AND_STEEL]: TOOL('Flint and Steel', 'items/flint_and_steel.png'),
+
+  [ItemId.IRON_HELMET]: TOOL('Iron Helmet', 'items/iron_helmet.png'),
+  [ItemId.IRON_CHESTPLATE]: TOOL('Iron Chestplate', 'items/iron_chest.png'),
+  [ItemId.IRON_LEGGINGS]: TOOL('Iron Leggings', 'items/iron_leg.png'),
+  [ItemId.IRON_BOOTS]: TOOL('Iron Boots', 'items/iron_boots.png'),
+  [ItemId.GOLDEN_HELMET]: TOOL('Golden Helmet', 'items/gold_helmet.png'),
+  [ItemId.GOLDEN_CHESTPLATE]: TOOL('Golden Chestplate', 'items/gold_chest.png'),
+  [ItemId.GOLDEN_LEGGINGS]: TOOL('Golden Leggings', 'items/gold_leg.png'),
+  [ItemId.GOLDEN_BOOTS]: TOOL('Golden Boots', 'items/gold_boots.png'),
+  [ItemId.DIAMOND_HELMET]: TOOL('Diamond Helmet', 'items/diamond_helmet.png'),
+  [ItemId.DIAMOND_CHESTPLATE]: TOOL('Diamond Chestplate', 'items/diamond_chest.png'),
+  [ItemId.DIAMOND_LEGGINGS]: TOOL('Diamond Leggings', 'items/diamond_leg.png'),
+  [ItemId.DIAMOND_BOOTS]: TOOL('Diamond Boots', 'items/diamond_boots.png'),
 
   [ItemId.ROTTEN_FLESH]: { name: 'Rotten Flesh', texture: 'items/rotten_flesh.png', maxStack: 64, food: 1 },
   [ItemId.FLINT]: MAT('Flint', 'items/flint.png'),

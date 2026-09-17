@@ -3,15 +3,18 @@ import halfHeart from '../gui/heart_half.png';
 import bubbleFull from '../gui/bubble.png';
 import bubblePop from '../gui/bubble_pop.png';
 import bubbleEmpty from '../gui/bubble_empty.png';
+import armorFull from '../gui/armor_full.png';
+import armorHalf from '../gui/armor_half.png';
 
 const MAX_HEARTS = 10; // 20 health points, 2 per heart
 const MAX_BUBBLES = 10; // 300 air ticks, 30 per bubble
+const MAX_ARMOR_ICONS = 10; // 20 armor points, 2 per icon - same scale as hearts
 const POP_MS = 220;
 
-export type HudIds = { hearts: string; bubbles: string; xpFill: string };
+export type HudIds = { hearts: string; bubbles: string; xpFill: string; armor: string };
 
 /** Singleplayer's own DOM ids - the default so `new Hud()` behaves exactly as before. */
-const DEFAULT_IDS: HudIds = { hearts: '#hud-hearts', bubbles: '#hud-bubbles', xpFill: '#hud-xp-fill' };
+const DEFAULT_IDS: HudIds = { hearts: '#hud-hearts', bubbles: '#hud-bubbles', xpFill: '#hud-xp-fill', armor: '#hud-armor' };
 
 /**
  * In-game HUD stats above the hotbar: air bubbles (only while submerged), the
@@ -26,7 +29,9 @@ const DEFAULT_IDS: HudIds = { hearts: '#hud-hearts', bubbles: '#hud-bubbles', xp
 export class Hud {
   private readonly hearts: HTMLElement[] = [];
   private readonly bubbles: HTMLElement[] = [];
+  private readonly armorIcons: HTMLElement[] = [];
   private readonly bubblesRoot: HTMLElement;
+  private readonly armorRoot: HTMLElement;
   private readonly xpFill: HTMLElement;
   private prevAir = MAX_BUBBLES;
   private popIndex = -1;
@@ -49,9 +54,18 @@ export class Hud {
       this.bubbles.push(bubble);
     }
 
+    this.armorRoot = document.querySelector<HTMLElement>(ids.armor)!;
+    for (let i = 0; i < MAX_ARMOR_ICONS; i++) {
+      const icon = document.createElement('div');
+      icon.className = 'hud-armor-icon';
+      this.armorRoot.appendChild(icon);
+      this.armorIcons.push(icon);
+    }
+
     this.xpFill = document.querySelector<HTMLElement>(ids.xpFill)!;
     this.setHealth(20);
     this.setAir(MAX_BUBBLES, true);
+    this.setArmor(0);
     this.setXp(0);
   }
 
@@ -85,6 +99,17 @@ export class Hud {
       if (i < points) img = bubbleFull;
       else if (i === this.popIndex && now < this.popUntil) img = bubblePop;
       this.bubbles[i].style.backgroundImage = `url(${img})`;
+    }
+  }
+
+  /** points: 0..20. Row hides entirely at 0, same as vanilla (no armor worn -> nothing to show). */
+  setArmor(points: number): void {
+    this.armorRoot.hidden = points <= 0;
+    if (points <= 0) return;
+    for (let i = 0; i < MAX_ARMOR_ICONS; i++) {
+      const v = points - i * 2;
+      const img = v >= 2 ? armorFull : v === 1 ? armorHalf : '';
+      this.armorIcons[i].style.setProperty('--armor-fill', img ? `url(${img})` : 'none');
     }
   }
 

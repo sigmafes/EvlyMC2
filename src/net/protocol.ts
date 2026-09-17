@@ -42,8 +42,12 @@ export type Vec3 = { x: number; y: number; z: number };
  * unlike the furnace, a chest has no special per-slot semantics (anything
  * goes anywhere), so it rides the exact same generic invPickUp/invPlace/
  * invCancel messages instead of needing its own chestInsert/chestTake pair.
+ * `armor` addresses the player's own 4 permanent armor slots (index 0..3 =
+ * helmet/chestplate/leggings/boots, LCE's own ArmorItem slot order) - always
+ * open, no armorOpen/Close pair needed. Each index only accepts its own
+ * piece (armorSlotFor()), enforced server-side in handleInvPlace.
  */
-export type CraftSlotRef = { zone: 'inventory' | 'grid' | 'furnaceInput' | 'furnaceFuel' | 'chest'; index: number };
+export type CraftSlotRef = { zone: 'inventory' | 'grid' | 'furnaceInput' | 'furnaceFuel' | 'chest' | 'armor'; index: number };
 
 /**
  * An item lying on the ground (Fase 1 del plan de porteo): what a broken block
@@ -104,6 +108,8 @@ export type EntitySnapshot = {
   heldItem?: number | null;
   /** Only meaningful for a ranged hostile (skeleton) - sighted+in-range and about to/already shooting, drives BipedMobModel.setAttacking()'s bow-draw pose for everyone else. */
   aiming?: boolean;
+  /** Only present for kind:'player' - [helmet, chestplate, leggings, boots] item ids (null = empty), drives PlayerModel.setArmor() for everyone else. */
+  armor?: (number | null)[];
 };
 
 // --- Client -> Server --------------------------------------------------
@@ -316,7 +322,7 @@ export type ServerMessage =
    */
   /** `data` carries orientation (facing/half/axis, see block-data.ts's BlockData) for a block that needs it - a placed stair/slab/log/torch/furnace, or unset for anything that renders the same regardless of orientation. Omitted (not just undefined) whenever there's nothing to say, to keep the common case's payload small. */
   | { type: 'blockChanged'; x: number; y: number; z: number; blockId: BlockId; waterDistance?: number; silent?: boolean; data?: BlockData }
-  | { type: 'inventoryUpdate'; slots: InventorySlot[]; selectedIndex: number }
+  | { type: 'inventoryUpdate'; slots: InventorySlot[]; selectedIndex: number; armor: InventorySlot[] }
   | { type: 'entityRemoved'; id: number; reason: 'death' | 'despawn' | 'disconnect' }
   /** Someone else's cosmetic swing cue (see the `swing` client message) - `id` is a player session id, never a mob's (mobs already animate their own attacks from EntitySnapshot state, they don't send this). Never echoed back to the sender, who already played it locally the instant they sent it. */
   | { type: 'entitySwing'; id: number }

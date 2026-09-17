@@ -82,6 +82,11 @@ export class InventoryDoll {
     this.model.setSlimArms(slim);
   }
 
+  /** Mirrors the real player's equipped armor onto this preview doll. */
+  setArmor(equipped: readonly (number | null)[]): void {
+    this.model.setArmor(equipped);
+  }
+
   /** Start/stop the render loop with the backpack. */
   setActive(active: boolean): void {
     if (active === this.active) return;

@@ -13,6 +13,8 @@ export interface PlayerSave {
   health: number;
   selectedIndex: number;
   slots: InventorySlot[];
+  /** [helmet, chestplate, leggings, boots] - absent on saves from before armor existed. */
+  armor?: InventorySlot[];
   /** Day/night cycle position in seconds. */
   dayTime?: number;
 }

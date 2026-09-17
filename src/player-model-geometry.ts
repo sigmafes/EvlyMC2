@@ -289,6 +289,63 @@ export function addOverlay(base: THREE.Mesh, w: number, h: number, d: number, re
   base.add(shell);
 }
 
+// --- Armor layers (iron/gold/diamond, LCE-style: layer 1 = helmet/chestplate/
+// boots, layer 2 = leggings only). Same classic 64x32 skeleton as SKIN_UV
+// (head/torso/armRight/legRight, mirrored for the left side) - armor's own
+// texture just draws different content into those same regions, so those
+// tables are reused as-is instead of a second copy. Only the atlas height
+// differs (32, not 64) since these are old-format 64x32 sheets. ---
+export type ArmorMaterialName = 'iron' | 'gold' | 'diamond';
+const ARMOR_W = 64;
+const ARMOR_H = 32;
+// Chunkier than the skin's own cloth overlay (INFLATE_WD/H above) - armor
+// plates read as bulkier than a jacket, and sitting slightly further out
+// keeps boots (a partial-height shell, see addArmorOverlay's yOffset) from
+// z-fighting against leggings' full-leg shell underneath it.
+const ARMOR_INFLATE_WD = 0.1;
+const ARMOR_INFLATE_H = 0.09;
+
+const armorMaterials = new Map<string, THREE.MeshBasicMaterial>();
+/** `layer` 1 = helmet/chestplate/boots, 2 = leggings - LCE's own ArmorItem `modelIndex`/layer split. */
+export function getArmorMaterial(material: ArmorMaterialName, layer: 1 | 2): THREE.MeshBasicMaterial {
+  const key = `${material}${layer}`;
+  let mat = armorMaterials.get(key);
+  if (!mat) {
+    const texture = new THREE.TextureLoader().load(new URL(`../textures/entity/${material}_armor${layer}.png`, import.meta.url).href);
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    mat = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true, transparent: true, alphaTest: 0.5 });
+    armorMaterials.set(key, mat);
+  }
+  return mat;
+}
+
+/**
+ * Same idea as addOverlay (an inflated shell box, textured, attached as a
+ * child so it inherits the base part's own transform) but for an armor
+ * piece: its own atlas size (64x32) and material, and an optional shorter
+ * height + vertical offset so boots can sit at just the bottom of a leg
+ * instead of covering the whole thing (which would z-fight against
+ * leggings' own full-leg shell on the same mesh). Returns the shell so
+ * PlayerModel can remove() it again when that slot is unequipped.
+ */
+export function addArmorOverlay(
+  base: THREE.Object3D, w: number, h: number, d: number, rects: FaceRects, flips: FaceFlips | undefined,
+  material: THREE.MeshBasicMaterial, heightOverride?: number, yOffset = 0,
+): THREE.Mesh {
+  const shellH = heightOverride ?? h;
+  const geo = new THREE.BoxGeometry(w + ARMOR_INFLATE_WD, shellH + ARMOR_INFLATE_H, d + ARMOR_INFLATE_WD);
+  applyAtlasUVsRaw(geo, rects, ARMOR_W, ARMOR_H, flips ?? {});
+  applyFaceShading(geo);
+  const shell = new THREE.Mesh(geo, material);
+  shell.position.y = yOffset;
+  shell.castShadow = true;
+  base.add(shell);
+  return shell;
+}
+
 /**
  * (Re)builds one arm mesh + its 3D overlay for the given slim/classic
  * setting, disposing `previous` first if given (slim-arm toggle rebuild).

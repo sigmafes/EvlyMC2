@@ -28,6 +28,16 @@ function swordRecipe(m: number, sword: number): Recipe {
   return { kind: 'shaped', pattern: [[m], [m], [S]], out: { id: sword, count: 1 } };
 }
 
+/** Vanilla armor set shapes for a single material `m`. */
+function armorSet(m: number, helmet: number, chest: number, legs: number, boots: number): Recipe[] {
+  return [
+    { kind: 'shaped', pattern: [[m, m, m], [m, _, m]], out: { id: helmet, count: 1 } },
+    { kind: 'shaped', pattern: [[m, _, m], [m, m, m], [m, m, m]], out: { id: chest, count: 1 } },
+    { kind: 'shaped', pattern: [[m, m, m], [m, _, m], [m, _, m]], out: { id: legs, count: 1 } },
+    { kind: 'shaped', pattern: [[m, _, m], [m, _, m]], out: { id: boots, count: 1 } },
+  ];
+}
+
 /** Vanilla-style mineral <-> storage-block compression: 9 of `item` filling the
  * whole 3x3 grid makes 1 `block`, and putting that block back in (alone, any
  * slot) gives the 9 `item` back. */
@@ -71,6 +81,10 @@ export const RECIPES: Recipe[] = [
   swordRecipe(ItemId.IRON_INGOT, ItemId.IRON_SWORD),
   swordRecipe(ItemId.GOLD_INGOT, ItemId.GOLDEN_SWORD),
   swordRecipe(ItemId.DIAMOND, ItemId.DIAMOND_SWORD),
+
+  ...armorSet(ItemId.IRON_INGOT, ItemId.IRON_HELMET, ItemId.IRON_CHESTPLATE, ItemId.IRON_LEGGINGS, ItemId.IRON_BOOTS),
+  ...armorSet(ItemId.GOLD_INGOT, ItemId.GOLDEN_HELMET, ItemId.GOLDEN_CHESTPLATE, ItemId.GOLDEN_LEGGINGS, ItemId.GOLDEN_BOOTS),
+  ...armorSet(ItemId.DIAMOND, ItemId.DIAMOND_HELMET, ItemId.DIAMOND_CHESTPLATE, ItemId.DIAMOND_LEGGINGS, ItemId.DIAMOND_BOOTS),
 
   // Arrow: flint head, stick shaft, feather fletching -> 4 (vanilla recipe).
   { kind: 'shaped', pattern: [[ItemId.FLINT], [S], [ItemId.FEATHER]], out: { id: ItemId.ARROW, count: 4 } },

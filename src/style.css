@@ -193,6 +193,19 @@ body {
 #backpack-grid { left: 16px; top: 168px; }
 #backpack-hotbar { left: 16px; top: 284px; }
 
+/* 4 armor slots to the left of the doll - inventory.png already has these
+   cutouts drawn in (measured at native x=8..26, y=8/26/44/62), just never
+   had interactive elements over them until now. */
+#armor-slots {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  display: grid;
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+.armor-slot { width: 32px; height: 32px; }
+
 /* 2x2 crafting grid + result on the survival panel (inventory.png coords x2). */
 #backpack-craft {
   position: absolute;
@@ -1376,6 +1389,11 @@ body.touch #crosshair {
   gap: 2px;
 }
 #mp-hud-bubbles[hidden] { display: none; }
+#mp-hud-armor {
+  display: flex;
+  gap: 2px;
+}
+#mp-hud-armor[hidden] { display: none; }
 #mp-hud-hearts {
   display: flex;
   gap: 2px;
@@ -1916,6 +1934,26 @@ body.touch #mp-crosshair {
      and never lined up. */
   inset: 0;
   background: var(--heart-fill, none) center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+}
+#hud-armor {
+  display: flex;
+  gap: 2px;
+}
+#hud-armor[hidden] { display: none; }
+/* Same base+fill layering as .hud-heart above, just armor_empty/full/half. */
+.hud-armor-icon {
+  position: relative;
+  width: 27px;
+  height: 27px;
+  background: url('../gui/armor_empty.png') center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+}
+.hud-armor-icon::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--armor-fill, none) center / 100% 100% no-repeat;
   image-rendering: pixelated;
 }
 /* Fully JS-driven cursor (see custom-cursor.ts) shown while a mouse-driven GUI
