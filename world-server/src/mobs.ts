@@ -138,6 +138,7 @@ export class ServerMobManager {
       leapCooldown: 0,
       knockbackTimer: 0,
       rangedSeeTimer: 0,
+      sightMemory: 0,
       aiming: false,
       onFire: false,
       fireTicksLeft: 0,

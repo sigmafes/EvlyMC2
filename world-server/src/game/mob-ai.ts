@@ -51,6 +51,8 @@ const RANGED_SIGHT_REQUIRED = 1;      // seconds of continuous line-of-sight req
 const RANGED_STEP_UP = 1;
 const RANGED_STEP_DOWN = 3;
 const LOS_SAMPLE_STEP = 0.5;          // blocks between line-of-sight samples
+const SIGHT_MEMORY = 5;               // seconds a hostile mob keeps chasing a player it can no longer see (a corner, a doorway) before giving up
+const MOB_EYE_FRACTION = 0.85;        // fraction of mob.height the mob's own "eyes" sit at, for line-of-sight checks
 
 const WANDER_RADIUS_MIN = 6; // "de minimo 6 bloques"
 const WANDER_RADIUS_MAX = 12; // "un bloque aleatorio en un radio de 12 bloques"
@@ -165,7 +167,24 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
   if (dist > CHASE_RADIUS || Math.abs(dy) > CHASE_RADIUS) {
     mob.chasing = false;
     mob.attackTimer = 0;
+    mob.sightMemory = 0;
     return false;
+  }
+
+  // Only engage/keep chasing while the mob can actually see the player, with
+  // a short memory window (SIGHT_MEMORY) so briefly ducking behind a corner
+  // or doorway doesn't instantly drop aggro - without this a hostile mob
+  // "knew" exactly where the player was at all times regardless of walls.
+  const eyePos = new THREE.Vector3(pos.x, pos.y + mob.height * MOB_EYE_FRACTION, pos.z);
+  if (hasLineOfSight(deps.isSolid, eyePos, playerPos)) {
+    mob.sightMemory = SIGHT_MEMORY;
+  } else {
+    mob.sightMemory -= delta;
+    if (mob.sightMemory <= 0) {
+      mob.chasing = false;
+      mob.attackTimer = 0;
+      return false;
+    }
   }
   mob.chasing = true;
 
@@ -287,14 +306,29 @@ function updateRangedHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolea
   if (dist > CHASE_RADIUS || Math.abs(dy) > CHASE_RADIUS) {
     mob.chasing = false;
     mob.rangedSeeTimer = 0;
+    mob.sightMemory = 0;
     mob.model.setAttacking?.(false); mob.aiming = false;
     return false;
   }
-  mob.chasing = true;
 
-  const eyePos = new THREE.Vector3(pos.x, pos.y + mob.height * 0.85, pos.z);
+  const eyePos = new THREE.Vector3(pos.x, pos.y + mob.height * MOB_EYE_FRACTION, pos.z);
   const canSee = hasLineOfSight(deps.isSolid, eyePos, playerPos);
   mob.rangedSeeTimer = canSee ? mob.rangedSeeTimer + delta : 0;
+
+  // Same sight-memory gate updateHostileAI uses - a skeleton shouldn't home
+  // in on/path toward a player it has never actually seen, only lost track
+  // of shooting (rangedSeeTimer) once it already had a bead on them.
+  if (canSee) {
+    mob.sightMemory = SIGHT_MEMORY;
+  } else {
+    mob.sightMemory -= delta;
+    if (mob.sightMemory <= 0) {
+      mob.chasing = false;
+      mob.model.setAttacking?.(false); mob.aiming = false;
+      return false;
+    }
+  }
+  mob.chasing = true;
 
   if (dist <= RANGED_ATTACK_RADIUS && canSee && mob.rangedSeeTimer >= RANGED_SIGHT_REQUIRED) {
     mob.path = null;

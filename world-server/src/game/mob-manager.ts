@@ -96,6 +96,9 @@ export type Mob = {
   // Ranged hostile AI (skeleton): seconds of continuous line-of-sight on the
   // target, accumulated toward RANGED_SIGHT_REQUIRED before the first shot.
   rangedSeeTimer: number;
+  // Hostile AI memory (zombie + skeleton): seconds left since the mob last
+  // had line-of-sight on the player - see SIGHT_MEMORY in mob-ai.ts.
+  sightMemory: number;
   // True while sighted+in-range and about to/already shooting - same value
   // mob-ai.ts already feeds into mob.model.setAttacking?.(), just also kept
   // as plain data here so it can ride along in a multiplayer EntitySnapshot

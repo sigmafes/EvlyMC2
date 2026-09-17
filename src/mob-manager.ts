@@ -123,6 +123,12 @@ export type Mob = {
   // Ranged hostile AI (skeleton): seconds of continuous line-of-sight on the
   // target, accumulated toward RANGED_SIGHT_REQUIRED before the first shot.
   rangedSeeTimer: number;
+  // Hostile AI memory (zombie + skeleton): seconds left since the mob last
+  // had line-of-sight on the player - see SIGHT_MEMORY in mob-ai.ts. While
+  // >0 the mob keeps chasing/pathing toward the player's last known spot
+  // even without a clear line right now (a corner, a doorway); it reaches 0
+  // and drops aggro if it never re-establishes sight in that window.
+  sightMemory: number;
   // Fire (sunlight for zombie/skeleton, or lava/fire contact for any mob):
   // ticks damage while exposed AND for fireTicksLeft ticks after losing
   // exposure (the "after-burn"), independent of combat. `onFire` also drives
@@ -220,6 +226,7 @@ export class MobManager {
       leapCooldown: 0,
       knockbackTimer: 0,
       rangedSeeTimer: 0,
+      sightMemory: 0,
       onFire: false,
       fireTicksLeft: 0,
       burnTimer: 0,

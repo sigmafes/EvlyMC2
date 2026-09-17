@@ -2791,6 +2791,11 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   const HURT_DURATION = 0.4; // matches PlayerController.HURT_DURATION
   let hurtTime = 0;
   let hurtDir = 1;
+  // Eased downward camera offset while sneaking - same mechanism as
+  // player.ts's crouchCam (sp), just missing here entirely before: the
+  // camera sat at the raw server eye position regardless of sneak state.
+  let crouchCam = 0;
+  const CROUCH_CAM_DROP = 0.3; // matches PlayerController.CROUCH_CAM_DROP
   function hurtImpulse(): void {
     hurtTime = HURT_DURATION;
     hurtDir = Math.random() < 0.5 ? -1 : 1;
@@ -2824,6 +2829,12 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const delta = lastFrameTime === 0 ? 0 : Math.min((now - lastFrameTime) / 1000, 0.1);
     lastFrameTime = now;
     if (hurtTime > 0) hurtTime -= delta;
+    crouchCam = THREE.MathUtils.damp(
+      crouchCam,
+      (keys.has('ShiftLeft') || touchSneak) ? CROUCH_CAM_DROP : 0,
+      12,
+      delta,
+    );
     // Shared fire texture's scroll - game-loop.ts calls this every frame for
     // singleplayer, but multiplayer's own frame loop never did, so any
     // burning mob/player here showed a static (non-scrolling) fire frame.
@@ -2834,13 +2845,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // First person: the camera IS the eye. Third person: pull the boom back
     // (thirdPersonCameraPosition, shared with singleplayer's own) and look at
     // the eye instead of sitting on it, same as player.ts's updateCamera().
+    const eye = lastServerPos.clone();
+    eye.y -= crouchCam;
     if (cameraMode === 0) {
-      camera.position.copy(lastServerPos);
+      camera.position.copy(eye);
       camera.rotation.set(pitch, yaw, 0, 'YXZ');
       applyViewBob();
     } else {
-      camera.position.copy(thirdPersonCameraPosition(lastServerPos, yaw, pitch, cameraMode === 2, isSolidAtLocal));
-      camera.lookAt(lastServerPos);
+      camera.position.copy(thirdPersonCameraPosition(eye, yaw, pitch, cameraMode === 2, isSolidAtLocal));
+      camera.lookAt(eye);
     }
     if (localPlayerModel) {
       localPlayerModel.group.position.copy(lastServerPos);
