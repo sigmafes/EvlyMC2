@@ -581,6 +581,7 @@ export class World {
         this.lightEngine?.initializeChunk(chunk);
         this.markAdjacentChunksDirty(x, z);
         this.reapplyLiquidEdits(x, z);
+        this.reapplyChestRenderers(x, z);
       },
       (cx, cz) => this.editStore.get(cx, cz),
     );
@@ -600,6 +601,29 @@ export class World {
       if (id === BlockId.WATER) this.waterEngine?.onBlockPlaced(wx, wy, wz, id);
       else if (id === BlockId.LAVA) this.lavaEngine?.onBlockPlaced(wx, wy, wz, id);
       else this.fireEngine?.onFirePlaced(wx, wy, wz);
+    }
+  }
+
+  /**
+   * Same gap as reapplyLiquidEdits above, for chests: onBlockChanged (which
+   * main.ts uses to spawn ChestRenderer's animated model) only fires from
+   * add()/remove(), never from a chunk's own persisted edits being replayed
+   * as a raw write on load - so a chest placed in an earlier session came
+   * back with real collision (it's a normal solid block in the grid) but no
+   * visual and no raycast target (nothing for right-click to hit), since
+   * ChestRenderer never got told it existed at all.
+   */
+  private reapplyChestRenderers(chunkX: number, chunkZ: number) {
+    const edits = this.editStore.get(chunkX, chunkZ);
+    if (!edits) return;
+    const minX = chunkX * CHUNK_SIZE - 8;
+    const minZ = chunkZ * CHUNK_SIZE - 8;
+    for (const [idx, id] of edits) {
+      if (id !== BlockId.CHEST) continue;
+      const wx = minX + (idx % CHUNK_SIZE);
+      const wz = minZ + (Math.floor(idx / CHUNK_SIZE) % CHUNK_SIZE);
+      const wy = Math.floor(idx / (CHUNK_SIZE * CHUNK_SIZE));
+      this.onBlockChanged?.(wx, wy, wz, BlockId.CHEST, BlockId.AIR);
     }
   }
 }
