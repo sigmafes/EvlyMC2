@@ -82,6 +82,11 @@ export class InventoryDoll {
     this.model.setSlimArms(slim);
   }
 
+  /** Preview the Customize menu's cape choice - see cape.ts's getOwnedCapes/main-menu.ts's cape section. */
+  setCapeVisible(visible: boolean): void {
+    this.model.setCapeVisible(visible);
+  }
+
   /** Mirrors the real player's equipped armor onto this preview doll. */
   setArmor(equipped: readonly (number | null)[]): void {
     this.model.setArmor(equipped);

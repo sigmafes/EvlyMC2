@@ -22,6 +22,7 @@ import {
   loadPlayerName, clearPlayerSkin,
   readAndValidateSkinFile, applyPersistedSkin, savePlayerSkinDataUrl,
 } from './player-skin';
+import { getOwnedCapes } from './cape';
 
 const MUSIC = [track0, track1, track2, track3];
 const SPLASHES = splashRaw.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -159,6 +160,7 @@ export class MainMenu {
   private openPlayerOptions(): void {
     this.playerOptionsRoot.hidden = false;
     this.playerOptionsDoll.setSlim(loadSettings().alexSkin);
+    this.playerOptionsDoll.setCapeVisible(loadSettings().selectedCape !== null);
     this.playerOptionsDoll.setActive(true);
   }
 
@@ -371,5 +373,38 @@ export class MainMenu {
       clearPlayerSkin();
       showError(null);
     });
+
+    // Capes section - only rendered at all when this account actually owns
+    // any (getOwnedCapes returns [] for everyone not on cape.ts's
+    // allowlist), so an ordinary account never sees an empty/useless list.
+    const capeSection = document.querySelector<HTMLElement>('#cape-section')!;
+    const capeOptions = document.querySelector<HTMLElement>('#cape-options')!;
+    const owned = getOwnedCapes(loadPlayerName());
+    capeSection.hidden = owned.length === 0;
+    if (owned.length > 0) {
+      capeOptions.innerHTML = '';
+      const selectCape = (id: string | null) => {
+        saveSettings({ selectedCape: id });
+        this.playerOptionsDoll.setCapeVisible(id !== null);
+        for (const btn of capeOptions.querySelectorAll<HTMLButtonElement>('button')) {
+          btn.classList.toggle('selected', btn.dataset.capeId === (id ?? 'none'));
+        }
+      };
+      const makeCapeButton = (id: string, label: string) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'mc-button cape-option';
+        btn.dataset.capeId = id;
+        btn.innerHTML = `<span>${label}</span>`;
+        btn.addEventListener('click', () => selectCape(id === 'none' ? null : id));
+        capeOptions.appendChild(btn);
+      };
+      makeCapeButton('none', 'None');
+      for (const cape of owned) makeCapeButton(cape.id, cape.label);
+      const current = loadSettings().selectedCape;
+      for (const btn of capeOptions.querySelectorAll<HTMLButtonElement>('button')) {
+        btn.classList.toggle('selected', btn.dataset.capeId === (current ?? 'none'));
+      }
+    }
   }
 }

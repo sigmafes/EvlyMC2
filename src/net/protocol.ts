@@ -131,6 +131,10 @@ export type ClientMessage =
        * comment): changing skin mid-session in another player's view is a
        * real follow-up, not something this first pass covers. */
       skin?: string | null;
+      /** This client's slim/classic arm setting (settings.ts's `alexSkin`) - true = slim. Same "sent once at join" treatment as `skin` above, relayed to everyone else via `playerSkin` so remote players actually render with the arm width the owner picked instead of always classic. */
+      slim?: boolean;
+      /** settings.ts's `selectedCape` (a cape.ts CapeOption id, or null/absent for none) - trusted at face value like `skin`/`slim` above (purely cosmetic, only affects how the sender's OWN avatar renders to others). The server does not re-check cape.ts's allowlist against the sender's name; every other client already gates cape visibility on isCapeAllowed(name) itself, same as it always has. */
+      cape?: string | null;
     }
   /**
    * Movement/look intent for one client-side simulation step, not a
@@ -150,6 +154,8 @@ export type ClientMessage =
       wantJump: boolean;
       sprinting: boolean;
       sneaking: boolean;
+      /** Eating or drawing the bow (client-computed, same "eating || bowDrawStart" check driving the local hand pose) - caps movement at crouch speed and overrides sprint server-side, same treatment PlayerPhysics.updatePhysics's speedRestricted param already gives singleplayer. */
+      restricted: boolean;
       yaw: number;
       pitch: number;
       dtMs: number; // this input's own client-side frame delta, so the server advances physics by the same amount the client predicted
@@ -332,8 +338,10 @@ export type ServerMessage =
   | { type: 'entityBreakStart'; id: number; x: number; y: number; z: number; totalMs: number }
   /** Someone else's dig from the last `entityBreakStart` was abandoned before finishing - clear their crack overlay. A dig that actually COMPLETES doesn't need this: the resulting `blockChanged` already removes the block, and the bystander's own overlay timer runs out around the same moment regardless. */
   | { type: 'entityBreakCancel'; id: number }
-  /** Another player's skin - sent once when they join (and replayed for every already-connected player right after `welcome`, so a client catches up on everyone already in the world). `skin: null` means the built-in default. */
-  | { type: 'playerSkin'; playerId: number; skin: string | null }
+  /** Another player's skin - sent once when they join (and replayed for every already-connected player right after `welcome`, so a client catches up on everyone already in the world). `skin: null` means the built-in default. `slim` is their arm-width setting (see the `join` client message's own doc comment) - absent/false means classic. */
+  | { type: 'playerSkin'; playerId: number; skin: string | null; slim?: boolean; cape?: string | null }
+  /** Someone else started eating - purely cosmetic (see `entitySwing`'s trust reasoning): drives the same crumb-particle burst at their mouth that the sender already shows itself locally, so eating actually looks like eating to everyone else in mp instead of just a silent chew animation. `itemId` picks which food's texture the crumbs use. Broadcast once when the bite starts (world-do.ts's handleUseItem), not repeated per bite tick. */
+  | { type: 'entityEat'; id: number; itemId: number }
   /** Resyncs the client's local day/night clock to the server's authoritative one (day-night-math.ts) - sent whenever the integer skyDarken step changes (so a transition starts on every client at the same moment) and periodically besides, to correct any drift in a client that free-runs the clock locally between corrections (see multiplayer-game.ts). */
   | { type: 'dayTime'; elapsed: number }
   /** Every RECIPES (src/crafting.ts) index this player currently has ingredients for, sent whenever the inventory changes - drives the craft menu's list (see multiplayer-game.ts). `out` is included so the client can render the result icon without needing its own copy of RECIPES. */
@@ -388,7 +396,7 @@ export function isServerMessageType(type: string): type is ServerMessage['type']
   return (
     [
       'welcome', 'rejected', 'state', 'chunkData', 'blockChanged',
-      'inventoryUpdate', 'entityRemoved', 'entitySwing', 'entityBreakStart', 'entityBreakCancel', 'playerSkin', 'dayTime', 'craftableRecipes', 'furnaceState', 'chestState', 'entityChestOpen', 'entityChestClose',
+      'inventoryUpdate', 'entityRemoved', 'entitySwing', 'entityBreakStart', 'entityBreakCancel', 'playerSkin', 'entityEat', 'dayTime', 'craftableRecipes', 'furnaceState', 'chestState', 'entityChestOpen', 'entityChestClose',
       'craftGridState', 'craftGridClosed', 'invHeld', 'toolBroke', 'died', 'chat', 'pong',
     ] as const
   ).includes(type as ServerMessage['type']);

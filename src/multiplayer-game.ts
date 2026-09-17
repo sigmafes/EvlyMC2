@@ -1793,7 +1793,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     localPlayerModel = new PlayerModel(materials);
     localPlayerModel.setVisible(cameraMode !== 0);
     localPlayerModel.setSlimArms(mpSettings.alexSkin);
-    localPlayerModel.setCapeVisible(isCapeAllowed(loadPlayerName()));
+    localPlayerModel.setCapeVisible(isCapeAllowed(loadPlayerName()) && mpSettings.selectedCape !== null);
     scene.add(localPlayerModel.group);
     localSkinMaterials = materials;
   }
@@ -2347,6 +2347,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
 
   /** Every player's currently-known skin ("data: URL, or null for default), keyed by their entity id - populated from the server's playerSkin messages (see client.connect below), which can arrive before OR after that player's first state snapshot creates their avatar. */
   const playerSkins = new Map<number, string | null>();
+  /** Same idea as playerSkins, for the slim/classic arm-width choice riding along the same playerSkin message - defaults to classic (false) for anyone whose message hasn't arrived yet. */
+  const playerSlims = new Map<number, boolean>();
+  /** Same idea again, for the cape.ts CapeOption id (or null) riding along the same playerSkin message - isCapeAllowed(name) still gates whether it actually renders, same as singleplayer's own cape. */
+  const playerCapes = new Map<number, string | null>();
 
   /**
    * Real avatar for another player: the exact same PlayerModel (skinned,
@@ -2379,7 +2383,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   function makePlayerAvatar(id: number, name: string, skinImage: HTMLImageElement | null): RemoteEntity {
     const materials = createSkinMaterials(skinImage);
     const model = new PlayerModel(materials);
-    model.setCapeVisible(isCapeAllowed(name));
+    model.setCapeVisible(isCapeAllowed(name) && playerCapes.get(id) != null);
+    if (playerSlims.get(id)) model.setSlimArms(true);
     scene.add(model.group);
     const hitbox = buildPlayerHitbox(id);
     model.group.add(hitbox);
@@ -2414,7 +2419,8 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const oldGroup = entity.mesh;
     const materials = createSkinMaterials(image);
     const model = new PlayerModel(materials);
-    model.setCapeVisible(isCapeAllowed(entity.name ?? ''));
+    model.setCapeVisible(isCapeAllowed(entity.name ?? '') && playerCapes.get(id) != null);
+    if (playerSlims.get(id)) model.setSlimArms(true);
     model.group.position.copy(oldGroup.position);
     model.group.rotation.copy(oldGroup.rotation);
     const hitbox = buildPlayerHitbox(id);
@@ -2836,6 +2842,20 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // doc comments) - only ever a player (mobs animate their own attacks
     // straight from EntitySnapshot.aiming/state, they don't send this).
     onEntitySwing: (id) => { remoteEntities.get(id)?.playerModel?.swingArm(); },
+    // Someone else started eating (see protocol.ts's `entityEat` doc comment)
+    // - same crumb-particle burst startChewing() already gives the LOCAL
+    // player, just aimed from this remote entity's own head/mouth instead of
+    // the camera. `entity.mesh.position` is eye-height for a player (see
+    // RemoteEntity's own labelOffsetY doc comment), so it doubles as the
+    // mouth position closely enough for a burst this small.
+    onEntityEat: (id, itemId) => {
+      const entity = remoteEntities.get(id);
+      if (!entity || entity.kind !== 'player') return;
+      const yaw = entity.lastYaw;
+      const forward = new THREE.Vector3(-Math.sin(yaw), -0.4, -Math.cos(yaw)).normalize();
+      const mouth = entity.mesh.position.clone().addScaledVector(forward, 0.35);
+      particles?.eat(mouth, forward, itemId, lightEngine.getRawBrightness(Math.round(mouth.x), Math.round(mouth.y), Math.round(mouth.z)) / 15);
+    },
     onEntityBreakStart: (id, x, y, z, totalMs) => {
       let entry = remoteMining.get(id);
       if (!entry) {
@@ -2847,8 +2867,15 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       }
     },
     onEntityBreakCancel: (id) => { remoteMining.get(id)?.overlay.hide(); remoteMining.delete(id); },
-    onPlayerSkin: (playerId, skin) => {
+    onPlayerSkin: (playerId, skin, slim, cape) => {
       playerSkins.set(playerId, skin);
+      playerSlims.set(playerId, slim);
+      playerCapes.set(playerId, cape);
+      const existing = remoteEntities.get(playerId);
+      if (existing?.playerModel) {
+        existing.playerModel.setSlimArms(slim);
+        existing.playerModel.setCapeVisible(isCapeAllowed(existing.name ?? '') && cape != null);
+      }
       if (remoteEntities.has(playerId)) applySkinWhenReady(playerId, skin);
     },
     onDied: (killedBy) => {
@@ -2932,7 +2959,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     onChat: (from, text) => addChatLine(`<${from}> ${text}`),
     onPong: (clientTimeMs) => { pingMs = performance.now() - clientTimeMs; },
     onClose: (reason) => disconnect(reason),
-  }, loadPlayerSkinDataUrl());
+  }, loadPlayerSkinDataUrl(), mpSettings.alexSkin, mpSettings.selectedCape);
 
   let lastSend = 0;
   function sendInput(now: number): void {
@@ -2967,6 +2994,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       wantJump: keys.has('Space') || touchJump,
       sprinting: sprintToggled || touchSprint,
       sneaking: isSneakHeld(),
+      // Same "eating or drawing the bow" gate singleplayer's player.ts
+      // (setSpeedRestricted) uses - the server applies the actual crouch-
+      // speed cap itself (world-do.ts), this just reports the intent.
+      restricted: chewLeft > 0 || bowDrawStart !== null,
       yaw, pitch,
       dtMs: SEND_INTERVAL_MS,
     });

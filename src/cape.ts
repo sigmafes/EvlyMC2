@@ -27,11 +27,22 @@ import { applyAtlasUVs, applyFaceShading, type FaceRects } from './atlas-box';
  * state instead of LCE's.
  */
 
-/** Cosmetic allowlist - only these accounts render with a cape; everyone else's PlayerModel keeps `cape.group.visible = false`. Lowercased for a case-insensitive match against a display name. */
+/** Cosmetic allowlist - only these accounts have any cape at all; everyone else's PlayerModel keeps `cape.group.visible = false` regardless of their own selectedCape setting. Lowercased for a case-insensitive match against a display name. */
 const CAPE_ALLOWED_NAMES = new Set(['dummy', 'steve', 'sigmafes']);
 
 export function isCapeAllowed(name: string): boolean {
   return CAPE_ALLOWED_NAMES.has(name.trim().toLowerCase());
+}
+
+/** One selectable cape - `id` is what settings.ts's `selectedCape` and the network's `cape` field store, `label` is the Customize menu's display text. Only one design exists today, but the Customize section (main-menu.ts's openPlayerOptions) is built to list whatever's in here, so a second cape is just another entry away from working, no UI changes needed. */
+export type CapeOption = { id: string; label: string };
+const CAPES: CapeOption[] = [
+  { id: 'cape1', label: 'Capa Clasica' },
+];
+
+/** Every cape this account actually owns - just the fixed CAPES catalog for an allowlisted name, or none at all otherwise. Drives the Customize menu's cape picker (only ever shows capes the account has). */
+export function getOwnedCapes(name: string): CapeOption[] {
+  return isCapeAllowed(name) ? CAPES : [];
 }
 
 const CAPE_TEXTURE_PATH = new URL('../textures/cape1.png', import.meta.url).href;

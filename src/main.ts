@@ -194,7 +194,7 @@ player = new PlayerController(
 const SPAWN = world.findSpawnPoint();
 player.setSpawn(SPAWN.x, SPAWN.y, SPAWN.z);
 const playerModel = new PlayerModel();
-playerModel.setCapeVisible(isCapeAllowed(loadPlayerName()));
+playerModel.setCapeVisible(isCapeAllowed(loadPlayerName()) && loadSettings().selectedCape !== null);
 scene.add(playerModel.getGroup());
 let viewBobOn = true;
 // touchControls is constructed later (needs `player`/`interaction`/etc.); this

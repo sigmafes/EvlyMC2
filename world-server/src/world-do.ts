@@ -154,11 +154,15 @@ type Session = {
   yaw: number;
   pitch: number;
   /** Latest movement intent received via an 'input' message - applied once per tick, not once per message, so an input flood can't speed up simulation. */
-  intent: { moveX: number; moveZ: number; wantJump: boolean; sprinting: boolean; sneaking: boolean };
+  intent: { moveX: number; moveZ: number; wantJump: boolean; sprinting: boolean; sneaking: boolean; restricted: boolean };
   lastSeq: number;
   health: number;
   /** The skin PNG (data: URL) this player joined with, or null for the built-in default - see onJoin. */
   skin: string | null;
+  /** Arm-width setting (slim/classic) this player joined with - see onJoin and protocol.ts's `join`/`playerSkin` doc comments. */
+  slim: boolean;
+  /** cape.ts CapeOption id (or null for none) this player joined with - see onJoin and protocol.ts's `join`/`playerSkin` doc comments. */
+  cape: string | null;
   /** Server-authoritative inventory - see game/inventory.ts's doc comment for why it's a hand-rolled minimal helper set instead of importing src/inventory.ts's own (DOM-heavy) Inventory class. */
   inventory: InventorySlot[];
   selectedSlot: number;
@@ -561,6 +565,7 @@ export class WorldDO implements DurableObject {
           wantJump: msg.wantJump,
           sprinting: msg.sprinting,
           sneaking: msg.sneaking,
+          restricted: msg.restricted,
         };
         session.physics.setSneaking(msg.sneaking);
         break;
@@ -1044,6 +1049,10 @@ export class WorldDO implements DurableObject {
     if (slot.id === null || foodValue(slot.id) <= 0) return;
     if (session.eating?.slotIndex === slotIndex) return; // already chewing this one
     session.eating = { slotIndex, itemId: slot.id, elapsed: 0 };
+    // Cosmetic-only, same trust level as `swing`/`entitySwing` - everyone
+    // else's client plays the same crumb-particle burst the eater already
+    // shows itself locally (see multiplayer-game.ts's startChewing).
+    this.broadcast({ type: 'entityEat', id: session.id, itemId: slot.id }, session.ws);
   }
 
   /** Advance a bite in progress, healing and consuming one item once it completes. */
@@ -1507,16 +1516,20 @@ export class WorldDO implements DurableObject {
     // able to bloat every other client's memory via the playerSkin broadcast
     // below or the storage kept here for late joiners.
     const skin = typeof msg.skin === 'string' && msg.skin.length <= 200_000 ? msg.skin : null;
+    const slim = msg.slim === true;
+    const cape = typeof msg.cape === 'string' && msg.cape.length <= 64 ? msg.cape : null;
 
     const session: Session = {
       ws, id, name, physics,
       yaw: saved?.yaw ?? 0, pitch: saved?.pitch ?? 0,
-      intent: { moveX: 0, moveZ: 0, wantJump: false, sprinting: false, sneaking: false },
+      intent: { moveX: 0, moveZ: 0, wantJump: false, sprinting: false, sneaking: false, restricted: false },
       lastSeq: 0,
       // A save written while they were dying could hold 0 - never restore
       // someone straight into a corpse they can't respawn out of.
       health: saved && saved.health > 0 ? saved.health : PLAYER_MAX_HEALTH,
       skin,
+      slim,
+      cape,
       // Deep-copied, not adopted by reference: the saved record is shared
       // state, and two sessions joining under the same name (a second tab,
       // say) would otherwise write into the very same slot objects.
@@ -1582,9 +1595,9 @@ export class WorldDO implements DurableObject {
     // pattern as the edits loop just above.
     for (const [otherWs, other] of this.sessions) {
       if (otherWs === ws) continue;
-      this.send(ws, { type: 'playerSkin', playerId: other.id, skin: other.skin });
+      this.send(ws, { type: 'playerSkin', playerId: other.id, skin: other.skin, slim: other.slim, cape: other.cape });
     }
-    this.broadcast({ type: 'playerSkin', playerId: id, skin }, ws);
+    this.broadcast({ type: 'playerSkin', playerId: id, skin, slim, cape }, ws);
     this.broadcast({ type: 'chat', from: 'server', text: `${session.name} joined` }, ws);
     this.ensureTicking();
   }
@@ -1706,7 +1719,7 @@ export class WorldDO implements DurableObject {
       const direction = new THREE.Vector3(session.intent.moveX, 0, session.intent.moveZ);
       if (direction.lengthSq() > 0) direction.normalize();
       direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), session.yaw);
-      session.physics.updatePhysics(direction, session.intent.wantJump, session.intent.sprinting, dt);
+      session.physics.updatePhysics(direction, session.intent.wantJump, session.intent.sprinting, dt, session.intent.restricted);
       this.applyEnvironmentDamage(session, dt);
       this.updateEating(session, dt);
     }

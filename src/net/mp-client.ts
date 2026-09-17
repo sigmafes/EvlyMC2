@@ -11,7 +11,8 @@ export type MpClientHandlers = {
   onEntitySwing: (id: number) => void;
   onEntityBreakStart: (id: number, x: number, y: number, z: number, totalMs: number) => void;
   onEntityBreakCancel: (id: number) => void;
-  onPlayerSkin: (playerId: number, skin: string | null) => void;
+  onPlayerSkin: (playerId: number, skin: string | null, slim: boolean, cape: string | null) => void;
+  onEntityEat: (id: number, itemId: number) => void;
   onDayTime: (elapsed: number) => void;
   onInventoryUpdate: (slots: InventorySlot[], selectedIndex: number, armor: InventorySlot[]) => void;
   onCraftableRecipes: (recipes: { index: number; out: { id: number; count: number } }[]) => void;
@@ -40,13 +41,13 @@ export class MpClient {
   private closedByUs = false;
 
   /** `token` is the signed proof of which account this is (access-gate.ts's loadPlayToken) - the server reads the player's name out of it, so there's no name to pass. */
-  connect(serverUrl: string, worldId: string, token: string, handlers: MpClientHandlers, skin?: string | null): void {
+  connect(serverUrl: string, worldId: string, token: string, handlers: MpClientHandlers, skin?: string | null, slim?: boolean, cape?: string | null): void {
     const ws = new WebSocket(serverUrl);
     this.ws = ws;
     this.closedByUs = false;
 
     ws.addEventListener('open', () => {
-      this.send({ type: 'join', worldId, token, protocolVersion: PROTOCOL_VERSION, skin });
+      this.send({ type: 'join', worldId, token, protocolVersion: PROTOCOL_VERSION, skin, slim, cape });
     });
 
     ws.addEventListener('message', (event) => {
@@ -67,7 +68,8 @@ export class MpClient {
         case 'entitySwing': handlers.onEntitySwing(msg.id); break;
         case 'entityBreakStart': handlers.onEntityBreakStart(msg.id, msg.x, msg.y, msg.z, msg.totalMs); break;
         case 'entityBreakCancel': handlers.onEntityBreakCancel(msg.id); break;
-        case 'playerSkin': handlers.onPlayerSkin(msg.playerId, msg.skin); break;
+        case 'playerSkin': handlers.onPlayerSkin(msg.playerId, msg.skin, msg.slim === true, msg.cape ?? null); break;
+        case 'entityEat': handlers.onEntityEat(msg.id, msg.itemId); break;
         case 'dayTime': handlers.onDayTime(msg.elapsed); break;
         case 'inventoryUpdate': handlers.onInventoryUpdate(msg.slots, msg.selectedIndex, msg.armor); break;
         case 'craftableRecipes': handlers.onCraftableRecipes(msg.recipes); break;

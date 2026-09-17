@@ -11,6 +11,8 @@ export type GameSettings = {
   fog: boolean;
   alexSkin: boolean;
   viewBob: boolean;
+  /** cape.ts's CapeOption.id, or null for no cape. Defaults to 'cape1' (the only cape that exists today) rather than null, so an already-allowlisted account keeps seeing the cape it always rendered before this setting existed - getOwnedCapes() still gates it server- and client-side for anyone not on the allowlist, so this default has no effect on them either way. */
+  selectedCape: string | null;
 };
 
 const KEY = 'evlymc-settings';
@@ -27,6 +29,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   fog: true,
   alexSkin: false,
   viewBob: true,
+  selectedCape: 'cape1',
 };
 
 /** Multiplayer's own defaults - identical except renderDistance, which starts at the middle of its 2-4 range instead of singleplayer's 5. */
