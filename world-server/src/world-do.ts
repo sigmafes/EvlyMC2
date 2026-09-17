@@ -495,8 +495,15 @@ export class WorldDO implements DurableObject {
     // requesting it WAKES the Durable Object, so anyone who knows a world id
     // could keep one billable just by polling this.
     if (new URL(request.url).pathname.startsWith('/stats/')) {
+      // CORS wide open (not gated by ALLOWED_ORIGINS like the WebSocket
+      // upgrade below) - this is the same "deliberately unauthenticated,
+      // exposes only counts" endpoint the comment above already covers, and
+      // main-menu.ts's own server list (mp-servers.ts's fetchServerStatus)
+      // calls it directly from the browser as a plain fetch(), which a
+      // missing Access-Control-Allow-Origin would otherwise just silently
+      // block from ever reading the response.
       return new Response(JSON.stringify(this.stats(), null, 2), {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
       });
     }
 

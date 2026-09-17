@@ -48,6 +48,23 @@
         </form>
       </div>
     </section>
+    <section id="multiplayer-servers" hidden>
+      <h1>Play Multiplayer</h1>
+      <div id="mp-server-list" role="listbox" aria-label="Servers"></div>
+      <div id="mp-server-actions">
+        <div class="ws-row ws-row--primary">
+          <button class="mc-button" data-action="mp-join" type="button"><span>Join Server</span></button>
+          <button class="mc-button" data-action="mp-direct" type="button"><span>Direct Connect</span></button>
+          <button class="mc-button" data-action="mp-add" type="button"><span>Add Server</span></button>
+        </div>
+        <div class="ws-row ws-row--secondary">
+          <button class="mc-button" data-action="mp-edit" type="button"><span>Edit</span></button>
+          <button class="mc-button" data-action="mp-delete" type="button"><span>Delete</span></button>
+          <button class="mc-button" data-action="mp-refresh" type="button"><span>Refresh</span></button>
+          <button class="mc-button" data-action="mp-cancel" type="button"><span>Cancel</span></button>
+        </div>
+      </div>
+    </section>
     <section id="multiplayer-connect" hidden>
       <div id="multiplayer-connect-panel">
         <h1>Multiplayer</h1>

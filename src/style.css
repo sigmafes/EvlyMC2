@@ -1834,6 +1834,134 @@ body.touch #mp-crosshair {
 }
 .ws-row .mc-button:disabled:hover { filter: grayscale(1) brightness(0.6); }
 
+/* ===== Play Multiplayer (server list) screen ===== */
+#multiplayer-servers {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: url('../gui/bg.png') repeat;
+  background-size: 64px 64px;
+  image-rendering: pixelated;
+  color: #ffffff;
+  font-family: 'Tricraft', sans-serif;
+}
+#multiplayer-servers[hidden] { display: none; }
+#multiplayer-servers h1 {
+  margin: 18px 0 12px;
+  font-size: 22px;
+  font-weight: normal;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+}
+#mp-server-list {
+  width: min(900px, 92vw);
+  flex: 1;
+  overflow-y: auto;
+  border-top: 2px solid rgba(0, 0, 0, 0.85);
+  border-bottom: 2px solid rgba(0, 0, 0, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+}
+.mp-server-list-empty {
+  margin: 24px 0;
+  color: #9c9c9c;
+  font-size: 15px;
+  text-align: center;
+  line-height: 1.5;
+}
+.mp-server-row {
+  width: min(900px, 92vw);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.mp-server-row:hover { border-color: #6f6f6f; }
+.mp-server-row.selected { border-color: #ffffff; background: rgba(255, 255, 255, 0.08); }
+.mp-server-icon {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+  image-rendering: pixelated;
+}
+.mp-server-row-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  min-width: 0;
+}
+.mp-server-row-title {
+  font-size: 18px;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mp-server-row-motd {
+  font-size: 13px;
+  color: #9c9c9c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mp-server-row-addr {
+  font-size: 12px;
+  color: #6f6f6f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mp-server-row-status {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  font-size: 13px;
+  color: #9c9c9c;
+  min-width: 90px;
+}
+.mp-ping-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+.mp-ping-bars span {
+  width: 3px;
+  background: #4a4a4a;
+  display: block;
+}
+.mp-ping-bars span:nth-child(1) { height: 25%; }
+.mp-ping-bars span:nth-child(2) { height: 50%; }
+.mp-ping-bars span:nth-child(3) { height: 75%; }
+.mp-ping-bars span:nth-child(4) { height: 100%; }
+.mp-ping-bars.ping-good span { background: #55ff55; }
+.mp-ping-bars.ping-ok span:nth-child(-n+3) { background: #ffff55; }
+.mp-ping-bars.ping-bad span:nth-child(-n+1) { background: #ff5555; }
+.mp-ping-bars.ping-none span { background: #6f2222; }
+#mp-server-actions {
+  width: min(900px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 0 20px;
+}
+
 /* ===== Create World screen ===== */
 #world-create { justify-content: flex-start; }
 #world-create-tabs {

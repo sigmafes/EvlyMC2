@@ -15,6 +15,7 @@ import track3 from '../gui/bg/mutation.ogg';
 import splashRaw from '../gui/splash.txt?raw';
 import { playClick } from './ui-sound';
 import { WorldSelect } from './world-select';
+import { MpServerList } from './mp-server-list';
 import { isTouchDevice } from './is-touch';
 import { InventoryDoll } from './inventory-doll';
 import { applySkinTexture, resetSkinTexture } from './player-model';
@@ -23,6 +24,7 @@ import {
   readAndValidateSkinFile, applyPersistedSkin, savePlayerSkinDataUrl,
 } from './player-skin';
 import { getOwnedCapes } from './cape';
+import { resolveWorldUrl } from './mp-servers';
 
 const MUSIC = [track0, track1, track2, track3];
 const SPLASHES = splashRaw.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -60,6 +62,7 @@ export class MainMenu {
   private musicTimer = 0;
 
   private worldSelect: WorldSelect | null = null;
+  private mpServerList: MpServerList | null = null;
 
   constructor(handlers: MainMenuHandlers) {
     (document.querySelector<HTMLImageElement>('#menu-logo')!).src = logoUrl;
@@ -138,7 +141,7 @@ export class MainMenu {
       if (button.dataset.action === 'singleplayer') {
         this.openWorldSelect(handlers);
       } else if (button.dataset.action === 'multiplayer') {
-        this.openMultiplayerConnect(handlers);
+        this.openMultiplayerServers(handlers);
       } else if (button.dataset.action === 'options') {
         this.optionsRoot.hidden = false;
       } else if (button.id === 'open-player-options') {
@@ -201,8 +204,34 @@ export class MainMenu {
     this.worldSelect.open();
   }
 
-  /** Fase 6: a minimal connect form (server URL + name) - see multiplayer-game.ts. */
-  private openMultiplayerConnect(handlers: MainMenuHandlers) {
+  /** Minecraft-style server list - see mp-server-list.ts. Replaces going straight to the address form (openMultiplayerConnect below), which Direct Connect and a saved server's Join button both still funnel into/bypass respectively. */
+  private openMultiplayerServers(handlers: MainMenuHandlers) {
+    if (!this.mpServerList) {
+      this.mpServerList = new MpServerList({
+        onJoin: (url) => this.joinServer(url, handlers),
+        onDirectConnect: () => this.openMultiplayerConnect(handlers),
+        onCancel: () => { this.root.hidden = false; },
+      });
+    }
+    this.root.hidden = true;
+    this.mpServerList.open();
+  }
+
+  /** Validates a saved server's address the exact same way the Direct Connect form does, then connects straight to it - used by the server list's Join button/double-click. An invalid saved address (edited by hand outside the game, say) falls back to the form instead of failing silently, pre-filled so the player can see/fix what's wrong. */
+  private joinServer(url: string, handlers: MainMenuHandlers): void {
+    const resolved = resolveWorldUrl(url);
+    if (!resolved) {
+      this.mpServerList?.hide();
+      this.openMultiplayerConnect(handlers, url);
+      return;
+    }
+    enterFullscreen();
+    this.dispose();
+    handlers.onMultiplayer(resolved.url, resolved.worldId);
+  }
+
+  /** Fase 6: a minimal connect form (server URL + name) - see multiplayer-game.ts. `presetUrl` prefills the address field (used when a saved server's own address turned out to be invalid - see joinServer above); omitted, it falls back to whatever was last used. */
+  private openMultiplayerConnect(handlers: MainMenuHandlers, presetUrl?: string) {
     const screen = document.querySelector<HTMLElement>('#multiplayer-connect')!;
     const message = document.querySelector<HTMLElement>('#multiplayer-connect-message')!;
     const form = document.querySelector<HTMLFormElement>('#multiplayer-connect-form')!;
@@ -210,10 +239,14 @@ export class MainMenu {
     const nameInput = document.querySelector<HTMLInputElement>('#mp-player-name')!;
     const cancelBtn = document.querySelector<HTMLButtonElement>('#multiplayer-connect-cancel')!;
 
-    try {
-      const savedUrl = localStorage.getItem('evlymc-mp-server-url');
-      if (savedUrl) urlInput.value = savedUrl;
-    } catch { /* private mode */ }
+    if (presetUrl) {
+      urlInput.value = presetUrl;
+    } else {
+      try {
+        const savedUrl = localStorage.getItem('evlymc-mp-server-url');
+        if (savedUrl) urlInput.value = savedUrl;
+      } catch { /* private mode */ }
+    }
     // Shown, never editable: your name in multiplayer is the account you
     // logged in with. The server takes it from the signed token anyway
     // (net/auth-token.ts), so anything typed here would be ignored - better
@@ -228,36 +261,24 @@ export class MainMenu {
 
     const onSubmit = (event: Event) => {
       event.preventDefault();
-      // Shortcut for the dev/test world, so nobody has to type or paste the
-      // full Cloudflare Workers URL by hand - resolves before the regular
-      // /world/<id> validation below, so it behaves exactly as if that full
-      // URL had been typed in.
-      const raw = urlInput.value.trim();
-      // "prueba1" is retired - that Durable Object instance was already
-      // pinned wherever Cloudflare first placed it (no locationHint existed
-      // yet), so switching to a new worldId is what actually lets the fresh
-      // 'sam' (South America) hint in world-server/src/index.ts take effect
-      // - a hint only applies the first time a given worldId's instance is
-      // created. "prueba1"'s old data is simply abandoned, not migrated.
-      const url = raw.toLowerCase() === 'xatatestserver'
-        ? 'wss://evlymc-world-server.mrfierrocarrilgames.workers.dev/world/prueba2'
-        : raw;
-      const match = url.match(/\/world\/([A-Za-z0-9_-]+)\/?$/);
-      if (!url || !match) {
+      const resolved = resolveWorldUrl(urlInput.value);
+      if (!resolved) {
         message.textContent = 'Enter a URL ending in /world/<id>, e.g. wss://host/world/myworld';
         message.classList.add('mp-error');
         return;
       }
-      try { localStorage.setItem('evlymc-mp-server-url', url); } catch { /* private mode */ }
+      try { localStorage.setItem('evlymc-mp-server-url', resolved.url); } catch { /* private mode */ }
       enterFullscreen();
       this.dispose();
-      handlers.onMultiplayer(url, match[1]);
+      handlers.onMultiplayer(resolved.url, resolved.worldId);
     };
     const onCancel = () => {
       screen.hidden = true;
-      this.root.hidden = false;
       form.removeEventListener('submit', onSubmit);
       cancelBtn.removeEventListener('click', onCancel);
+      // Back to the server list, not straight to the main menu root - the
+      // list is the actual multiplayer hub now (see openMultiplayerServers).
+      this.openMultiplayerServers(handlers);
     };
     form.addEventListener('submit', onSubmit);
     cancelBtn.addEventListener('click', onCancel);
