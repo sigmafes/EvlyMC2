@@ -2,6 +2,14 @@ import { playClick } from './ui-sound';
 import {
   MpServerEntry, loadServers, addServer, updateServer, deleteServer, fetchServerStatus, resolveWorldUrl,
 } from './mp-servers';
+import testServerIcon from '../gui/testserver.png';
+
+// One-off cosmetic special case for the dev/test world (same "xatatestserver"
+// shortcut resolveWorldUrl() expands) - a real icon instead of the generated
+// initials, and a red->yellow gradient MOTD warning that this world isn't a
+// stable one to take seriously.
+const TEST_SERVER_URL = 'wss://evlymc-world-server.mrfierrocarrilgames.workers.dev/world/prueba2';
+const TEST_SERVER_MOTD = 'Servidor de prueba de EvlyMC. Puede que sufra cambios drásticos, no tomar en serio lo que se haga dentro.';
 
 type MpServerListHandlers = {
   /** Connect straight to this server's saved address, no form in the way. */
@@ -90,7 +98,8 @@ export class MpServerList {
         // and silently failed on the shortcut, always reading "Offline".
         const resolved = resolveWorldUrl(rawUrl);
         if (!resolved) { window.alert('Enter a URL ending in /world/<id>, e.g. wss://host/world/myworld'); break; }
-        const entry = addServer({ name, url: resolved.url });
+        const motd = resolved.url === TEST_SERVER_URL ? TEST_SERVER_MOTD : undefined;
+        const entry = addServer({ name, url: resolved.url, motd });
         this.servers = loadServers();
         this.selectedId = entry.id;
         this.renderList();
@@ -178,10 +187,16 @@ export class MpServerList {
       row.setAttribute('role', 'option');
       if (server.id === this.selectedId) row.classList.add('selected');
 
+      const isTestServer = server.url === TEST_SERVER_URL;
       const icon = document.createElement('div');
       icon.className = 'mp-server-icon';
-      icon.style.background = iconColorFor(server.name);
-      icon.textContent = initialsFor(server.name);
+      if (isTestServer) {
+        icon.style.backgroundImage = `url('${testServerIcon}')`;
+        icon.style.backgroundSize = 'cover';
+      } else {
+        icon.style.background = iconColorFor(server.name);
+        icon.textContent = initialsFor(server.name);
+      }
 
       const text = document.createElement('div');
       text.className = 'mp-server-row-text';
@@ -190,7 +205,12 @@ export class MpServerList {
       title.textContent = server.name;
       const motd = document.createElement('div');
       motd.className = 'mp-server-row-motd';
-      motd.textContent = server.motd || 'A EvlyMC Server';
+      if (isTestServer) {
+        motd.textContent = server.motd || TEST_SERVER_MOTD;
+        motd.classList.add('mp-server-row-motd--gradient');
+      } else {
+        motd.textContent = server.motd || 'A EvlyMC Server';
+      }
       const addr = document.createElement('div');
       addr.className = 'mp-server-row-addr';
       addr.textContent = server.url;
