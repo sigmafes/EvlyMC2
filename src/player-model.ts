@@ -187,9 +187,9 @@ export class PlayerModel {
    * thing - otherwise it would sit exactly flush with leggings' own full-leg
    * shell and z-fight against it whenever both are worn together.
    */
-  // Taller than before (was 0.28, then 0.34) - the boot shell reads too
-  // short/stubby otherwise, see this session's bugfix list.
-  private static readonly BOOT_HEIGHT = 0.42;
+  // Taller than before (was 0.28, then 0.34, then 0.42) - the boot shell
+  // reads too short/stubby otherwise, see this session's bugfix list.
+  private static readonly BOOT_HEIGHT = 0.60;
   private static readonly BOOT_Y_OFFSET = -(0.76 - PlayerModel.BOOT_HEIGHT) / 2;
   // Waist/hip piece leggings were missing entirely - a short shell around the
   // bottom of the torso, same idea as the boot shell being a short piece at
