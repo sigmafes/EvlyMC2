@@ -198,7 +198,7 @@ export class Inventory {
         this.onSlotRightClick({ kind: 'craft', grid, index: i });
       });
     });
-    outputEl.addEventListener('click', () => this.takeCraftResult(grid));
+    outputEl.addEventListener('click', (event) => this.takeCraftResult(grid, (event as MouseEvent).shiftKey));
   }
 
   /**
@@ -416,6 +416,18 @@ export class Inventory {
       }
     }
     return left; // > 0 -> no room, caller keeps the overflow
+  }
+
+  /** Pure check (no mutation) for whether tryAdd(item) would place ALL of it - used by shift-click auto-store so a full inventory doesn't half-consume a craft/furnace-output before finding out it doesn't fit. Recipe/smelt outputs never exceed their own maxStack, so any leftover after topping up existing stacks is guaranteed to fit whole into a single empty slot. */
+  private hasRoomFor(item: InventorySlot): boolean {
+    let left = item.count ?? 1;
+    for (let i = 0; i < TOTAL_SLOTS && left > 0; i++) {
+      const s = this.slots[i];
+      if (s.id !== item.id) continue;
+      left -= Math.max(0, maxStackOf(s.id) - (s.count ?? 1));
+    }
+    if (left <= 0) return true;
+    return this.slots.some((s) => s.id === null);
   }
 
   /** Snapshot of every slot + the selected hotbar index, for world save. */
@@ -711,10 +723,20 @@ export class Inventory {
     }
   }
 
-  /** Take the crafting result onto the cursor and consume one of each ingredient. */
-  private takeCraftResult(grid: CraftingGrid) {
+  /** Take the crafting result onto the cursor and consume one of each ingredient - or, shift-click, skip the cursor and drop it straight into the hotbar/backpack (first matching stack, else first empty slot), same as vanilla shift-click. */
+  private takeCraftResult(grid: CraftingGrid, autoStore = false) {
     const out = grid.output;
     if (out.id === null) return;
+
+    if (autoStore) {
+      // Only if it ALL fits - a full inventory just no-ops (nothing consumed,
+      // nothing half-inserted), same as vanilla stopping a shift-click craft
+      // once there's nowhere left to put it.
+      if (!this.hasRoomFor(out)) return;
+      this.tryAdd({ ...out });
+      grid.consumeCraft();
+      return;
+    }
 
     if (this.heldItem) {
       if (this.heldItem.id !== out.id) return;
@@ -782,9 +804,9 @@ export class Inventory {
   /** Wire a single external-GUI slot (furnace input/fuel/output) into the cursor flow. */
   bindExternalSlot(el: HTMLElement, ext: ExtSlot) {
     this.slotSourceByEl.set(el, { kind: 'ext', ext });
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (event) => {
       if (this.consumeClickSuppression()) return;
-      if (ext.takeOnly) { this.takeFromExternal(ext); return; }
+      if (ext.takeOnly) { this.takeFromExternal(ext, (event as MouseEvent).shiftKey); return; }
       if (this.heldItem) this.placeHeld({ kind: 'ext', ext });
       else this.pickUpFrom({ kind: 'ext', ext });
     });
@@ -797,10 +819,16 @@ export class Inventory {
     });
   }
 
-  /** Output-style slot: whole stack onto the cursor, or merged if it fits. */
-  private takeFromExternal(ext: ExtSlot) {
+  /** Output-style slot: whole stack onto the cursor, or merged if it fits - or, shift-click, straight into the hotbar/backpack (see takeCraftResult's doc comment, same semantics). */
+  private takeFromExternal(ext: ExtSlot, autoStore = false) {
     const slot = ext.read();
     if (slot.id == null) return;
+    if (autoStore) {
+      if (!this.hasRoomFor(slot)) return;
+      this.tryAdd({ ...slot });
+      ext.write(null);
+      return;
+    }
     if (this.heldItem) {
       if (this.heldItem.id !== slot.id) return;
       if ((this.heldItem.count ?? 1) + (slot.count ?? 1) > maxStackOf(slot.id)) return;

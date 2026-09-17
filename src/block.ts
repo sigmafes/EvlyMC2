@@ -198,7 +198,7 @@ export const BLOCK_ATLAS_TILES = [
   'crafting_table_side2', 'crafting_table_top', 'glass', 'furnace_side',
   'furnace_off', 'furnace_on', 'furnace_top', 'torch', 'wool',
   'iron_block', 'gold_block', 'diamond_block', 'lapis_block',
-  'redstone_block', 'emerald_block', 'coal_block',
+  'redstone_block', 'emerald_block', 'coal_block', 'chest_icon',
 ] as const;
 export type BlockAtlasKey = (typeof BLOCK_ATLAS_TILES)[number];
 const BLOCK_ATLAS_COLS = 32;

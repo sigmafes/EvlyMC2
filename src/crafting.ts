@@ -45,6 +45,8 @@ export const RECIPES: Recipe[] = [
 
   // Furnace: a ring of 8 cobblestone (3x3 only, like the tool recipes).
   { kind: 'shaped', pattern: [[C, C, C], [C, _, C], [C, C, C]], out: { id: BlockId.FURNACE, count: 1 } },
+  // Chest: same ring shape as the furnace, but 8 planks instead of cobblestone.
+  { kind: 'shaped', pattern: [[P, P, P], [P, _, P], [P, P, P]], out: { id: BlockId.CHEST, count: 1 } },
   // Torch: coal (or charcoal) over a stick.
   { kind: 'shaped', pattern: [[ItemId.COAL], [S]], out: { id: BlockId.TORCH, count: 4 } },
   { kind: 'shaped', pattern: [[ItemId.CHARCOAL], [S]], out: { id: BlockId.TORCH, count: 4 } },

@@ -211,7 +211,7 @@ export type ClientMessage =
    * between the two. Same-id stacks merge, otherwise the two cells swap.
    */
   | { type: 'craftMove'; from: CraftSlotRef; to: CraftSlotRef }
-  /** Take the result: consumes one item from every occupied input cell, exactly like singleplayer's CraftingGrid.consumeCraft(). */
+  /** Take the result: consumes one item from every occupied input cell, exactly like singleplayer's CraftingGrid.consumeCraft(). Unlike singleplayer's cursor-drag UI, this already goes straight into the hotbar/backpack every click (handleCraftTakeOutput) - multiplayer never grew the held-cursor step for this slot, so there's no separate shift-click behaviour to add here. */
   | { type: 'craftTakeOutput' }
   /**
    * Cursor-follows-mouse inventory interaction, same model as singleplayer's
@@ -242,7 +242,7 @@ export type ClientMessage =
   | { type: 'furnaceClose' }
   /** Moves the player's currently SELECTED hotbar slot's whole stack into that furnace's input or fuel slot (merging if it already holds the same item) - simplified from a real per-slot drag the same way the craft menu simplifies the crafting grid (see protocol.ts's `craft` doc comment). */
   | { type: 'furnaceInsert'; x: number; y: number; z: number; target: 'input' | 'fuel' }
-  /** Collects the furnace's finished output stack into the player's inventory. */
+  /** Collects the furnace's finished output stack into the player's inventory - same "always straight to inventory, no cursor step" simplification as `craftTakeOutput`. */
   | { type: 'furnaceTakeOutput'; x: number; y: number; z: number }
   /** Right-clicking a placed chest opens its GUI - the server starts including this position in the periodic `chestState` pushes to this session (see world-do.ts's Session.openChest) until chestClose. */
   | { type: 'chestOpen'; x: number; y: number; z: number }

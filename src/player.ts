@@ -98,6 +98,14 @@ export class PlayerController {
   /** Blocks movement/jump input while a UI like the inventory is open, without pausing physics. */
   setMovementLocked(locked: boolean) {
     this.movementLocked = locked;
+    // A GUI opening while the player happens to already be sneaking (held
+    // Shift, then pressed E) otherwise left them stuck crouched the whole
+    // time the menu was up, with no keyup to clear it since focus never
+    // left the game to actually release the key.
+    if (locked && this.state.sneaking) {
+      this.setSneak(false);
+      this.onSneakChange?.(false);
+    }
   }
 
   /** True in first person (F5 cycle mode 0) - false in either third-person mode (1/2). */
@@ -163,6 +171,7 @@ export class PlayerController {
 
   /** On-screen sneak toggle. */
   setSneak(on: boolean) {
+    if (on && this.movementLocked) return; // can't crouch with a GUI open - see setMovementLocked's doc comment
     if (on) this.setSprint(false);
     this.physics.setSneaking(on);
   }
@@ -410,7 +419,7 @@ export class PlayerController {
     }
     if (event.code === 'KeyI' && !event.repeat) this.cameraMode = (this.cameraMode + 1) % 3;
     if (event.code === 'ShiftLeft') {
-      this.setSneak(true);
+      this.setSneak(true); // no-op while a GUI has movement locked - see setSneak's doc comment
     }
     if (event.code === 'Space') {
       event.preventDefault();

@@ -1855,6 +1855,14 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
   // either input method (or both, on a hybrid device) works.
   let touchMoveX = 0, touchMoveZ = 0;
   let touchJump = false, touchSprint = false, touchSneak = false;
+  /** The Shift/on-screen sneak input, but forced off while any GUI has the
+   * pointer (backpack, table, furnace, chest, options) - a held Shift from
+   * before a panel opened otherwise left the player stuck crouched (and
+   * everyone else seeing them crouched) with no keyup to ever clear it,
+   * since focus never actually left the game. */
+  function isSneakHeld(): boolean {
+    return (keys.has('ShiftLeft') || touchSneak) && !(tableOpen || backpackOpen || furnaceOpenState || chestOpenState || optionsOpen);
+  }
   /** Freeform aim point (NDC), wherever the finger currently is - unlike the
    * mouse's fixed centre crosshair. Cleared (null) when no finger is down. */
   let touchAimNdc: THREE.Vector2 | null = null;
@@ -2621,7 +2629,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
         horizontalSpeed: Math.hypot(msg.self.velocity.x, msg.self.velocity.z),
         verticalVelocity: msg.self.velocity.y,
         grounded: msg.self.grounded,
-        sneaking: keys.has('ShiftLeft') || touchSneak,
+        sneaking: isSneakHeld(),
         yaw, pitch,
       });
       hud.setHealth(msg.self.health);
@@ -2872,7 +2880,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       moveX, moveZ,
       wantJump: keys.has('Space') || touchJump,
       sprinting: sprintToggled || touchSprint,
-      sneaking: keys.has('ShiftLeft') || touchSneak,
+      sneaking: isSneakHeld(),
       yaw, pitch,
       dtMs: SEND_INTERVAL_MS,
     });
@@ -2938,7 +2946,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     if (hurtTime > 0) hurtTime -= delta;
     crouchCam = THREE.MathUtils.damp(
       crouchCam,
-      (keys.has('ShiftLeft') || touchSneak) ? CROUCH_CAM_DROP : 0,
+      isSneakHeld() ? CROUCH_CAM_DROP : 0,
       12,
       delta,
     );
@@ -2971,7 +2979,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
       // Same order as main.ts:733-734 - before updateWalkingAnimation so the
       // crouch offset composes with the walk cycle instead of being
       // overwritten by it.
-      localPlayerModel.setSneaking(keys.has('ShiftLeft') || touchSneak);
+      localPlayerModel.setSneaking(isSneakHeld());
       localPlayerModel.updateSneak(delta);
       localPlayerModel.setAdjustments(ZERO_MODEL_ADJUSTMENTS); // legs (and the rest of the crouch shift) never move without this - see its doc comment
       localPlayerModel.setHeldItem(selectedItemId());

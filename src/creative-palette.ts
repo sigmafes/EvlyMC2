@@ -46,6 +46,11 @@ export const BLOCK_CATALOG: InventorySlot[] = [
   { id: BlockId.REDSTONE_BLOCK, name: 'Block of Redstone', sideTexture: 'blocks/redstone_block.png', topTexture: 'blocks/redstone_block.png' },
   { id: BlockId.EMERALD_BLOCK, name: 'Block of Emerald', sideTexture: 'blocks/emerald_block.png', topTexture: 'blocks/emerald_block.png' },
   { id: BlockId.COAL_BLOCK, name: 'Block of Coal', sideTexture: 'blocks/coal_block.png', topTexture: 'blocks/coal_block.png' },
+  // The real in-world block uses ChestRenderer's own textured/animated model
+  // (see chest-renderer.ts) - this generic flat-cube preview (hotbar icon,
+  // held item, dropped-item mesh) just needs SOME reasonable wood texture,
+  // cropped from chest.png's clean lid-front tile.
+  { id: BlockId.CHEST, name: 'Chest', sideTexture: 'blocks/chest_icon.png', topTexture: 'blocks/chest_icon.png' },
   { id: BlockId.WATER, name: 'Water', sideTexture: 'atlas/water_flow.png', topTexture: 'atlas/water_still.png', previewColor: 0x3f76e4 },
   { id: BlockId.LAVA, name: 'Lava', sideTexture: 'atlas/lava_flow.png', topTexture: 'atlas/lava_still.png', previewColor: 0xff6a00 },
   { id: BlockId.FIRE, name: 'Fire', sideTexture: 'atlas/fire_atlas.png', topTexture: 'atlas/fire_atlas.png' },
