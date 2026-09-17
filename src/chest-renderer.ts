@@ -7,27 +7,40 @@ import * as THREE from 'three';
  * meshed cube can't do. Same architectural split LCE itself uses (its
  * ChestTile bakes nothing, ChestRenderer.cpp draws it separately).
  *
- * UV layout measured directly off textures/blocks/chest.png (64x64, active
- * region only y0..42 - the rest is transparent padding). It's a simplified/
- * custom single-chest sheet, not vanilla's classic cross-unwrap: two 14x14
- * "top" tiles, a thin ~5px lid-side strip (4 tiles), a 14x14 lid-front tile
- * (+ one adjacent tile that's solid black - unused/never sampled here), and
- * a ~9px box-side strip (4 tiles, the last one carrying the latch mark).
+ * UV layout is NOT guessed - it's derived from LCE's own ChestModel.cpp,
+ * which builds this exact texture (textures/blocks/chest.png is a straight
+ * copy of LCE's Common/res/1_2_2/item/chest.png - EvlyMC's earlier version
+ * of this file had two face-pairs swapped, see below) via the standard
+ * Minecraft ModelPart box-UV formula: given a (u,v) origin and box
+ * dimensions (w,h,d), a box's 6 faces land at fixed offsets from that
+ * origin. ChestModel.cpp's two boxes:
+ *   lid:    origin (0,0),  size w=14 h=5  d=14  (addBox 14,5,14)
+ *   bottom: origin (0,19), size w=14 h=10 d=14  (addBox 14,10,14) - "bottom"
+ *           is LCE's own name for the box/base part, not its bottom FACE.
+ * For an origin (u,v) and size (w,h,d), the formula places: top at
+ * (u+d,v)..(u+d+w,v+d), bottom-face at (u+d+w,v)..(u+d+w+w,v+d), right at
+ * (u,v+d)..(u+d,v+d+h), front at (u+d,v+d)..(u+d+w,v+d+h), left at
+ * (u+d+w,v+d)..(u+d+w+d,v+d+h), back at (u+d+w+d,v+d)..(u+d+w+d+w,v+d+h).
+ * The lid's own bottom face and the box's own top face sit flush against
+ * each other when closed - neither is ever actually seen, which is why
+ * they're unused/oddly-shaded in the source art (one dark, one near-black).
  */
 const TEX_SIZE = 64;
 type PixelRect = [number, number, number, number]; // [x0, y0, x1, y1], top-left origin, exclusive of nothing (just corners)
 
 const RECT = {
   LID_TOP: [14, 0, 28, 14] as PixelRect,
-  BOX_TOP: [28, 0, 42, 14] as PixelRect,
-  LID_SIDE_BACK: [0, 14, 14, 20] as PixelRect,
-  LID_SIDE_LEFT: [14, 14, 28, 20] as PixelRect,
-  LID_SIDE_RIGHT: [28, 14, 42, 20] as PixelRect,
-  LID_FRONT: [14, 20, 28, 34] as PixelRect,
-  BOX_SIDE_BACK: [0, 34, 14, 43] as PixelRect,
-  BOX_SIDE_LEFT: [14, 34, 28, 43] as PixelRect,
-  BOX_SIDE_RIGHT: [28, 34, 42, 43] as PixelRect,
-  BOX_FRONT: [42, 34, 56, 43] as PixelRect,
+  LID_BOTTOM: [28, 0, 42, 14] as PixelRect,       // never visible (flush against the box top)
+  LID_RIGHT: [0, 14, 14, 19] as PixelRect,
+  LID_FRONT: [14, 14, 28, 19] as PixelRect,
+  LID_LEFT: [28, 14, 42, 19] as PixelRect,
+  LID_BACK: [42, 14, 56, 19] as PixelRect,
+  BOX_TOP: [14, 19, 28, 33] as PixelRect,         // never visible (flush against the lid bottom)
+  BOX_BOTTOM: [28, 19, 42, 33] as PixelRect,      // never visible (sits on the ground)
+  BOX_RIGHT: [0, 33, 14, 43] as PixelRect,
+  BOX_FRONT: [14, 33, 28, 43] as PixelRect,
+  BOX_LEFT: [28, 33, 42, 43] as PixelRect,
+  BOX_BACK: [42, 33, 56, 43] as PixelRect,
 };
 
 const BOX_HEIGHT = 0.625;    // 10/16 - vanilla chest box height
@@ -49,13 +62,15 @@ function setFaceUV(uv: THREE.BufferAttribute, faceIndex: number, rect: PixelRect
 }
 
 /** Local -Z is this geometry's "front" (the latch/handle face) - group.rotation.y then points it at whichever world direction `facing` names, same convention block-data.ts's `facing` already uses for the furnace. */
-function buildBoxGeometry(height: number, top: PixelRect, front: PixelRect, back: PixelRect, left: PixelRect, right: PixelRect): THREE.BoxGeometry {
+function buildBoxGeometry(
+  height: number, top: PixelRect, bottom: PixelRect, front: PixelRect, back: PixelRect, left: PixelRect, right: PixelRect,
+): THREE.BoxGeometry {
   const geo = new THREE.BoxGeometry(WIDTH, height, WIDTH);
   const uv = geo.attributes.uv as THREE.BufferAttribute;
   setFaceUV(uv, 0, right);
   setFaceUV(uv, 1, left);
   setFaceUV(uv, 2, top);
-  setFaceUV(uv, 3, back); // bottom - never visible, reuse a side tile rather than adding a dedicated rect
+  setFaceUV(uv, 3, bottom);
   setFaceUV(uv, 4, back);
   setFaceUV(uv, 5, front);
   uv.needsUpdate = true;
@@ -86,8 +101,8 @@ function ensureShared(): void {
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   material = new THREE.MeshBasicMaterial({ map: texture });
-  boxGeometry = buildBoxGeometry(BOX_HEIGHT, RECT.BOX_TOP, RECT.BOX_FRONT, RECT.BOX_SIDE_BACK, RECT.BOX_SIDE_LEFT, RECT.BOX_SIDE_RIGHT);
-  lidGeometry = buildBoxGeometry(LID_HEIGHT, RECT.LID_TOP, RECT.LID_FRONT, RECT.LID_SIDE_BACK, RECT.LID_SIDE_LEFT, RECT.LID_SIDE_RIGHT);
+  boxGeometry = buildBoxGeometry(BOX_HEIGHT, RECT.BOX_TOP, RECT.BOX_BOTTOM, RECT.BOX_FRONT, RECT.BOX_BACK, RECT.BOX_LEFT, RECT.BOX_RIGHT);
+  lidGeometry = buildBoxGeometry(LID_HEIGHT, RECT.LID_TOP, RECT.LID_BOTTOM, RECT.LID_FRONT, RECT.LID_BACK, RECT.LID_LEFT, RECT.LID_RIGHT);
 }
 
 /**
@@ -148,6 +163,13 @@ export class ChestRenderer {
 
   has(x: number, y: number, z: number): boolean {
     return this.entries.has(this.key(x, y, z));
+  }
+
+  /** Every chest's box+lid meshes, for BlockInteraction's raycast (see its getExtraMeshes doc comment) - a chest has zero terrain-mesh geometry to hit otherwise. */
+  getRaycastTargets(): THREE.Object3D[] {
+    const meshes: THREE.Object3D[] = [];
+    for (const entry of this.entries.values()) meshes.push(entry.group.children[0], entry.lidPivot.children[0]);
+    return meshes;
   }
 
   update(delta: number): void {

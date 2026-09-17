@@ -114,6 +114,13 @@ export class BlockInteraction {
     private readonly hasArrows?: () => boolean,
     /** Bow released with enough draw to fire: `power` 0..1 (LCE's post-curve draw strength). Consuming the arrow/durability is the caller's job. */
     private readonly onShootBow?: (power: number) => void,
+    /** Extra raycast targets outside the terrain mesh - a chest has zero baked
+     * geometry there (see block.ts's blockLightProperties[CHEST] doc comment,
+     * its lid animates every frame so it can't be part of the static/greedy
+     * mesh), so without this a chest was completely untargetable: mining,
+     * placing against it, and right-click-to-open all raycast the terrain
+     * mesh only and would see straight through it. */
+    private readonly getExtraMeshes?: () => THREE.Object3D[],
   ) {
     this.raycast = new Raycast(4);
     this.highlight = new BlockHighlight();
@@ -131,6 +138,12 @@ export class BlockInteraction {
 
   /** Gameplay input is live when the pointer is locked OR touch controls are on. */
   private get engaged() { return this.isPlaying || this.touchActive; }
+
+  /** Terrain mesh + whatever extra targets (chest models) the caller registered - see getExtraMeshes's doc comment. */
+  private raycastTargets(): THREE.Object3D[] {
+    const extra = this.getExtraMeshes?.();
+    return extra && extra.length > 0 ? [...this.world.getMeshObjects(), ...extra] : this.world.getMeshObjects();
+  }
 
   /** Enable the mobile input path (no pointer lock). */
   setTouchActive(active: boolean) {
@@ -150,7 +163,7 @@ export class BlockInteraction {
     // nothing to aim at (see touchAimNdc).
     const hit = (this.touchActive && !this.touchAimNdc) ? undefined : this.raycast.castRay(
       this.camera,
-      this.world.getMeshObjects(),
+      this.raycastTargets(),
       (x, y, z) => this.world.getBlock(x, y, z),
       this.touchActive ? this.touchAimNdc! : undefined,
     );
@@ -521,7 +534,7 @@ export class BlockInteraction {
     if (this.touchActive && !this.touchAimNdc) return;
     const hit = this.raycast.castRay(
       this.camera,
-      this.world.getMeshObjects(),
+      this.raycastTargets(),
       (x, y, z) => this.world.getBlock(x, y, z),
       this.touchActive ? this.touchAimNdc! : undefined,
     );

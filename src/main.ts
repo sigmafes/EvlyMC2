@@ -294,6 +294,7 @@ const interaction = new BlockInteraction(
   },
   () => hasArrowsFn?.() ?? false,
   (power) => shootBowFn?.(power),
+  () => chestRenderer.getRaycastTargets(),
 );
 interaction.attachHighlight(scene);
 

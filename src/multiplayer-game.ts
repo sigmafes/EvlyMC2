@@ -1921,7 +1921,10 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
    */
   function raycastBlockTarget(ndc: THREE.Vector2): { x: number; y: number; z: number; id: BlockId; normal: THREE.Vector3 } | null {
     raycaster.setFromCamera(ndc, camera);
-    const hits = raycaster.intersectObjects(chunkMeshes, false);
+    // Chests have zero terrain-mesh geometry (their lid animates every frame,
+    // see chest-renderer.ts) - without their own meshes in here, mining,
+    // placing against, and opening one would all raycast straight through.
+    const hits = raycaster.intersectObjects([...chunkMeshes, ...chestRenderer.getRaycastTargets()], false);
     for (const hit of hits) {
       if (hit.distance > REACH || !hit.face) break; // sorted by distance - nothing past REACH is worth checking
       const normal = hit.face.normal;
@@ -2087,7 +2090,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     // sorted by distance; explicitly preferring an entity within REACH over
     // a same-ray terrain hit further away.
     const entityHitboxes = [...remoteEntities.values()].map((r) => r.hitbox);
-    const hits = raycaster.intersectObjects([...chunkMeshes, ...entityHitboxes], false);
+    const hits = raycaster.intersectObjects([...chunkMeshes, ...entityHitboxes, ...chestRenderer.getRaycastTargets()], false);
     // Same water-skip as raycastBlockTarget/src/raycast.ts - an entity hit
     // always counts (it isn't blocked by a water surface), but a terrain hit
     // on a water cell is passed through to whatever's actually behind/under
