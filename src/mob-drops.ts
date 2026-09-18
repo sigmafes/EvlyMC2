@@ -53,5 +53,13 @@ export function rollDrops(kind: MobKind, wasOnFire = false): DropStack[] {
       if (bones > 0) out.push({ id: ItemId.BONE, count: bones });
       return out;
     }
+    case 'spider': {
+      // LCE Spider::dropDeathLoot: 0-2 string, plus a spider eye about a third of the time.
+      const out: DropStack[] = [];
+      const string = ri(0, 2);
+      if (string > 0) out.push({ id: ItemId.STRING, count: string });
+      if (Math.random() < 1 / 3) out.push({ id: ItemId.SPIDER_EYE, count: 1 });
+      return out;
+    }
   }
 }

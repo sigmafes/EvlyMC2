@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import type { PathPoint } from './mob-pathfinding';
 
-export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie' | 'skeleton';
+export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie' | 'skeleton' | 'spider';
 
 /** Common surface both MobModel (quadruped) and BipedMobModel (zombie) expose in the real client - mobs.ts's spawn() stub only implements getGroup() for real (mob-physics.ts's easeYawTo() writes rotation into it), the rest are no-ops since there's no client-side mesh here to animate. */
 export type AnyMobModel = {
@@ -29,7 +29,7 @@ export type AnyMobModel = {
   setAttacking?(on: boolean): void;
 };
 
-const HOSTILE_KINDS: MobKind[] = ['zombie', 'skeleton'];
+const HOSTILE_KINDS: MobKind[] = ['zombie', 'skeleton', 'spider'];
 export function isHostileKind(kind: MobKind): boolean {
   return HOSTILE_KINDS.includes(kind);
 }
@@ -52,6 +52,8 @@ export const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; 
   // LCE skeleton: 20 HP, runSpeed 0.25 (a bit slower than the zombie's 0.3-ish
   // equivalent) - it mostly stands and shoots rather than closing distance.
   skeleton: { maxHealth: 20, walkSpeed: 2.0, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
+  // LCE spider: 16 HP (8 hearts), a wide-and-low 1.4x1.4x0.9 footprint - quicker than a zombie.
+  spider: { maxHealth: 16, walkSpeed: 2.6, fleeSpeedMult: 1, radius: 0.7, height: 0.9 },
 };
 
 export type Mob = {

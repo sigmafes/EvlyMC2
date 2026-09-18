@@ -470,3 +470,135 @@ export class BipedMobModel {
     }
   }
 }
+
+/**
+ * Spider mob spec: a 2-segment body (neck/cephalothorax + abdomen), a head in
+ * front, and 8 legs - none of which fits QuadrupedSpec (exactly 4 legs) or
+ * BipedSpec (2 legs + 2 arms). Same box+UV+face-shading machinery as the
+ * other two, reused via atlas-box.ts. `legPivots` is 8 entries ordered front
+ * pair to back pair, each pair [side -X, side +X]; the leg mesh extends
+ * OUTWARD from its pivot along whichever side it's on (see SpiderMobModel).
+ */
+export type SpiderSpec = {
+  texturePath: string;
+  textureW: number;
+  textureH: number;
+  head: QuadrupedBoxSpec;
+  neck: QuadrupedBoxSpec;
+  body: QuadrupedBoxSpec;
+  leg: { size: [number, number, number]; uv: FaceRects };
+  legPivots: [number, number, number][];
+};
+
+const SPIDER_WALK_CYCLE_DURATION = 0.55;
+const SPIDER_LEG_YAW_SWING = 20 * DEG;
+const SPIDER_LEG_LIFT = 14 * DEG;
+/** Vanilla ModelSpider's own rest angles: legs droop 45deg outward-and-down (a slightly shallower 33deg for the two middle pairs), fanned in yaw by multiples of 22.5deg. */
+const SPIDER_LEG_DROOP = [45 * DEG, 33 * DEG, 33 * DEG, 45 * DEG];
+const SPIDER_LEG_FAN = [45 * DEG, 22.5 * DEG, -22.5 * DEG, -45 * DEG];
+
+export class SpiderMobModel {
+  readonly group = new THREE.Group();
+  private readonly legGroups: THREE.Group[] = [];
+  private readonly material: THREE.MeshBasicMaterial;
+
+  private walking = false;
+  private legPhase = 0;
+  private walkAmount = 0;
+  private lightLevel01 = 1;
+  private hurtFlashTimer = 0;
+  private dying = false;
+  private onFire = false;
+  private readonly fireOverlay: THREE.Group;
+  private static readonly HURT_FLASH_DURATION = 0.2;
+  private static readonly HURT_TINT_STRENGTH = 0.75;
+  private static readonly HURT_RED = new THREE.Color(1, 0, 0);
+  private static readonly FIRE_TINT_STRENGTH = 0.25;
+  private static readonly FIRE_ORANGE = new THREE.Color(1, 0.4, 0);
+
+  constructor(spec: SpiderSpec, hitbox: { radius: number; height: number }) {
+    const texture = getMobTexture(spec.texturePath);
+    this.material = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true });
+    this.fireOverlay = createFireOverlay(hitbox.radius, hitbox.height);
+    this.group.add(this.fireOverlay);
+
+    this.group.add(buildBox(spec.head, spec.textureW, spec.textureH, this.material));
+    this.group.add(buildBox(spec.neck, spec.textureW, spec.textureH, this.material));
+    this.group.add(buildBox(spec.body, spec.textureW, spec.textureH, this.material));
+
+    const legGeo = new THREE.BoxGeometry(...spec.leg.size);
+    applyAtlasUVs(legGeo, spec.leg.uv, spec.textureW, spec.textureH);
+    applyFaceShading(legGeo);
+    spec.legPivots.forEach((pivot, i) => {
+      const pair = i >> 1;
+      const side = i % 2 === 0 ? -1 : 1; // -X side / +X side
+      const leg = new THREE.Group();
+      leg.position.set(...pivot);
+      leg.rotation.order = 'YZX';
+      const mesh = new THREE.Mesh(legGeo, this.material);
+      // Extends outward from the pivot: centred half a leg-length out along its own side.
+      mesh.position.set(side * (spec.leg.size[0] / 2 - spec.leg.size[1] / 2), 0, 0);
+      leg.add(mesh);
+      // Rest pose (see SPIDER_LEG_DROOP/FAN): droop tips down, fan the pair
+      // forward/back - mirrored for the -X side so both sides splay outward.
+      leg.rotation.z = -side * SPIDER_LEG_DROOP[pair];
+      leg.rotation.y = side * SPIDER_LEG_FAN[pair];
+      this.group.add(leg);
+      this.legGroups.push(leg);
+    });
+  }
+
+  getGroup(): THREE.Group {
+    return this.group;
+  }
+
+  setWalking(walking: boolean): void {
+    this.walking = walking;
+  }
+
+  setLightLevel(level01: number): void {
+    this.lightLevel01 = THREE.MathUtils.clamp(level01, 0, 1);
+  }
+
+  hurt(): void {
+    this.hurtFlashTimer = SpiderMobModel.HURT_FLASH_DURATION;
+  }
+
+  setDying(on: boolean): void {
+    this.dying = on;
+  }
+
+  setOnFire(on: boolean): void {
+    this.onFire = on;
+    this.fireOverlay.visible = on;
+  }
+
+  update(delta: number): void {
+    const b = Math.pow(this.lightLevel01, 1.25);
+    if (this.hurtFlashTimer > 0 || this.dying) {
+      this.hurtFlashTimer = Math.max(0, this.hurtFlashTimer - delta);
+      this.material.color.copy(new THREE.Color().setScalar(b).lerp(SpiderMobModel.HURT_RED, SpiderMobModel.HURT_TINT_STRENGTH));
+    } else if (this.onFire) {
+      this.material.color.copy(new THREE.Color().setScalar(b).lerp(SpiderMobModel.FIRE_ORANGE, SpiderMobModel.FIRE_TINT_STRENGTH));
+    } else {
+      this.material.color.setScalar(b);
+    }
+
+    const target = this.walking ? 1 : 0;
+    const k = 1 - Math.exp(-EASE_RATE * delta);
+    this.walkAmount += (target - this.walkAmount) * k;
+    if (this.walking) this.legPhase = (this.legPhase + delta / SPIDER_WALK_CYCLE_DURATION) % 1;
+
+    // Alternating gait: adjacent legs on a side, and the same leg on opposite
+    // sides, run half a cycle apart - the classic spider scuttle.
+    this.legGroups.forEach((leg, i) => {
+      const pair = i >> 1;
+      const side = i % 2 === 0 ? -1 : 1;
+      const offset = ((pair + (i % 2)) % 2) * Math.PI;
+      const wave = Math.sin(this.legPhase * Math.PI * 2 + offset);
+      const lift = Math.max(0, Math.cos(this.legPhase * Math.PI * 2 + offset));
+      leg.rotation.y = side * SPIDER_LEG_FAN[pair] + wave * SPIDER_LEG_YAW_SWING * this.walkAmount;
+      leg.rotation.z = -side * (SPIDER_LEG_DROOP[pair] - lift * SPIDER_LEG_LIFT * this.walkAmount);
+    });
+  }
+}

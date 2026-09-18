@@ -18,6 +18,8 @@ const MOB_FRICTION = 15;
 const MOB_AIR_ACCEL_MULT = 0.15; // much less control while airborne, matches the player
 const WATER_BUOYANCY = 18; // upward accel while submerged, LCE-ish "float up" feel
 const WATER_RISE_SPEED = 2.2; // cap on how fast a mob bobs upward
+/** Spider only: blocks/second it climbs a sheer wall by while chasing - see updatePhysics's wallContact handling. */
+const SPIDER_CLIMB_SPEED = 2.4;
 const STEP_UP_NUDGE = 0.06; // blocks/frame a swimming mob climbs a shoreline step by - see updatePhysics's swim-exit branch
 const WANDER_INTERVAL_MIN = 8; // "se moverán cada 8-12s" - re-rolled here whenever ANY path (wander/flee/chase/swim) finishes
 const WANDER_INTERVAL_MAX = 12;
@@ -74,6 +76,9 @@ export function tryEscapeStuck(mob: Mob, isSolid: IsSolidFn): boolean {
  */
 export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWater?: IsWaterFn): void {
   const y = mob.pos.y;
+  // Spider wall-climbing: set when a chasing spider's horizontal move is
+  // rejected by a wall too tall to hop (see the `wallContact` branches below).
+  let wallContact = false;
 
   if (Math.abs(mob.velocity.x) > 0.001 || Math.abs(mob.velocity.z) > 0.001) {
     // Only a block that's still solid one step higher counts as "truly
@@ -92,6 +97,8 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
     } else if (mob.grounded && !overlapsSolid(isSolid, tryX, y + 1, mob.pos.z, mob.radius, mob.height)) {
       mob.velocity.y = JUMP_FORCE;
       mob.grounded = false;
+    } else if (mob.kind === 'spider' && mob.chasing && !mob.inWater) {
+      wallContact = true; // keeps pressing into the wall; velocity.x is left alone so contact persists next frame
     } else if (!mob.grounded && mob.inWater && !overlapsSolid(isSolid, tryX, y + STEP_UP_NUDGE, mob.pos.z, mob.radius, mob.height)) {
       // Swimming toward a shoreline that's a solid step (not a ramp): the
       // grounded step-up above never applies here (mob.grounded is false
@@ -126,6 +133,8 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
     } else if (mob.grounded && !overlapsSolid(isSolid, mob.pos.x, y + 1, tryZ, mob.radius, mob.height)) {
       mob.velocity.y = JUMP_FORCE;
       mob.grounded = false;
+    } else if (mob.kind === 'spider' && mob.chasing && !mob.inWater) {
+      wallContact = true;
     } else if (!mob.grounded && mob.inWater && !overlapsSolid(isSolid, mob.pos.x, y + STEP_UP_NUDGE, tryZ, mob.radius, mob.height)) {
       mob.pos.y += STEP_UP_NUDGE; // see the tryX branch's doc comment above
     } else if (mob.grounded) {
@@ -141,6 +150,19 @@ export function updatePhysics(mob: Mob, delta: number, isSolid: IsSolidFn, isWat
       mob.path = null;
       mob.decisionTimer = 0.3;
     }
+  }
+
+  if (wallContact) {
+    // Climb: no gravity this frame, rise along the wall (a direct position
+    // nudge like the swim-exit's STEP_UP_NUDGE, not a velocity kick) unless
+    // a ceiling is in the way. The moment the wall stops blocking the
+    // spider's horizontal move (it reached the top), wallContact stays false
+    // and normal gravity/landing takes over.
+    const climbedY = mob.pos.y + SPIDER_CLIMB_SPEED * delta;
+    if (!overlapsSolid(isSolid, mob.pos.x, climbedY, mob.pos.z, mob.radius, mob.height)) mob.pos.y = climbedY;
+    mob.velocity.y = 0;
+    mob.grounded = false;
+    return;
   }
 
   const feetX = Math.round(mob.pos.x);

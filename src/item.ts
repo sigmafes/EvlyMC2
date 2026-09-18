@@ -78,6 +78,7 @@ export const ItemId = {
   DIAMOND_CHESTPLATE: 159,
   DIAMOND_LEGGINGS: 160,
   DIAMOND_BOOTS: 161,
+  SPIDER_EYE: 162,
 } as const;
 export type ItemId = (typeof ItemId)[keyof typeof ItemId];
 
@@ -164,6 +165,7 @@ export const ITEMS: Record<number, ItemDef> = {
   [ItemId.BOW]: TOOL('Bow', 'items/bow.png'),
   [ItemId.STRING]: MAT('String', 'items/string.png'),
   [ItemId.BONE]: MAT('Bone', 'items/bone.png'),
+  [ItemId.SPIDER_EYE]: MAT('Spider Eye', 'items/spider_eye.png'),
 };
 
 /** A slot id is a "block" (renders as a 3D cube) when it's in the BlockId range. */

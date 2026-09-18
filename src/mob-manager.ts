@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BlockId } from './block';
-import { MobModel, BipedMobModel, type QuadrupedSpec, type BipedSpec } from './mob-model';
+import { MobModel, BipedMobModel, SpiderMobModel, type QuadrupedSpec, type BipedSpec, type SpiderSpec } from './mob-model';
 import { playMobSound } from './mob-sounds';
 import type { SoundManager } from './sound-manager';
 import type { PathPoint } from './mob-pathfinding';
@@ -8,12 +8,17 @@ import { rollDrops } from './mob-drops';
 import { overlapsSolid, tryEscapeStuck, updatePhysics } from './mob-physics';
 import { updateAI, type MobAiDeps } from './mob-ai';
 
-export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie' | 'skeleton';
-export type MobSpec = QuadrupedSpec | BipedSpec;
+export type MobKind = 'pig' | 'cow' | 'sheep' | 'zombie' | 'skeleton' | 'spider';
+export type MobSpec = QuadrupedSpec | BipedSpec | SpiderSpec;
 
 /** Biped mobs (rendered/animated via BipedMobModel) - zombie and skeleton today. Exported so the multiplayer client picks the same model class per kind instead of keeping its own copy of this list, which would silently go stale the day a third biped is added. */
 export function isBipedKind(kind: MobKind): boolean {
   return kind === 'zombie' || kind === 'skeleton';
+}
+
+/** Spider (8 legs, 2-segment body) - a third body shape, neither biped nor a plain quadruped. Exported for the same reason as isBipedKind: multiplayer-game.ts picks its model class through this too. */
+export function isSpiderKind(kind: MobKind): boolean {
+  return kind === 'spider';
 }
 
 /** Common surface both MobModel (quadruped) and BipedMobModel (zombie) expose - all MobManager needs. */
@@ -28,7 +33,7 @@ export type AnyMobModel = {
   setAttacking?(on: boolean): void;
 };
 
-const HOSTILE_KINDS: MobKind[] = ['zombie', 'skeleton'];
+const HOSTILE_KINDS: MobKind[] = ['zombie', 'skeleton', 'spider'];
 export function isHostileKind(kind: MobKind): boolean {
   return HOSTILE_KINDS.includes(kind);
 }
@@ -53,6 +58,8 @@ export const MOB_STATS: Record<MobKind, { maxHealth: number; walkSpeed: number; 
   // LCE skeleton: 20 HP, runSpeed 0.25 (a bit slower than the zombie's 0.3-ish
   // equivalent) - it mostly stands and shoots rather than closing distance.
   skeleton: { maxHealth: 20, walkSpeed: 2.0, fleeSpeedMult: 1, radius: 0.4, height: 1.9 },
+  // LCE spider: 16 HP (8 hearts), a wide-and-low 1.4x1.4x0.9 footprint - quicker than a zombie.
+  spider: { maxHealth: 16, walkSpeed: 2.6, fleeSpeedMult: 1, radius: 0.7, height: 0.9 },
 };
 
 const BURN_DAMAGE_INTERVAL = 1;  // seconds between fire-damage ticks
@@ -183,7 +190,9 @@ export class MobManager {
   spawn(kind: MobKind, spec: MobSpec, pos: THREE.Vector3, yaw: number): number {
     const stats = MOB_STATS[kind];
     const hitbox = { radius: stats.radius, height: stats.height };
-    const model: AnyMobModel = isBipedKind(kind) ? new BipedMobModel(spec as BipedSpec, hitbox) : new MobModel(spec as QuadrupedSpec, hitbox);
+    const model: AnyMobModel = isBipedKind(kind) ? new BipedMobModel(spec as BipedSpec, hitbox)
+      : isSpiderKind(kind) ? new SpiderMobModel(spec as SpiderSpec, hitbox)
+      : new MobModel(spec as QuadrupedSpec, hitbox);
     const group = model.getGroup();
     group.position.copy(pos);
     group.rotation.y = yaw;
@@ -455,7 +464,7 @@ export class MobManager {
   ): void {
     const p = mob.pos;
 
-    const sunBurning = isHostileKind(mob.kind) && !!getSkyExposure
+    const sunBurning = isHostileKind(mob.kind) && mob.kind !== 'spider' && !!getSkyExposure
       && getSkyExposure(Math.round(p.x), Math.round(p.y + mob.height), Math.round(p.z)) >= 12
       && !mob.inWater && !this.hasSolidCoverAbove(mob);
     const touchingFire = !mob.inWater && !!getBlockId && this.touchesFireOrLava(mob, getBlockId);

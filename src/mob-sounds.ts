@@ -10,7 +10,7 @@ type SoundSpec = { relPath: string; count?: number };
 // Cow_hurt1-3, Cow_idle1-3, Cow_step1-3; Pig_death (single file, no numeric
 // suffix), Pig_hurt1-2, Pig_idle1-3, Pig_step1-3; Sheep1-3 (shared across
 // death/hurt/idle - there's no separate set per event for sheep) + Sheep_step1-3.
-const MOB_SOUNDS: Record<MobKind, Record<MobSoundEvent, SoundSpec>> = {
+const MOB_SOUNDS: Record<MobKind, Partial<Record<MobSoundEvent, SoundSpec>>> = {
   cow: {
     death: { relPath: 'mobs/Cow_death', count: 2 },
     hurt: { relPath: 'mobs/Cow_hurt', count: 3 },
@@ -41,10 +41,18 @@ const MOB_SOUNDS: Record<MobKind, Record<MobSoundEvent, SoundSpec>> = {
     idle: { relPath: 'mobs/Skeleton_idle', count: 3 },
     step: { relPath: 'mobs/Skeleton_step', count: 3 },
   },
+  // No Spider_hurt*.ogg exists yet (death/idle1-3/step1-3 do) - `hurt` is
+  // deliberately left out until one is added, playMobSound skips a missing event.
+  spider: {
+    death: { relPath: 'mobs/Spider_death' },
+    idle: { relPath: 'mobs/Spider_idle', count: 3 },
+    step: { relPath: 'mobs/Spider_step', count: 3 },
+  },
 };
 
 export function playMobSound(soundManager: SoundManager, kind: MobKind, event: MobSoundEvent, volume = 1): void {
   const spec = MOB_SOUNDS[kind][event];
+  if (!spec) return;
   if (spec.count) soundManager.playRandom(spec.relPath, spec.count, volume);
   else soundManager.playOne(spec.relPath, volume);
 }

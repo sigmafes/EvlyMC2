@@ -135,7 +135,7 @@ const MAX_MESSAGE_BLOCK_ENTRIES = 5;
 const MESSAGE_COLORS: MessageColor[] = ['white', 'red', 'green', 'blue', 'yellow', 'orange', 'cyan', 'pink', 'purple'];
 
 /** Every mob /summon can spawn - mirrors mob-manager.ts's MobKind union, listed out because that type itself can't be iterated at runtime. */
-const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep', 'zombie', 'skeleton'];
+const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep', 'zombie', 'skeleton', 'spider'];
 
 /** Same list src/chat-commands.ts's /time validates against. */
 const TIME_PHASES = ['day', 'night', 'sunset', 'sunrise'] as const;

@@ -11,9 +11,10 @@ import { COW_SPEC } from './cow-model';
 import { SHEEP_SPEC } from './sheep-model';
 import { ZOMBIE_SPEC } from './zombie-model';
 import { SKELETON_SPEC } from './skeleton-model';
+import { SPIDER_SPEC } from './spider-model';
 
 export const MOB_SPECS: Record<MobKind, MobSpec> = {
-  pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC, skeleton: SKELETON_SPEC,
+  pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC, skeleton: SKELETON_SPEC, spider: SPIDER_SPEC,
 };
 
 // --- Mob spawning: three fixed-size populations (6 animals, 6 surface
@@ -26,7 +27,7 @@ export const MOB_SPECS: Record<MobKind, MobSpec> = {
 // below); cave hostiles always try a fixed 10-block radius regardless of
 // lighting - only actually lighting the area (raw light > 3) stops them.
 const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep'];
-const HOSTILE_SPAWN_KINDS: MobKind[] = ['zombie', 'skeleton'];
+const HOSTILE_SPAWN_KINDS: MobKind[] = ['zombie', 'skeleton', 'spider'];
 const RESPAWN_COOLDOWN = 30; // seconds, individual per slot
 const AMBIENT_SPAWN_MIN_RADIUS = 10; // animals/surface hostiles: stay out of the player's immediate view so they don't visibly pop in
 // Animals/surface hostiles spawn within a fixed 3x3-chunk area centred on the

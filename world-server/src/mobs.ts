@@ -189,7 +189,7 @@ export class ServerMobManager {
    */
   private updateFireAndSun(mob: Mob, delta: number, ctx: MobCombatDeps): void {
     const p = mob.pos;
-    const sunBurning = isHostileKind(mob.kind) && ctx.isDay() && !mob.inWater && !this.hasSolidCoverAbove(mob, ctx.getBlockAt);
+    const sunBurning = isHostileKind(mob.kind) && mob.kind !== 'spider' && ctx.isDay() && !mob.inWater && !this.hasSolidCoverAbove(mob, ctx.getBlockAt);
     const touchingFire = !mob.inWater && this.touchesFireOrLava(mob, ctx.getBlockAt);
 
     if (sunBurning || touchingFire) mob.fireTicksLeft = FIRE_AFTERBURN_TICKS;

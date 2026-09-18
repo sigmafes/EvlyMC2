@@ -209,7 +209,10 @@ function updateHostileAI(mob: Mob, delta: number, deps: MobAiDeps): boolean {
     }
     easeYawTo(mob, Math.atan2(-dx, -dz), delta, TURN_RATE);
     mob.attackTimer -= delta;
-    if (mob.attackTimer <= 0) {
+    // Fresh line-of-sight required at the instant of the swing, not just the
+    // sightMemory grace window above (ported from src/mob-ai.ts) - otherwise a
+    // melee mob pressed against a wall keeps hitting through it.
+    if (mob.attackTimer <= 0 && hasLineOfSight(deps.isSolid, eyePos, playerPos)) {
       mob.attackTimer = ATTACK_INTERVAL;
       deps.onAttackPlayer?.(ZOMBIE_ATTACK_DAMAGE, pos.clone());
     }

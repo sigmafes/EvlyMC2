@@ -33,7 +33,7 @@ import { WATER_LEVEL, CHUNK_SIZE } from '../../../src/chunk';
 import type { MobKind } from './mob-manager';
 
 const MOB_KINDS: MobKind[] = ['pig', 'cow', 'sheep'];
-const HOSTILE_SPAWN_KINDS: MobKind[] = ['zombie', 'skeleton'];
+const HOSTILE_SPAWN_KINDS: MobKind[] = ['zombie', 'skeleton', 'spider'];
 const RESPAWN_COOLDOWN = 30;
 const AMBIENT_SPAWN_MIN_RADIUS = 10;
 const SPAWN_AREA_RADIUS_BLOCKS = Math.floor(CHUNK_SIZE * 1.5);

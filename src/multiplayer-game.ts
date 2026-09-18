@@ -24,13 +24,14 @@ import { SkyRenderer } from './sky-renderer';
 import { SoundManager } from './sound-manager';
 import { getBlockSound } from './block-sounds';
 import { playMobSound } from './mob-sounds';
-import { MOB_STATS, isBipedKind, type MobKind, type MobSpec, type AnyMobModel } from './mob-manager';
-import { MobModel, BipedMobModel, type QuadrupedSpec, type BipedSpec } from './mob-model';
+import { MOB_STATS, isBipedKind, isSpiderKind, type MobKind, type MobSpec, type AnyMobModel } from './mob-manager';
+import { MobModel, BipedMobModel, SpiderMobModel, type QuadrupedSpec, type BipedSpec, type SpiderSpec } from './mob-model';
 import { PIG_SPEC } from './pig-model';
 import { COW_SPEC } from './cow-model';
 import { SHEEP_SPEC } from './sheep-model';
 import { ZOMBIE_SPEC } from './zombie-model';
 import { SKELETON_SPEC } from './skeleton-model';
+import { SPIDER_SPEC } from './spider-model';
 import { renderSlot, createEmptySlot, HOTBAR_SIZE, TOTAL_SLOTS, type InventorySlot } from './inventory';
 import { Hud } from './hud';
 import { COOK_SECONDS } from './smelting';
@@ -176,7 +177,7 @@ const DEATH_SPIN_DURATION = 0.75;
 
 /** Kind -> model spec, same table singleplayer's mob-spawning.ts builds. Imported per-model rather than from mob-spawning itself so the multiplayer bundle doesn't drag in that file's whole slot-based spawning system, which it never runs. */
 const MOB_SPECS: Record<MobKind, MobSpec> = {
-  pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC, skeleton: SKELETON_SPEC,
+  pig: PIG_SPEC, cow: COW_SPEC, sheep: SHEEP_SPEC, zombie: ZOMBIE_SPEC, skeleton: SKELETON_SPEC, spider: SPIDER_SPEC,
 };
 
 /** Ambient bark cadence, matching mob-manager.ts's own IDLE_SOUND_MIN/MAX and MOB_SOUND_RADIUS. */
@@ -2524,6 +2525,7 @@ export function startMultiplayer(serverUrl: string, worldId: string): void {
     const hitboxSize = { radius: stats.radius, height: stats.height };
     const mobModel: AnyMobModel = isBipedKind(kind)
       ? new BipedMobModel(spec as BipedSpec, hitboxSize)
+      : isSpiderKind(kind) ? new SpiderMobModel(spec as SpiderSpec, hitboxSize)
       : new MobModel(spec as QuadrupedSpec, hitboxSize);
     const mesh = mobModel.getGroup();
 
